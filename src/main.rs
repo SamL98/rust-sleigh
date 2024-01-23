@@ -15,7 +15,7 @@ use std::io::Write;
 use std::fs::File;
 use std::fs;
 
-static SLEIGH_PATH: &'static str = "/Users/samlerner/ghidra_9.1.2_PUBLIC/Ghidra/Processors/ARM/data/languages";
+static SLEIGH_PATH: &'static str = "/Users/samlerner/ghidra_10.3_PUBLIC/Ghidra/Processors/x86/data/languages";
 
 type Res<T, U> = IResult<T, U, Error<T>>;
 
@@ -25,9 +25,11 @@ pub struct Program<'a> {
 }
 
 fn comment(input: &str) -> Res<&str, Stmt> {
-    preceded(
-        tag("#"),
-        take_until("\n"))(input)
+    terminated(
+        preceded(
+            tag("#"),
+            take_until("\n")),
+        line_ending)(input)
     .map(|(next, res)| {
         (next, Stmt::COMMENT())
     })
@@ -62,9 +64,7 @@ pub enum Stmt<'a> {
 }
 
 fn stmt(input: &str) -> Res<&str, Stmt> {
-    preceded(
-        multispace0,
-        alt((define, undef, include, ifdef, ifndef, ifstmt, sleigh)))(input)
+    alt((define, undef, include, ifdef, ifndef, ifstmt, sleigh))(input)
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -91,11 +91,9 @@ fn string(input: &str) -> Res<&str, &str> {
 }
 
 fn define(input: &str) -> Res<&str, Stmt> {
-    terminated(
-        preceded(
-            terminated(tag("@define"), space1),
-            separated_pair(identifier, space1, string)),
-        space0)(input)
+    preceded(
+        terminated(tag("@define"), space1),
+        separated_pair(identifier, space1, string))(input)
     .map(|(next, res)| {
         (next, Stmt::DEFINE(DefineStmt { name: res.0, value: res.1 }))
     })
@@ -107,11 +105,9 @@ pub struct UndefStmt<'a> {
 }
 
 fn undef(input: &str) -> Res<&str, Stmt> {
-    terminated(
-        preceded(
-            terminated(tag("@undef"), space1),
-            identifier),
-        space0)(input)
+    preceded(
+        terminated(tag("@undef"), space1),
+        identifier)(input)
     .map(|(next, res)| {
         (next, Stmt::UNDEF(UndefStmt { name: res }))
     })
@@ -123,11 +119,9 @@ pub struct IncludeStmt<'a> {
 }
 
 fn include(input: &str) -> Res<&str, Stmt> {
-    terminated(
-        preceded(
-            terminated(tag("@include"), space1),
-            string),
-        space0)(input)
+    preceded(
+        terminated(tag("@include"), space1),
+        string)(input)
     .map(|(next, res)| {
         (next, Stmt::INCLUDE(IncludeStmt { filename: res }))
     })
@@ -167,10 +161,8 @@ fn ifdef_line(input: &str) -> Res<&str, &str> {
 
 fn else_line(input: &str) -> Res<&str, &str> {
     terminated(
-        terminated(
-            tag("@else"), 
-            space0),
-        newline)(input)
+        tag("@else"), 
+        line_ending)(input)
 }
 
 fn else_stmt(input: &str) -> Res<&str, Option<Condition>> {
@@ -186,10 +178,8 @@ fn else_stmt(input: &str) -> Res<&str, Option<Condition>> {
 
 fn endif_line(input: &str) -> Res<&str, Option<Condition>> {
     terminated(
-        terminated(
-            tag("@endif"),
-            space0),
-        newline)(input)
+        tag("@endif"),
+        line_ending)(input)
     .map(|(next, _)| {
         //println!("endif, rest: \"{}\"", next);
         (next, None)
@@ -456,7 +446,17 @@ fn execute_ifdef<'b>(s: IfdefStmt<'b>, vars: &mut HashMap<String, String>, out: 
     match s.cond {
         Condition::VAR((name, block)) => match vars.get(name) {
             Some(_) => execute_stmts(block, vars, out),
-            None        => execute_else(s.else_block, vars, out)
+            None    => execute_else(s.else_block, vars, out)
+        },
+        _ => panic!("Unhandled condition type in ifdef: {:?}", s.cond)
+    }
+}
+
+fn execute_ifndef<'b>(s: IfndefStmt<'b>, vars: &mut HashMap<String, String>, out: &mut File) {
+    match s.cond {
+        Condition::VAR((name, block)) => match vars.get(name) {
+            None    => execute_stmts(block, vars, out),
+            Some(_) => execute_else(s.else_block, vars, out)
         },
         _ => panic!("Unhandled condition type in ifdef: {:?}", s.cond)
     }
@@ -545,6 +545,43 @@ fn execute_if<'b>(s: IfStmt<'b>, vars: &mut HashMap<String, String>, out: &mut F
     }
 }
 
+fn execute_sleigh<'b>(s: &'b str, vars: &mut HashMap<String, String>, out: &mut File) {
+    let mut result = String::new();
+    let mut chars = s.chars();
+
+    while let Some(ch) = chars.next() {
+        if ch == '$' {
+            if let Some('(') = chars.next() {
+                let mut var_name = String::new();
+                while let Some(c) = chars.next() {
+                    if c == ')' {
+                        break;
+                    }
+                    var_name.push(c);
+                }
+
+                if let Some(val) = vars.get(var_name.as_str()) {
+                    result.push_str(val);
+                }
+                else {
+                    result.push('$');
+                    result.push('(');
+                    result.push_str(&var_name);
+                    result.push(')');
+                }
+            }
+            else {
+                result.push('$');
+            }
+        }
+        else {
+            result.push(ch);
+        }
+    }
+
+    writeln!(out, "{}", result).unwrap()
+}
+
 fn execute_stmts<'b>(stmts: Vec<Stmt<'b>>, vars: &mut HashMap<String, String>, out: &mut File) {
     for stmt in stmts {
         match stmt {
@@ -552,8 +589,9 @@ fn execute_stmts<'b>(stmts: Vec<Stmt<'b>>, vars: &mut HashMap<String, String>, o
             Stmt::UNDEF(stmt)   => execute_undef(stmt, vars, out),
             Stmt::INCLUDE(stmt) => execute_include(stmt, vars, out),
             Stmt::IFDEF(stmt)   => execute_ifdef(stmt, vars, out),
+            Stmt::IFNDEF(stmt)  => execute_ifndef(stmt, vars, out),
             Stmt::IF(stmt)      => execute_if(stmt, vars, out),
-            Stmt::SLEIGH(line)  => writeln!(out, "{}", line).unwrap(),
+            Stmt::SLEIGH(line)  => execute_sleigh(line, vars, out),
             Stmt::COMMENT()     => (),
             _                   => todo!("{:?}", stmt)
         }
@@ -567,153 +605,7 @@ fn execute(prog: Program) {
 }
 
 fn main() {
-    /*assert_eq!(string("\"bar\""), Ok(("", "bar")));
-    println!("string check good!");
-
-    assert_eq!(separated_pair(identifier, space1, string)("foo \"bar\""), Ok(("", ("foo", "bar"))));
-    println!("identifier string check good!");
-
-    assert_eq!(define("@define foo \"bar\""), Ok(("", Stmt::DEFINE(DefineStmt { name: "foo", value: "bar" }))));
-    println!("define check good!");
-
-    assert_eq!(undef("@undef foo"), Ok(("", Stmt::UNDEF(UndefStmt { name: "foo" }))));
-    println!("undef check good!");
-
-    assert_eq!(include("@include \"foo.sinc\""), Ok(("", Stmt::INCLUDE(IncludeStmt { filename: "foo.sinc" }))));
-    println!("include check good!");
-
-    let ifdef_no_else_str = "@ifdef foo  \n\nbar\n@endif\n";
-
-    let ifdef_no_else_stmt = Stmt::IFDEF(IfdefStmt { 
-                                cond:       Condition::VAR(("foo", vec![Stmt::SLEIGH("bar")])),
-                                else_block: None 
-                              });
-
-    assert_eq!(
-        ifdef(ifdef_no_else_str), 
-        Ok(("", ifdef_no_else_stmt.clone())));
-    println!("ifdef no else check good!");
-
-    assert_eq!(
-        ifdef("@ifdef foo  \n\nbar\n@else\nbaz\n@endif\n"), 
-        Ok(("", 
-            Stmt::IFDEF(IfdefStmt { 
-                cond:       Condition::VAR(("foo", vec![Stmt::SLEIGH("bar")])),
-                else_block: Some(Condition::ALWAYS(vec![Stmt::SLEIGH("baz")]))
-            }))));
-    println!("ifdef else check good!");
-
-    assert_eq!(
-        ifndef("@ifndef foo  \n\nbar\n@endif\n"), 
-        Ok(("", 
-            Stmt::IFNDEF(IfndefStmt { 
-                cond:       Condition::VAR(("foo", vec![Stmt::SLEIGH("bar")])),
-                else_block: None 
-            }))));
-    println!("ifndef no else check good!");
-
-    assert_eq!(
-        ifndef("@ifndef foo  \n\nbar\n@else\nbaz\n@endif\n"), 
-        Ok(("", 
-            Stmt::IFNDEF(IfndefStmt { 
-                cond:       Condition::VAR(("foo", vec![Stmt::SLEIGH("bar")])),
-                else_block: Some(Condition::ALWAYS(vec![Stmt::SLEIGH("baz")]))
-            }))));
-    println!("ifndef else check good!");
-
-    assert_eq!(
-        ifstmt("@if defined(foo)  \n\nbar\n@endif\n"), 
-        Ok(("", 
-            Stmt::IF(IfStmt { 
-                cond:       Condition::EXPR((Expr::DEFINED(DefinedExpr { variable: "foo" }), vec![Stmt::SLEIGH("bar")])),
-                elif_block: None,
-                else_block: None 
-            }))));
-    println!("if no elif, no else, defined expr check good!");
-
-    assert_eq!(
-        ifstmt("@if foo == \"5\"  \n\nbar\n@endif\n"), 
-        Ok(("", 
-            Stmt::IF(IfStmt { 
-                cond:       Condition::EXPR((Expr::BOOL(BoolExpr { lhs: "foo", op: BoolOperator::EQ, rhs: "5" }), vec![Stmt::SLEIGH("bar")])),
-                elif_block: None,
-                else_block: None 
-            }))));
-    println!("if no elif, no else, bool expr check good!");
-
-    assert_eq!(
-        ifstmt("@if (foo == \"5\") || defined(quux)  \n\nbar\n@endif\n"), 
-        Ok(("", 
-            Stmt::IF(IfStmt { 
-                cond:       
-                    Condition::EXPR((Expr::BINARY(BinaryExpr { 
-                        lhs: Box::new(Expr::BOOL(BoolExpr { lhs: "foo", op: BoolOperator::EQ, rhs: "5" })), 
-                        op: BinaryOperator::OR, 
-                        rhs:  Box::new(Expr::DEFINED(DefinedExpr { variable: "quux" }))
-                }), vec![Stmt::SLEIGH("bar")])),
-                elif_block: None,
-                else_block: None 
-            }))));
-    println!("if no elif, no else, binary expr check good!");
-
-    assert_eq!(
-        ifstmt("@if defined(quux2) && ((foo == \"5\") || defined(quux))  \n\nbar\n@else\nsdflkj\n@endif\n"), 
-        Ok(("", 
-            Stmt::IF(IfStmt { 
-                cond:       
-                    Condition::EXPR((Expr::BINARY(BinaryExpr { 
-                                        lhs: Box::new(Expr::DEFINED(DefinedExpr { variable: "quux2" })),
-                                        op: BinaryOperator::AND,
-                                        rhs: Box::new(Expr::BINARY(BinaryExpr {
-                                            lhs: Box::new(Expr::BOOL(BoolExpr { lhs: "foo", op: BoolOperator::EQ, rhs: "5" })), 
-                                            op: BinaryOperator::OR, 
-                                            rhs:  Box::new(Expr::DEFINED(DefinedExpr { variable: "quux" }))
-                                        }))
-                                    }), 
-                                    vec![Stmt::SLEIGH("bar")])),
-                elif_block: None,
-                else_block: Some(Condition::ALWAYS(vec![Stmt::SLEIGH("sdflkj")]))
-            }))));
-    println!("if no elif with else, binary expr check good!");
-
-    assert_eq!(
-        ifstmt("@if defined(quux2) && ((foo == \"5\") || defined(quux))  \n\nbar\n@elif defined(blop)\n  beep boop\n@else\nsdflkj\n@endif\n"), 
-        Ok(("", 
-            Stmt::IF(IfStmt { 
-                cond:       
-                    Condition::EXPR((Expr::BINARY(BinaryExpr { 
-                                        lhs: Box::new(Expr::DEFINED(DefinedExpr { variable: "quux2" })),
-                                        op: BinaryOperator::AND,
-                                        rhs: Box::new(Expr::BINARY(BinaryExpr {
-                                            lhs: Box::new(Expr::BOOL(BoolExpr { lhs: "foo", op: BoolOperator::EQ, rhs: "5" })), 
-                                            op: BinaryOperator::OR, 
-                                            rhs:  Box::new(Expr::DEFINED(DefinedExpr { variable: "quux" }))
-                                        }))
-                                    }), 
-                                    vec![Stmt::SLEIGH("bar")])),
-                elif_block: Some(Condition::EXPR((Expr::DEFINED(DefinedExpr { variable: "blop" }),
-                                            vec![Stmt::SLEIGH("beep boop")]))),
-                else_block: Some(Condition::ALWAYS(vec![Stmt::SLEIGH("sdflkj")]))
-            }))));
-    println!("if with elif, binary expr check good!");
-
-    assert_eq!(
-        ifstmt(&format!("@if (foo == \"5\") || defined(quux)  \n\n{}\nbar\n@endif\n", ifdef_no_else_str)), 
-        Ok(("", 
-            Stmt::IF(IfStmt { 
-                cond:       
-                    Condition::EXPR((Expr::BINARY(BinaryExpr { 
-                        lhs: Box::new(Expr::BOOL(BoolExpr { lhs: "foo", op: BoolOperator::EQ, rhs: "5" })), 
-                        op: BinaryOperator::OR, 
-                        rhs:  Box::new(Expr::DEFINED(DefinedExpr { variable: "quux" }))
-                }), vec![ifdef_no_else_stmt, Stmt::SLEIGH("bar")])),
-                elif_block: None,
-                else_block: None 
-            }))));
-    println!("nested if no elif, no else, binary expr check good!");*/
-
-    let contents = read_file("ARM8_le.slaspec");
-    //let contents = read_file("ARM.sinc");
+    let contents = read_file("x86-64.slaspec");
     let sleigh_prepro = program(&contents);
     //println!("{:?}", sleigh_prepro);
 
