@@ -662,7 +662,7 @@ pub enum PatternExpr<'a> {
     AND((Box<PatternExpr<'a>>, Box<PatternExpr<'a>>)),
     OR((Box<PatternExpr<'a>>, Box<PatternExpr<'a>>)),
     CONCAT((Box<PatternExpr<'a>>, Box<PatternExpr<'a>>)),
-    EXTEND(Box<PatternExpr<'a>>),
+    EXTEND((Box<PatternExpr<'a>>, Box<PatternExpr<'a>>)),
     CONSTRUCTOR(&'a str),
     EMPTY
 }
@@ -679,47 +679,6 @@ fn constraint_pattern(input: &str) -> Res<&str, Box<PatternExpr>> {
     })
 }
 
-fn and_pattern(input: &str) -> Res<&str, Box<PatternExpr>> {
-    println!("trying and {}", &input[0..20]);
-    separated_pair(
-        pattern_section,
-        delimited(space1, char('&'), space1),
-        pattern_section
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(PatternExpr::AND((res.0, res.1))))
-    })
-}
-
-fn or_pattern(input: &str) -> Res<&str, Box<PatternExpr>> {
-    separated_pair(
-        pattern_section,
-        delimited(space1, char('|'), space1),
-        pattern_section
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(PatternExpr::OR((res.0, res.1))))
-    })
-}
-
-fn concat_pattern(input: &str) -> Res<&str, Box<PatternExpr>> {
-    separated_pair(
-        pattern_section,
-        delimited(space1, char(';'), space1),
-        pattern_section
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(PatternExpr::CONCAT((res.0, res.1))))
-    })
-}
-
-fn extend_pattern(input: &str) -> Res<&str, Box<PatternExpr>> {
-    terminated(pattern_section, preceded(space1, tag("...")))(input)
-    .map(|(next, res)| {
-        (next, Box::new(PatternExpr::EXTEND(res)))
-    })
-}
-
 fn constructor_pattern(input: &str) -> Res<&str, Box<PatternExpr>> {
     identifier(input)
     .map(|(next, res)| {
@@ -727,22 +686,44 @@ fn constructor_pattern(input: &str) -> Res<&str, Box<PatternExpr>> {
     })
 }
 
+fn _pattern_expr(input: &str) -> Res<&str, Box<PatternExpr>> {
+    alt((
+        constraint_pattern,
+        constructor_pattern,
+        delimited(
+            char('('),
+            pattern_expr,
+            char(')')
+        )
+    ))(input)
+}
 
 fn pattern_expr(input: &str) -> Res<&str, Box<PatternExpr>> {
-    println!("{}", &input[0..20]);
-    alt((
-        delimited(char('('), pattern_section, char(')')),
-        and_pattern,
-        or_pattern,
-        concat_pattern,
-        extend_pattern,
-        constraint_pattern,
-        constructor_pattern
-    ))(input)
-    .map(|(next, res)| {
-        println!("{:?}", res);
-        (next, res)
-    })
+    let (input, first_expr) = _pattern_expr(input)?;
+    let (input, ops) = many0(
+        pair(
+            delimited(
+                space1,
+                alt((tag("&"), tag("|"), tag(";"), tag("..."))),
+                space1
+            ),
+            _pattern_expr
+        )
+    )(input)?;
+    let mut expr = first_expr;
+
+    for (op, operand) in ops {
+        expr = match op {
+            "&" => Box::new(PatternExpr::AND((expr, operand))),
+            "|" => Box::new(PatternExpr::OR((expr, operand))),
+            "^" => Box::new(PatternExpr::CONCAT((expr, operand))),
+            "..." => Box::new(PatternExpr::EXTEND((expr, operand))),
+            _ => unreachable!()
+        }
+    }
+
+    println!("{:?}", expr);
+    Ok((input, expr))
 }
 
 fn pattern_section(input: &str) -> Res<&str, Box<PatternExpr>> {
