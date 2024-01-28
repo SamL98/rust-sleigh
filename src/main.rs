@@ -262,8 +262,22 @@ fn hex_num(input: &str) -> Res<&str, u64> {
     })
 }
 
+fn is_bin_digit(chr: char) -> bool {
+    /*let mut c = [0; 1];
+    let _ = chr.encode_utf8(&mut c);
+    is_newline(c[0])*/
+    chr == '0' || chr == '1'
+}
+
+fn bin_num(input: &str) -> Res<&str, u64> {
+    preceded(tag("0b"), take_while(is_bin_digit))(input)
+    .map(|(next, res)| {
+        (next, u64::from_str_radix(res, 2).unwrap())
+    })
+}
+
 fn num(input: &str) -> Res<&str, u64> {
-    alt((hex_num, dec_num))(input)
+    alt((hex_num, bin_num, dec_num))(input)
     .map(|(next, res)| {
         (next, res)
     })
@@ -442,7 +456,7 @@ fn pcodeop_define(input: &str) -> Res<&str, DefineStmt> {
             tag("pcodeop "),
             identifier
         ),
-        terminated(tag(";"), opt(comment_without_newline))
+        terminated(preceded(space0, tag(";")), opt(comment_without_newline))
     )(input)
     .map(|(next, res)| {
         (next, DefineStmt::PCODEOP(res))
@@ -698,6 +712,7 @@ fn display_section(input: &str) -> Res<&str, Vec<DisplayPart>> {
 pub enum PatternConstraint<'a> {
     EQ((&'a str, u64)),
     NEQ((&'a str, u64)),
+    LESS((&'a str, u64)),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -714,7 +729,7 @@ pub enum PatternExpr<'a> {
 fn eq_constraint(input: &str) -> Res<&str, PatternConstraint> {
     separated_pair(
         identifier,
-        char('='),
+        delimited(space0, char('='), space0),
         num
     )(input)
     .map(|(next, res)| {
@@ -725,7 +740,7 @@ fn eq_constraint(input: &str) -> Res<&str, PatternConstraint> {
 fn neq_constraint(input: &str) -> Res<&str, PatternConstraint> {
     separated_pair(
         identifier,
-        tag("!="),
+        delimited(space0, tag("!="), space0),
         num
     )(input)
     .map(|(next, res)| {
@@ -733,8 +748,19 @@ fn neq_constraint(input: &str) -> Res<&str, PatternConstraint> {
     })
 }
 
+fn less_constraint(input: &str) -> Res<&str, PatternConstraint> {
+    separated_pair(
+        identifier,
+        delimited(space0, tag("<"), space0),
+        num
+    )(input)
+    .map(|(next, res)| {
+        (next, PatternConstraint::LESS(res))
+    })
+}
+
 fn constraint_pattern(input: &str) -> Res<&str, Box<PatternExpr>> {
-    alt((eq_constraint, neq_constraint))(input)
+    alt((eq_constraint, neq_constraint, less_constraint))(input)
     .map(|(next, res)| {
         (next, Box::new(PatternExpr::CONSTRAINT(res)))
     })
@@ -747,39 +773,38 @@ fn constructor_pattern(input: &str) -> Res<&str, Box<PatternExpr>> {
     })
 }
 
-fn extend_pattern(input: &str) -> Res<&str, Box<PatternExpr>> {
-    terminated(
-        pattern_expr,
-        delimited(space0, tag("..."), space0)
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(PatternExpr::EXTEND(res)))
-    })
-}
-
 fn _pattern_expr(input: &str) -> Res<&str, Box<PatternExpr>> {
-    alt((
+    let (rest, expr) = alt((
         constraint_pattern,
         constructor_pattern,
         delimited(
-            char('('),
+            terminated(char('('), space0),
             pattern_expr,
-            char(')')
+            preceded(space0, char(')'))
         )
-    ))(input)
+    ))(input)?;
+
+    let rest_rest = rest.trim_start();
+    if rest_rest.len() >= 3 && &rest_rest[0..3] == "..." {
+        //let extend_expr = Box::new(PatternExpr::EXTEND(expr));
+        //return Ok((&rest_rest[3..rest_rest.len()], extend_expr));
+        return Ok((&rest_rest[3..rest_rest.len()], expr));
+    }
+
+    Ok((rest, expr))
 }
 
 fn pattern_expr(input: &str) -> Res<&str, Box<PatternExpr>> {
+    //println!("{}", &input[0..20]);
     let (input, first_expr) = _pattern_expr(input)?;
     let (input, ops) = many0(
         pair(
             delimited(
-                space0,
+                multispace0,
                 alt((
                     tag("&"), tag("|"), tag(";"),
-                    tag("... &"), tag("... |")
                 )),
-                space0
+                multispace0
             ),
             _pattern_expr
         )
@@ -793,16 +818,14 @@ fn pattern_expr(input: &str) -> Res<&str, Box<PatternExpr>> {
             "&" => Box::new(PatternExpr::AND((expr, operand))),
             "|" => Box::new(PatternExpr::OR((expr, operand))),
             ";" => Box::new(PatternExpr::CONCAT((expr, operand))),
-            "... &" => Box::new(PatternExpr::AND((Box::new(PatternExpr::EXTEND(expr)), operand))),
-            "... |" => Box::new(PatternExpr::OR((Box::new(PatternExpr::EXTEND(expr)), operand))),
             _ => unreachable!("Unimplemented pattern opcode")
         }
     }
 
-    if input.len() >= 3 && &input[0..3] == "..." {
+    /*if input.len() >= 3 && &input[0..3] == "..." {
         expr = Box::new(PatternExpr::EXTEND(expr));
         return Ok((&input[3..input.len()], expr));
-    }
+    }*/
 
     println!("{:?}", expr);
     Ok((input, expr))
@@ -923,11 +946,13 @@ fn disassembly_action(input: &str) -> Res<&str, DisassemblyAction> {
     })
 }
 
-fn disassembly_actions(input: &str) -> Res<&str, Vec<DisassemblyAction>> {
-    delimited(
-        terminated(char('['), multispace0),
-        separated_list0(multispace0, disassembly_action),
-        preceded(multispace0, char(']'))
+fn disassembly_actions(input: &str) -> Res<&str, &str> {
+    terminated(
+        preceded(
+            char('['),
+            take_until("]")
+        ),
+        char(']')
     )(input)
 }
 
@@ -1700,15 +1725,14 @@ fn single_semantic_action(input: &str) -> Res<&str, Vec<SemanticAction>> {
     })
 }
 
-fn semantic_actions(input: &str) -> Res<&str, Vec<SemanticAction>> {
+fn semantic_actions(input: &str) -> Res<&str, &str> {
     //println!("HERE {}", &input[0..50]);
-    delimited(
-        terminated(terminated(char('{'), line_end_comment), multispace0),
-        alt((
-            separated_list0(multispace0, semantic_action),
-            single_semantic_action,
-        )),
-        preceded(multispace0, char('}'))
+    terminated(
+        preceded(
+            char('{'),
+            take_until("}")
+        ),
+        char('}')
     )(input)
     .and_then(|(next, res)| {
         for c in next.chars().skip_while(|&c| c.is_whitespace()) {
@@ -1733,8 +1757,8 @@ pub struct ConstructorStmt<'a> {
     table: &'a str,
     display: Vec<DisplayPart<'a>>,
     pattern: Box<PatternExpr<'a>>,
-    actions: Option<Vec<DisassemblyAction<'a>>>,
-    semantics: Vec<SemanticAction<'a>>
+    actions: Option<&'a str>,
+    semantics: &'a str
 }
 
 fn is_not_colon(chr: char) -> bool {
@@ -1782,7 +1806,7 @@ fn constructor(input: &str) -> Res<&str, Stmt> {
 pub struct MacroStmt<'a> {
     name: &'a str,
     params: Vec<&'a str>,
-    body: Vec<SemanticAction<'a>>
+    body: &'a str
 }
 
 fn sleigh_macro(input: &str) -> Res<&str, Stmt> {
