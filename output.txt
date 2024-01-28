@@ -721,12 +721,6 @@ check_rm32_dest:	is mod=3 & check_Rmr32_dest		{ build check_Rmr32_dest; }
 check_EAX_dest:		is epsilon									{ RAX = zext(EAX); }
 check_EDX_dest:     is epsilon                                  { RDX = zext(EDX); }   
 check_vexVVVV_r32_dest: is bit64=1 & vexVVVV_r64 & vexVVVV_r32  { vexVVVV_r64 = zext(vexVVVV_r32);}
-@else 
-check_Reg32_dest:	is epsilon	{ }
-check_Rmr32_dest:	is epsilon	{ }
-check_EAX_dest:		is epsilon  { }
-check_EDX_dest:		is epsilon  { }
-check_vexVVVV_r32_dest: is epsilon {  }
 check_rm32_dest:	is epsilon	{ }
 ptr1616: reloc is protectedMode=0 & imm16; j16		[ reloc = j16*0x10 + imm16; ] { CS = j16; export *[ram]:4 reloc; }
 ptr1616: reloc is protectedMode=1 & imm16; j16		[ reloc = j16*0x10000 + imm16; ] { CS = j16; export *[ram]:4 reloc; }
