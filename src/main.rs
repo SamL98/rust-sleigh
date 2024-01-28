@@ -605,6 +605,7 @@ fn attach(input: &str) -> Res<&str, Stmt> {
 pub enum DisplayPart<'a> {
     LITERAL(char),
     QUOTED_LITERAL(&'a str),
+    CARET(Box<DisplayPart<'a>>),
     IDENT(&'a str),
     EMPTY,
     SPACE,
@@ -654,8 +655,20 @@ fn quoted_literal_display_part(input: &str) -> Res<&str, DisplayPart> {
     })
 }
 
+fn caret_literal_display_part(input: &str) -> Res<&str, DisplayPart> {
+    preceded(
+        char('^'),
+        display_part
+    )(input)
+    .map(|(next, res)| {
+        //println!("caret {:?}", res);
+        (next, DisplayPart::CARET(Box::new(res)))
+    })
+}
+
 fn display_part(input: &str) -> Res<&str, DisplayPart> {
     alt((
+        caret_literal_display_part,
         ident_display_part,
         space_display_part,
         quoted_literal_display_part,
@@ -664,12 +677,14 @@ fn display_part(input: &str) -> Res<&str, DisplayPart> {
 }
 
 fn display_section(input: &str) -> Res<&str, Vec<DisplayPart>> {
+    //println!("{}", &input[0..20]);
     take_until("is")(input)
     .and_then(|(next, res)| {
         if (res.len() == 0) {
             Ok((next, vec![DisplayPart::EMPTY]))
         }
         else {
+            //println!("{}", res.trim_end());
             many1(display_part)(res.trim_end())
             .map(|(_, res)| {
                 //println!("{:?}", res);
@@ -858,7 +873,8 @@ fn disassembly_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
                 space0,
                 alt((tag("&"), tag("|"), tag("^"),
                      tag("+"), tag("-"), tag("*"), tag("/"),
-                     tag(">>"), tag("<<")
+                     tag(">>"), tag("<<"),
+                     tag("$and"), tag("$or")
                 )),
                 space0
             ),
@@ -879,6 +895,8 @@ fn disassembly_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
             "/" => Box::new(DisassemblyExpr::DIV((expr, operand))),
             "<<" => Box::new(DisassemblyExpr::SHIFT_LEFT((expr, operand))),
             ">>" => Box::new(DisassemblyExpr::SHIFT_RIGHT((expr, operand))),
+            "$and" => Box::new(DisassemblyExpr::BIT_AND((expr, operand))),
+            "$or" => Box::new(DisassemblyExpr::BIT_OR((expr, operand))),
             _ => unreachable!("Unimplemented disassembly action opcode")
         }
     }
@@ -894,6 +912,7 @@ fn disassembly_action(input: &str) -> Res<&str, DisassemblyAction> {
         terminated(disassembly_expr, char(';'))
     )(input)
     .map(|(next, res)| {
+        //println!("{:?}", res);
         (next, DisassemblyAction { lvalue: res.0, rvalue: res.1 })
     })
 }
@@ -901,7 +920,7 @@ fn disassembly_action(input: &str) -> Res<&str, DisassemblyAction> {
 fn disassembly_actions(input: &str) -> Res<&str, Vec<DisassemblyAction>> {
     delimited(
         terminated(char('['), multispace0),
-        separated_list0(line_ending, disassembly_action),
+        separated_list0(multispace0, disassembly_action),
         preceded(multispace0, char(']'))
     )(input)
 }
@@ -1552,10 +1571,8 @@ fn semantic_action(input: &str) -> Res<&str, SemanticAction> {
         let action = SemanticAction { expr: res };
         for c in next.chars().skip_while(|&c| c.is_whitespace()) {
             if c == '#' {
-                println!("found comment {}", &next[0..20]);
                 return line_end_comment_without_newline(next)
                         .map(|(next, _)| {
-                            println!("post comment {}", &next[0..20]);
                             (next, action)
                         })
             }
@@ -1586,6 +1603,18 @@ fn semantic_actions(input: &str) -> Res<&str, Vec<SemanticAction>> {
         )),
         preceded(multispace0, char('}'))
     )(input)
+    .and_then(|(next, res)| {
+        for c in next.chars().skip_while(|&c| c.is_whitespace()) {
+            if c == '#' {
+                return line_end_comment_without_newline(next)
+                        .map(|(next, _)| {
+                            (next, res)
+                        })
+            }
+            break;
+        }
+        Ok((next, res))
+    })
     /*.map(|(next, res)| {
         println!("{:?}", res);
         (next, res)
@@ -1611,7 +1640,7 @@ fn table_header(input: &str) -> Res<&str, &str> {
         char(':')
     )(input)
     .map(|(next, res)| {
-        println!("{}", res);
+        println!("table \"{}\"", res);
         if res.len() == 0 {
             (next, "instruction")
         }
@@ -1623,10 +1652,10 @@ fn table_header(input: &str) -> Res<&str, &str> {
 
 fn constructor(input: &str) -> Res<&str, Stmt> {
     tuple((
-        terminated(table_header, space1),
+        terminated(table_header, space0),
         display_section,
         terminated(pattern_section, space1),
-        opt(terminated(disassembly_actions, space1)),
+        opt(terminated(disassembly_actions, multispace1)),
         terminated(semantic_actions, space0),
     ))(input)
     .map(|(next, res)| {
