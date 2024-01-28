@@ -102,9 +102,9 @@ pub enum SpaceType {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum SpaceAttribute {
     TYPE(SpaceType),
-    SIZE(u32),
+    SIZE(u64),
     DEFAULT,
-    WORDSIZE(u32)
+    WORDSIZE(u64)
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -159,7 +159,7 @@ fn space_size_attr(input: &str) -> Res<&str, SpaceAttribute> {
         tag("size="),
         digit1)(input)
     .map(|(next, res)| {
-        (next, SpaceAttribute::SIZE(res.parse::<u32>().unwrap()))
+        (next, SpaceAttribute::SIZE(res.parse::<u64>().unwrap()))
     })
 }
 
@@ -168,7 +168,7 @@ fn space_wordsize_attr(input: &str) -> Res<&str, SpaceAttribute> {
         tag("wordsize="),
         digit1)(input)
     .map(|(next, res)| {
-        (next, SpaceAttribute::WORDSIZE(res.parse::<u32>().unwrap()))
+        (next, SpaceAttribute::WORDSIZE(res.parse::<u64>().unwrap()))
     })
 }
 
@@ -199,8 +199,8 @@ pub enum SpaceName<'a> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct SpaceNamesDefinition<'a> {
     name: &'a str,
-    offset: u32,
-    size: u32,
+    offset: u64,
+    size: u64,
     names: Vec<SpaceName<'a>>
 }
 
@@ -246,21 +246,21 @@ fn space_name_list(input: &str) -> Res<&str, Vec<SpaceName>> {
     alt((single_space_name, many_space_name))(input)
 }
 
-fn dec_num(input: &str) -> Res<&str, u32> {
+fn dec_num(input: &str) -> Res<&str, u64> {
     digit1(input)
     .map(|(next, res)| {
-        (next, res.parse::<u32>().unwrap())
+        (next, res.parse::<u64>().unwrap())
     })
 }
 
-fn hex_num(input: &str) -> Res<&str, u32> {
+fn hex_num(input: &str) -> Res<&str, u64> {
     preceded(tag("0x"), hex_digit1)(input)
     .map(|(next, res)| {
-        (next, u32::from_str_radix(res, 16).unwrap())
+        (next, u64::from_str_radix(res, 16).unwrap())
     })
 }
 
-fn num(input: &str) -> Res<&str, u32> {
+fn num(input: &str) -> Res<&str, u64> {
     alt((hex_num, dec_num))(input)
     .map(|(next, res)| {
         (next, res)
@@ -287,7 +287,7 @@ fn space_names_define(input: &str) -> Res<&str, DefineStmt> {
         tag(";")
     )(input)
     .map(|(next, res)| {
-        let size = res.2.parse::<u32>().unwrap();
+        let size = res.2.parse::<u64>().unwrap();
         (next, DefineStmt::NAMES(SpaceNamesDefinition { name: res.0, offset: res.1, size: size, names: res.3 }))
     })
 }
@@ -296,8 +296,8 @@ fn space_names_define(input: &str) -> Res<&str, DefineStmt> {
 pub struct BitRangeDefinition<'a> {
     name: &'a str,
     reg: &'a str,
-    bit_start: u32,
-    num_bits: u32
+    bit_start: u64,
+    num_bits: u64
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -308,8 +308,8 @@ pub enum FieldAttribute {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct TokenField<'a> {
     name: &'a str,
-    bit_start: u32,
-    num_bits: u32,
+    bit_start: u64,
+    num_bits: u64,
     attrs: Vec<FieldAttribute>
 }
 
@@ -322,7 +322,7 @@ pub struct ContextDefinition<'a> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct TokenDefinition<'a> {
     name: &'a str,
-    bit_size: u32,
+    bit_size: u64,
     fields: Vec<TokenField<'a>>
 }
 
@@ -372,8 +372,8 @@ fn token_field(input: &str) -> Res<&str, TokenField> {
         opt(comment_without_newline)
     )(input)
     .map(|(next, res)| {
-        let bit_start = res.1.parse::<u32>().unwrap();
-        let bit_end = res.2.parse::<u32>().unwrap();
+        let bit_start = res.1.parse::<u64>().unwrap();
+        let bit_end = res.2.parse::<u64>().unwrap();
         let field = TokenField {
                         name: res.0, 
                         bit_start: bit_start,
@@ -417,7 +417,7 @@ fn token_define(input: &str) -> Res<&str, DefineStmt> {
         preceded(multispace0, tag(";"))
     )(input)
     .map(|(next, res)| {
-        let bit_size = res.0.1.parse::<u32>().unwrap();
+        let bit_size = res.0.1.parse::<u64>().unwrap();
         (next, DefineStmt::TOKEN(TokenDefinition { name: res.0.0, bit_size: bit_size, fields: res.1 }))
     })
 }
@@ -425,7 +425,7 @@ fn token_define(input: &str) -> Res<&str, DefineStmt> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum DefineStmt<'a> {
     ENDIANNESS(Endianness),
-    ALIGNMENT(u32),
+    ALIGNMENT(u64),
     SPACE(SpaceDefinition<'a>),
     NAMES(SpaceNamesDefinition<'a>),
     BITRANGE(Vec<BitRangeDefinition<'a>>),
@@ -455,8 +455,8 @@ fn bitrange_definition(input: &str) -> Res<&str, BitRangeDefinition> {
         terminated(digit1, tag("]"))
     ))(input)
     .map(|(next, res)| {
-        let bit_start = res.2.parse::<u32>().unwrap();
-        let num_bits = res.3.parse::<u32>().unwrap();
+        let bit_start = res.2.parse::<u64>().unwrap();
+        let num_bits = res.3.parse::<u64>().unwrap();
         (next, BitRangeDefinition { name: res.0, reg: res.1, bit_start: bit_start, num_bits: num_bits })
     })
 }
@@ -511,7 +511,7 @@ fn alignment_define(input: &str) -> Res<&str, DefineStmt> {
             digit1),
         terminated(tag(";"), line_ending))(input)
     .map(|(next, res)| {
-        (next, DefineStmt::ALIGNMENT(res.parse::<u32>().unwrap()))
+        (next, DefineStmt::ALIGNMENT(res.parse::<u64>().unwrap()))
     })
 }
 
@@ -549,7 +549,7 @@ pub struct VariableAttachStmt<'a> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ValueAttachStmt<'a> {
     fields: Vec<SpaceName<'a>>,
-    values: Vec<u32>
+    values: Vec<u64>
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -569,7 +569,7 @@ fn attach_variables(input: &str) -> Res<&str, AttachStmt> {
     })
 }
 
-fn num_list(input: &str) -> Res<&str, Vec<u32>> {
+fn num_list(input: &str) -> Res<&str, Vec<u64>> {
     delimited(
         terminated(char('['), space0),
         separated_list1(space1, num),
@@ -603,13 +603,13 @@ fn attach(input: &str) -> Res<&str, Stmt> {
 pub enum DisplayPart<'a> {
     LITERAL(char),
     IDENT(&'a str),
+    EMPTY,
     SPACE,
 }
 
 fn ident_display_part(input: &str) -> Res<&str, DisplayPart> {
     identifier(input)
     .map(|(next, res)| {
-        println!("{}", res);
         (next, DisplayPart::IDENT(res))
     })
 }
@@ -647,34 +647,61 @@ fn display_part(input: &str) -> Res<&str, DisplayPart> {
 fn display_section(input: &str) -> Res<&str, Vec<DisplayPart>> {
     take_until("is")(input)
     .and_then(|(next, res)| {
-        println!("\"{}\"", res);
-        many1(display_part)(res.trim_end())
-        .map(|(_, res)| {
-            println!("{:?}", res);
-            (next, res)
-        })
+        if (res.len() == 0) {
+            Ok((next, vec![DisplayPart::EMPTY]))
+        }
+        else {
+            many1(display_part)(res.trim_end())
+            .map(|(_, res)| {
+                //println!("{:?}", res);
+                (next, res)
+            })
+        }
     })
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub enum PatternConstraint<'a> {
+    EQ((&'a str, u64)),
+    NEQ((&'a str, u64)),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum PatternExpr<'a> {
-    CONSTRAINT((&'a str, u32)),
+    CONSTRAINT(PatternConstraint<'a>),
     AND((Box<PatternExpr<'a>>, Box<PatternExpr<'a>>)),
     OR((Box<PatternExpr<'a>>, Box<PatternExpr<'a>>)),
     CONCAT((Box<PatternExpr<'a>>, Box<PatternExpr<'a>>)),
-    EXTEND((Box<PatternExpr<'a>>, Box<PatternExpr<'a>>)),
+    EXTEND(Box<PatternExpr<'a>>),
     CONSTRUCTOR(&'a str),
     EMPTY
 }
 
-fn constraint_pattern(input: &str) -> Res<&str, Box<PatternExpr>> {
+fn eq_constraint(input: &str) -> Res<&str, PatternConstraint> {
     separated_pair(
         identifier,
         char('='),
         num
     )(input)
     .map(|(next, res)| {
-        println!("{:?}", res);
+        (next, PatternConstraint::EQ(res))
+    })
+}
+
+fn neq_constraint(input: &str) -> Res<&str, PatternConstraint> {
+    separated_pair(
+        identifier,
+        tag("!="),
+        num
+    )(input)
+    .map(|(next, res)| {
+        (next, PatternConstraint::NEQ(res))
+    })
+}
+
+fn constraint_pattern(input: &str) -> Res<&str, Box<PatternExpr>> {
+    alt((eq_constraint, neq_constraint))(input)
+    .map(|(next, res)| {
         (next, Box::new(PatternExpr::CONSTRAINT(res)))
     })
 }
@@ -683,6 +710,16 @@ fn constructor_pattern(input: &str) -> Res<&str, Box<PatternExpr>> {
     identifier(input)
     .map(|(next, res)| {
         (next, Box::new(PatternExpr::CONSTRUCTOR(res)))
+    })
+}
+
+fn extend_pattern(input: &str) -> Res<&str, Box<PatternExpr>> {
+    terminated(
+        pattern_expr,
+        delimited(space0, tag("..."), space0)
+    )(input)
+    .map(|(next, res)| {
+        (next, Box::new(PatternExpr::EXTEND(res)))
     })
 }
 
@@ -703,21 +740,26 @@ fn pattern_expr(input: &str) -> Res<&str, Box<PatternExpr>> {
     let (input, ops) = many0(
         pair(
             delimited(
-                space1,
-                alt((tag("&"), tag("|"), tag(";"), tag("..."))),
-                space1
+                space0,
+                alt((
+                    tag("&"), tag("|"), tag(";"),
+                    tag("... &"), tag("... |"),
+                )),
+                space0
             ),
             _pattern_expr
         )
     )(input)?;
+
     let mut expr = first_expr;
 
     for (op, operand) in ops {
         expr = match op {
             "&" => Box::new(PatternExpr::AND((expr, operand))),
             "|" => Box::new(PatternExpr::OR((expr, operand))),
-            "^" => Box::new(PatternExpr::CONCAT((expr, operand))),
-            "..." => Box::new(PatternExpr::EXTEND((expr, operand))),
+            ";" => Box::new(PatternExpr::CONCAT((expr, operand))),
+            "... &" => Box::new(PatternExpr::AND((Box::new(PatternExpr::EXTEND(expr)), operand))),
+            "... |" => Box::new(PatternExpr::OR((Box::new(PatternExpr::EXTEND(expr)), operand))),
             _ => unreachable!()
         }
     }
@@ -745,112 +787,14 @@ pub enum DisassemblyExpr<'a> {
     BIT_OR((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
     BIT_XOR((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
     BIT_NOT(Box<DisassemblyExpr<'a>>),
-    IDENT(&'a str)
+    IDENT(&'a str),
+    NUM(u64)
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct DisassemblyAction<'a> {
     lvalue: &'a str,
     rvalue: Box<DisassemblyExpr<'a>>
-}
-
-fn add_disas_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
-    separated_pair(
-        disassembly_expr,
-        delimited(space1, char('+'), space1),
-        disassembly_expr
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(DisassemblyExpr::ADD((res.0, res.1))))
-    })
-}
-
-fn sub_disas_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
-    separated_pair(
-        disassembly_expr,
-        delimited(space1, char('-'), space1),
-        disassembly_expr
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(DisassemblyExpr::SUB((res.0, res.1))))
-    })
-}
-
-fn mult_disas_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
-    separated_pair(
-        disassembly_expr,
-        delimited(space1, char('*'), space1),
-        disassembly_expr
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(DisassemblyExpr::MULT((res.0, res.1))))
-    })
-}
-
-fn div_disas_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
-    separated_pair(
-        disassembly_expr,
-        delimited(space1, char('/'), space1),
-        disassembly_expr
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(DisassemblyExpr::DIV((res.0, res.1))))
-    })
-}
-
-fn shift_left_disas_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
-    separated_pair(
-        disassembly_expr,
-        delimited(space1, tag("<<"), space1),
-        disassembly_expr
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(DisassemblyExpr::SHIFT_LEFT((res.0, res.1))))
-    })
-}
-
-fn shift_right_disas_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
-    separated_pair(
-        disassembly_expr,
-        delimited(space1, tag(">>"), space1),
-        disassembly_expr
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(DisassemblyExpr::SHIFT_RIGHT((res.0, res.1))))
-    })
-}
-
-fn bit_and_disas_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
-    separated_pair(
-        disassembly_expr,
-        delimited(space1, char('&'), space1),
-        disassembly_expr
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(DisassemblyExpr::BIT_AND((res.0, res.1))))
-    })
-}
-
-fn bit_or_disas_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
-    separated_pair(
-        disassembly_expr,
-        delimited(space1, char('|'), space1),
-        disassembly_expr
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(DisassemblyExpr::BIT_OR((res.0, res.1))))
-    })
-}
-
-fn bit_xor_disas_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
-    separated_pair(
-        disassembly_expr,
-        delimited(space1, char('^'), space1),
-        disassembly_expr
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(DisassemblyExpr::BIT_XOR((res.0, res.1))))
-    })
 }
 
 fn bit_not_disas_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
@@ -867,31 +811,68 @@ fn constructor_disas_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
     })
 }
 
+fn num_disas_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
+    num(input)
+    .map(|(next, res)| {
+        (next, Box::new(DisassemblyExpr::NUM(res)))
+    })
+}
+
+fn _disassembly_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
+    alt((
+        constructor_disas_expr,
+        num_disas_expr,
+        bit_not_disas_expr,
+        delimited(
+            char('('),
+            disassembly_expr,
+            char(')')
+        )
+    ))(input)
+}
+
 fn disassembly_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
-    terminated(
-        alt((
-            delimited(char('('), disassembly_expr, char(')')),
-            add_disas_expr,
-            sub_disas_expr,
-            mult_disas_expr,
-            div_disas_expr,
-            shift_left_disas_expr,
-            shift_right_disas_expr,
-            bit_and_disas_expr,
-            bit_or_disas_expr,
-            bit_xor_disas_expr,
-            bit_not_disas_expr,
-            constructor_disas_expr
-        )),
-        char(';')
-    )(input)
+    let (input, first_expr) = _disassembly_expr(input)?;
+    let (input, ops) = many0(
+        pair(
+            delimited(
+                space0,
+                alt((tag("&"), tag("|"), tag("^"),
+                     tag("+"), tag("-"), tag("*"), tag("/"),
+                     tag(">>"), tag("<<")
+                )),
+                space0
+            ),
+            _disassembly_expr
+        )
+    )(input)?;
+
+    let mut expr = first_expr;
+
+    for (op, operand) in ops {
+        expr = match op {
+            "&" => Box::new(DisassemblyExpr::BIT_AND((expr, operand))),
+            "|" => Box::new(DisassemblyExpr::BIT_OR((expr, operand))),
+            "^" => Box::new(DisassemblyExpr::BIT_XOR((expr, operand))),
+            "+" => Box::new(DisassemblyExpr::ADD((expr, operand))),
+            "-" => Box::new(DisassemblyExpr::SUB((expr, operand))),
+            "+" => Box::new(DisassemblyExpr::MULT((expr, operand))),
+            "/" => Box::new(DisassemblyExpr::DIV((expr, operand))),
+            "<<" => Box::new(DisassemblyExpr::SHIFT_LEFT((expr, operand))),
+            ">>" => Box::new(DisassemblyExpr::SHIFT_RIGHT((expr, operand))),
+            _ => unreachable!()
+        }
+    }
+
+    //println!("{:?}", expr);
+    Ok((input, expr))
 }
 
 fn disassembly_action(input: &str) -> Res<&str, DisassemblyAction> {
     separated_pair(
         identifier,
         delimited(space0, char('='), space0),
-        disassembly_expr
+        terminated(disassembly_expr, char(';'))
     )(input)
     .map(|(next, res)| {
         (next, DisassemblyAction { lvalue: res.0, rvalue: res.1 })
@@ -907,9 +888,41 @@ fn disassembly_actions(input: &str) -> Res<&str, Vec<DisassemblyAction>> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum SemanticExpr<'a> {
+pub struct SemanticExprVariable<'a> {
+    name: &'a str,
+    size: Option<u64>
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct SemanticExprNum {
+    value: u64,
+    size: Option<u64>
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum SemanticExprValue<'a> {
+    ADD((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    SUB((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    MULT((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    SHIFT_LEFT((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    SHIFT_RIGHT((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    AND((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    OR((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    ZEXT(Box<SemanticExprValue<'a>>),
+    SEXT(Box<SemanticExprValue<'a>>),
+    USER_DEFINED((&'a str, Vec<Box<SemanticExprValue<'a>>>)),
+    REF((Option<&'a str>, u64, Box<SemanticExprValue<'a>>)),
+    VARIABLE(SemanticExprVariable<'a>),
     IDENT(&'a str),
-    EXPORT(Box<SemanticExpr<'a>>),
+    NUM(SemanticExprNum),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum SemanticExpr<'a> {
+    EXPORT(Box<SemanticExprValue<'a>>),
+    BUILD(&'a str),
+    LOCAL_ASSIGN((SemanticExprVariable<'a>, Option<Box<SemanticExprValue<'a>>>),),
+    ASSIGN((SemanticExprVariable<'a>, Box<SemanticExprValue<'a>>),),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -917,26 +930,213 @@ pub struct SemanticAction<'a> {
     expr: Box<SemanticExpr<'a>>,
 }
 
+fn ident_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
+    semantic_expr_variable(input)
+    .map(|(next, res)| {
+        (next, Box::new(SemanticExprValue::VARIABLE(res)))
+    })
+}
+
+fn num_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
+    tuple((
+        num,
+        opt(preceded(
+            char(':'),
+            num
+        ))
+    ))(input)
+    .map(|(next, res)| {
+        (next, Box::new(SemanticExprValue::NUM(SemanticExprNum { value: res.0, size: res.1 })))
+    })
+}
+
+fn zext_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
+    preceded(
+        tag("zext"),
+        delimited(
+            char('('),
+            semantic_expr_value,
+            char(')')
+        )
+    )(input)
+    .map(|(next, res)| {
+        (next, Box::new(SemanticExprValue::ZEXT(res)))
+    })
+}
+
+fn sext_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
+    preceded(
+        tag("sext"),
+        delimited(
+            char('('),
+            semantic_expr_value,
+            char(')')
+        )
+    )(input)
+    .map(|(next, res)| {
+        (next, Box::new(SemanticExprValue::SEXT(res)))
+    })
+}
+
+fn user_defined_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
+    tuple((
+        identifier,
+        delimited(
+            char('('),
+            separated_list0(terminated(char(','), space0), semantic_expr_value),
+            char(')')
+        )
+    ))(input)
+    .map(|(next, res)| {
+        (next, Box::new(SemanticExprValue::USER_DEFINED(res)))
+    })
+}
+
+fn ref_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
+    tuple((
+        preceded(
+            char('*'),
+            opt(delimited(
+                char('['),
+                identifier,
+                char(']')
+            ))
+        ),
+        preceded(
+            char(':'),
+            num
+        ),
+        preceded(
+            space1,
+            semantic_expr_value
+        )
+    ))(input)
+    .map(|(next, res)| {
+        (next, Box::new(SemanticExprValue::REF(res)))
+    })
+}
+
+fn _semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
+    alt((
+        sext_semantic_expr_value,
+        zext_semantic_expr_value,
+        user_defined_semantic_expr_value,
+        ident_semantic_expr_value,
+        num_semantic_expr_value,
+        ref_semantic_expr_value,
+        delimited(
+            char('('),
+            semantic_expr_value,
+            char(')')
+        )
+    ))(input)
+}
+
+fn semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
+    let (input, first_expr) = _semantic_expr_value(input)?;
+    let (input, ops) = many0(
+        pair(
+            delimited(
+                space0,
+                alt((
+                    tag("+"), tag("-"), tag("*"),
+                    tag("<<"), tag(">>"),
+                    tag("&"), tag("|")
+                )),
+                space0
+            ),
+            _semantic_expr_value
+        )
+    )(input)?;
+
+    let mut expr = first_expr;
+
+    for (op, operand) in ops {
+        expr = match op {
+            "+" => Box::new(SemanticExprValue::ADD((expr, operand))),
+            "-" => Box::new(SemanticExprValue::SUB((expr, operand))),
+            "*" => Box::new(SemanticExprValue::MULT((expr, operand))),
+            "<<" => Box::new(SemanticExprValue::SHIFT_LEFT((expr, operand))),
+            ">>" => Box::new(SemanticExprValue::SHIFT_RIGHT((expr, operand))),
+            "&" => Box::new(SemanticExprValue::AND((expr, operand))),
+            "|" => Box::new(SemanticExprValue::OR((expr, operand))),
+            _ => unreachable!()
+        }
+    }
+
+    //println!("{:?}", expr);
+    Ok((input, expr))
+}
+
 fn export_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
-    preceded(terminated(tag("export"), space1), semantic_expr)(input)
+    preceded(terminated(tag("export"), space1), semantic_expr_value)(input)
     .map(|(next, res)| {
         (next, Box::new(SemanticExpr::EXPORT(res)))
     })
 }
 
-fn semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
-    terminated(
-        alt((
-            delimited(char('('), semantic_expr, char(')')),
-            export_semantic_expr
-        )),
-        char(';')
+fn build_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
+    preceded(terminated(tag("build"), space1), identifier)(input)
+    .map(|(next, res)| {
+        (next, Box::new(SemanticExpr::BUILD(res)))
+    })
+}
+
+fn semantic_expr_variable(input: &str) -> Res<&str, SemanticExprVariable> {
+    tuple((
+        identifier,
+        opt(preceded(char(':'), num))
+    ))(input)
+    .map(|(next, res)| {
+        (next, SemanticExprVariable { name: res.0, size: res.1 })
+    })
+}
+
+fn local_assign_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
+    preceded(
+        terminated(tag("local"), space1),
+        tuple((
+            semantic_expr_variable,
+            opt(preceded(
+                delimited(space0, char('='), space0),
+                semantic_expr_value
+            ))
+        ))
     )(input)
+    .map(|(next, res)| {
+        (next, Box::new(SemanticExpr::LOCAL_ASSIGN(res)))
+    })
+}
+
+fn assign_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
+    separated_pair(
+        semantic_expr_variable,
+        delimited(space0, char('='), space0),
+        semantic_expr_value
+    )(input)
+    .map(|(next, res)| {
+        //println!("{:?}", res);
+        (next, Box::new(SemanticExpr::ASSIGN(res)))
+    })
+}
+
+fn semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
+    alt((
+        export_semantic_expr,
+        build_semantic_expr,
+        local_assign_semantic_expr,
+        assign_semantic_expr,
+    ))(input)
+    .map(|(next, res)| {
+        println!("{:?}", res);
+        (next, res)
+    })
 }
 
 fn semantic_action(input: &str) -> Res<&str, SemanticAction> {
-    semantic_expr(input)
+    terminated(semantic_expr, char(';'))(input)
     .map(|(next, res)| {
+        //println!("{:?}", res);
         (next, SemanticAction { expr: res })
     })
 }
@@ -944,9 +1144,13 @@ fn semantic_action(input: &str) -> Res<&str, SemanticAction> {
 fn semantic_actions(input: &str) -> Res<&str, Vec<SemanticAction>> {
     delimited(
         terminated(char('{'), multispace0),
-        separated_list0(line_ending, semantic_action),
+        separated_list0(multispace0, semantic_action),
         preceded(multispace0, char('}'))
     )(input)
+    .map(|(next, res)| {
+        //println!("{:?}", res);
+        (next, res)
+    })
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -984,7 +1188,7 @@ fn constructor(input: &str) -> Res<&str, Stmt> {
         display_section,
         terminated(pattern_section, space1),
         opt(terminated(disassembly_actions, space1)),
-        terminated(semantic_actions, space1),
+        terminated(semantic_actions, space0),
     ))(input)
     .map(|(next, res)| {
         let constructor = ConstructorStmt {
@@ -994,7 +1198,7 @@ fn constructor(input: &str) -> Res<&str, Stmt> {
             actions: res.3,
             semantics: res.4
         };
-        println!("{:?}", Stmt::CONSTRUCTOR(constructor.clone()));
+        println!("{:#?}", Stmt::CONSTRUCTOR(constructor.clone()));
         (next, Stmt::CONSTRUCTOR(constructor))
     })
 }
