@@ -1,4 +1,11 @@
+mod sleigh;
+mod utils;
+mod arch;
+
+use crate::arch::get_language;
+
 extern crate nom;
+extern crate bitvec;
 
 use nom::character::complete::*;
 use nom::bytes::complete::*;
@@ -10,9 +17,9 @@ use nom::error::*;
 use nom::multi::*;
 use nom::*;
 
+use bitvec::prelude::*;
+
 use std::collections::HashMap;
-use std::io::Write;
-use std::fs::File;
 use std::fs;
 
 type Res<T, U> = IResult<T, U, Error<T>>;
@@ -32,7 +39,7 @@ fn comment_without_newline(input: &str) -> Res<&str, Stmt> {
         preceded(
             char('#'),
             take_until("\n")))(input)
-    .map(|(next, res)| {
+    .map(|(next, _)| {
         (next, Stmt::COMMENT)
     })
 }
@@ -41,7 +48,7 @@ fn comment(input: &str) -> Res<&str, Stmt> {
     terminated(
         comment_without_newline,
         line_ending)(input)
-    .map(|(next, res)| {
+    .map(|(next, _)| {
         (next, Stmt::COMMENT)
     })
 }
@@ -81,10 +88,10 @@ fn stmt(input: &str) -> Res<&str, Stmt> {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Stmt<'a> {
-    DEFINE(DefineStmt<'a>),
-    ATTACH(AttachStmt<'a>),
-    CONSTRUCTOR(ConstructorStmt<'a>),
-    MACRO(MacroStmt<'a>),
+    Define(DefineStmt<'a>),
+    Attach(AttachStmt<'a>),
+    Constructor(ConstructorStmt<'a>),
+    Macro(MacroStmt<'a>),
     COMMENT
 }
 
@@ -106,7 +113,7 @@ pub enum SpaceAttribute {
     TYPE(SpaceType),
     SIZE(u64),
     DEFAULT,
-    WORDSIZE(u64)
+    WOrDSIZE(u64)
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -170,7 +177,7 @@ fn space_wordsize_attr(input: &str) -> Res<&str, SpaceAttribute> {
         tag("wordsize="),
         digit1)(input)
     .map(|(next, res)| {
-        (next, SpaceAttribute::WORDSIZE(res.parse::<u64>().unwrap()))
+        (next, SpaceAttribute::WOrDSIZE(res.parse::<u64>().unwrap()))
     })
 }
 
@@ -188,13 +195,13 @@ fn space_define(input: &str) -> Res<&str, DefineStmt> {
                 space_attrs))),
         terminated(tag(";"), line_ending))(input)
     .map(|(next, res)| {
-        (next, DefineStmt::SPACE(SpaceDefinition { name: res.0, attrs: res.1 }))
+        (next, DefineStmt::Space(SpaceDefinition { name: res.0, attrs: res.1 }))
     })
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum SpaceName<'a> {
-    NAME(&'a str),
+    Name(&'a str),
     NONE
 }
 
@@ -209,19 +216,19 @@ pub struct SpaceNamesDefinition<'a> {
 fn name_space_name(input: &str) -> Res<&str, SpaceName> {
     identifier(input)
     .map(|(next, res)| {
-        (next, SpaceName::NAME(res))
+        (next, SpaceName::Name(res))
     })
 }
 
 fn none_space_name(input: &str) -> Res<&str, SpaceName> {
     tag("_")(input)
-    .map(|(next, res)| {
+    .map(|(next, _)| {
         (next, SpaceName::NONE)
     })
 }
 
 fn space_name(input: &str) -> Res<&str, SpaceName> {
-    alt((name_space_name, none_space_name))(input)
+    alt((none_space_name, name_space_name))(input)
 }
 
 fn many_space_name(input: &str) -> Res<&str, Vec<SpaceName>> {
@@ -304,16 +311,21 @@ fn space_names_define(input: &str) -> Res<&str, DefineStmt> {
     )(input)
     .map(|(next, res)| {
         let size = res.2.parse::<u64>().unwrap();
-        (next, DefineStmt::NAMES(SpaceNamesDefinition { name: res.0, offset: res.1, size: size, names: res.3 }))
+        (next, DefineStmt::Names(SpaceNamesDefinition { name: res.0, offset: res.1, size: size, names: res.3 }))
     })
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct BitRange {
+    start: u64,
+    len: u64
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct BitRangeDefinition<'a> {
     name: &'a str,
     reg: &'a str,
-    bit_start: u64,
-    num_bits: u64
+    range: BitRange
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -324,8 +336,7 @@ pub enum FieldAttribute {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct TokenField<'a> {
     name: &'a str,
-    bit_start: u64,
-    num_bits: u64,
+    range: BitRange,
     attrs: Vec<FieldAttribute>
 }
 
@@ -336,7 +347,7 @@ pub struct ContextDefinition<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct TokenDefinition<'a> {
+pub struct Token<'a> {
     name: &'a str,
     bit_size: u64,
     fields: Vec<TokenField<'a>>
@@ -392,8 +403,10 @@ fn token_field(input: &str) -> Res<&str, TokenField> {
         let bit_end = res.2.parse::<u64>().unwrap();
         let field = TokenField {
                         name: res.0, 
-                        bit_start: bit_start,
-                        num_bits: (bit_end - bit_start) + 1,
+                        range: BitRange {
+                            start: bit_start,
+                            len: (bit_end - bit_start) + 1,
+                        },
                         attrs: res.3.unwrap_or_else(|| Vec::new())
                     };
         (next, field)
@@ -413,7 +426,7 @@ fn context_define(input: &str) -> Res<&str, DefineStmt> {
         preceded(multispace0, tag(";"))
     )(input)
     .map(|(next, res)| {
-        (next, DefineStmt::CONTEXT(ContextDefinition { register: res.0, fields: res.1 }))
+        (next, DefineStmt::Context(ContextDefinition { register: res.0, fields: res.1 }))
     })
 }
 
@@ -434,20 +447,20 @@ fn token_define(input: &str) -> Res<&str, DefineStmt> {
     )(input)
     .map(|(next, res)| {
         let bit_size = res.0.1.parse::<u64>().unwrap();
-        (next, DefineStmt::TOKEN(TokenDefinition { name: res.0.0, bit_size: bit_size, fields: res.1 }))
+        (next, DefineStmt::Token(Token { name: res.0.0, bit_size: bit_size, fields: res.1 }))
     })
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum DefineStmt<'a> {
-    ENDIANNESS(Endianness),
-    ALIGNMENT(u64),
-    SPACE(SpaceDefinition<'a>),
-    NAMES(SpaceNamesDefinition<'a>),
-    BITRANGE(Vec<BitRangeDefinition<'a>>),
-    PCODEOP(&'a str),
-    CONTEXT(ContextDefinition<'a>),
-    TOKEN(TokenDefinition<'a>),
+    Endianness(Endianness),
+    Alignment(u64),
+    Space(SpaceDefinition<'a>),
+    Names(SpaceNamesDefinition<'a>),
+    BitRange(Vec<BitRangeDefinition<'a>>),
+    PcodeOp(&'a str),
+    Context(ContextDefinition<'a>),
+    Token(Token<'a>),
 }
 
 fn pcodeop_define(input: &str) -> Res<&str, DefineStmt> {
@@ -459,7 +472,7 @@ fn pcodeop_define(input: &str) -> Res<&str, DefineStmt> {
         terminated(preceded(space0, tag(";")), opt(comment_without_newline))
     )(input)
     .map(|(next, res)| {
-        (next, DefineStmt::PCODEOP(res))
+        (next, DefineStmt::PcodeOp(res))
     })
 }
 
@@ -473,7 +486,14 @@ fn bitrange_definition(input: &str) -> Res<&str, BitRangeDefinition> {
     .map(|(next, res)| {
         let bit_start = res.2.parse::<u64>().unwrap();
         let num_bits = res.3.parse::<u64>().unwrap();
-        (next, BitRangeDefinition { name: res.0, reg: res.1, bit_start: bit_start, num_bits: num_bits })
+        (next, BitRangeDefinition {
+                name: res.0,
+                reg: res.1,
+                range: BitRange {
+                    start: bit_start, 
+                    len: num_bits
+                }
+            })
     })
 }
 
@@ -489,7 +509,7 @@ fn bitrange_define(input: &str) -> Res<&str, DefineStmt> {
         terminated(tag(";"), line_ending)
     )(input)
     .map(|(next, res)| {
-        (next, DefineStmt::BITRANGE(res))
+        (next, DefineStmt::BitRange(res))
     })
 }
 
@@ -516,7 +536,7 @@ fn endianness_define(input: &str) -> Res<&str, DefineStmt> {
         preceded(tag("endian="), endianness),
         terminated(tag(";"), line_ending))(input)
     .map(|(next, res)| {
-        (next, DefineStmt::ENDIANNESS(res))
+        (next, DefineStmt::Endianness(res))
     })
 }
 
@@ -527,7 +547,7 @@ fn alignment_define(input: &str) -> Res<&str, DefineStmt> {
             digit1),
         terminated(tag(";"), line_ending))(input)
     .map(|(next, res)| {
-        (next, DefineStmt::ALIGNMENT(res.parse::<u64>().unwrap()))
+        (next, DefineStmt::Alignment(res.parse::<u64>().unwrap()))
     })
 }
 
@@ -551,8 +571,8 @@ fn define(input: &str) -> Res<&str, Stmt> {
             context_define,
             token_define)))(input)
     .map(|(next, res)| {
-        println!("{:?}", Stmt::DEFINE(res.clone()));
-        (next, Stmt::DEFINE(res))
+        //println!("{:?}", Stmt::Define(res.clone()));
+        (next, Stmt::Define(res))
     })
 }
 
@@ -570,8 +590,8 @@ pub struct ValueAttachStmt<'a> {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum AttachStmt<'a> {
-    VARIABLE(VariableAttachStmt<'a>),
-    VALUE(ValueAttachStmt<'a>),
+    Variable(VariableAttachStmt<'a>),
+    Value(ValueAttachStmt<'a>),
 }
 
 fn attach_variables(input: &str) -> Res<&str, AttachStmt> {
@@ -581,7 +601,7 @@ fn attach_variables(input: &str) -> Res<&str, AttachStmt> {
         char(';')
     )(input)
     .map(|(next, res)| {
-        (next, AttachStmt::VARIABLE(VariableAttachStmt { fields: res.0, registers: res.1 }))
+        (next, AttachStmt::Variable(VariableAttachStmt { fields: res.0, registers: res.1 }))
     })
 }
 
@@ -600,7 +620,7 @@ fn attach_values(input: &str) -> Res<&str, AttachStmt> {
         char(';')
     )(input)
     .map(|(next, res)| {
-        (next, AttachStmt::VALUE(ValueAttachStmt { fields: res.0, values: res.1 }))
+        (next, AttachStmt::Value(ValueAttachStmt { fields: res.0, values: res.1 }))
     })
 }
 
@@ -610,25 +630,25 @@ fn attach(input: &str) -> Res<&str, Stmt> {
         alt((attach_variables, attach_values))
     )(input)
     .map(|(next, res)| {
-        println!("{:?}", Stmt::ATTACH(res.clone()));
-        (next, Stmt::ATTACH(res))
+        //println!("{:?}", Stmt::Attach(res.clone()));
+        (next, Stmt::Attach(res))
     })
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum DisplayPart<'a> {
-    LITERAL(char),
-    QUOTED_LITERAL(&'a str),
-    CARET(Box<DisplayPart<'a>>),
-    IDENT(&'a str),
-    EMPTY,
-    SPACE,
+    Literal(char),
+    QuotedLiteral(&'a str),
+    Caret(Box<DisplayPart<'a>>),
+    Ident(&'a str),
+    Empty,
+    Space,
 }
 
 fn ident_display_part(input: &str) -> Res<&str, DisplayPart> {
     identifier(input)
     .map(|(next, res)| {
-        (next, DisplayPart::IDENT(res))
+        (next, DisplayPart::Ident(res))
     })
 }
 
@@ -646,15 +666,15 @@ fn is_space_char(chr: char) -> bool {
 
 fn space_display_part(input: &str) -> Res<&str, DisplayPart> {
     space1(input)
-    .map(|(next, res)| {
-        (next, DisplayPart::SPACE)
+    .map(|(next, _)| {
+        (next, DisplayPart::Space)
     })
 }
 
 fn literal_display_part(input: &str) -> Res<&str, DisplayPart> {
     anychar(input)
     .map(|(next, res)| {
-        (next, DisplayPart::LITERAL(res))
+        (next, DisplayPart::Literal(res))
     })
 }
 
@@ -665,7 +685,7 @@ fn quoted_literal_display_part(input: &str) -> Res<&str, DisplayPart> {
         char('"')
     )(input)
     .map(|(next, res)| {
-        (next, DisplayPart::QUOTED_LITERAL(res))
+        (next, DisplayPart::QuotedLiteral(res))
     })
 }
 
@@ -676,7 +696,7 @@ fn caret_literal_display_part(input: &str) -> Res<&str, DisplayPart> {
     )(input)
     .map(|(next, res)| {
         //println!("caret {:?}", res);
-        (next, DisplayPart::CARET(Box::new(res)))
+        (next, DisplayPart::Caret(Box::new(res)))
     })
 }
 
@@ -694,8 +714,8 @@ fn display_section(input: &str) -> Res<&str, Vec<DisplayPart>> {
     //println!("{}", &input[0..20]);
     take_until("is")(input)
     .and_then(|(next, res)| {
-        if (res.len() == 0) {
-            Ok((next, vec![DisplayPart::EMPTY]))
+        if res.len() == 0 {
+            Ok((next, vec![DisplayPart::Empty]))
         }
         else {
             //println!("{}", res.trim_end());
@@ -710,20 +730,20 @@ fn display_section(input: &str) -> Res<&str, Vec<DisplayPart>> {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum PatternConstraint<'a> {
-    EQ((&'a str, u64)),
-    NEQ((&'a str, u64)),
-    LESS((&'a str, u64)),
+    Eq((&'a str, u64)),
+    Neq((&'a str, u64)),
+    Less((&'a str, u64)),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum PatternExpr<'a> {
-    CONSTRAINT(PatternConstraint<'a>),
-    AND((Box<PatternExpr<'a>>, Box<PatternExpr<'a>>)),
-    OR((Box<PatternExpr<'a>>, Box<PatternExpr<'a>>)),
-    CONCAT((Box<PatternExpr<'a>>, Box<PatternExpr<'a>>)),
-    EXTEND(Box<PatternExpr<'a>>),
-    CONSTRUCTOR(&'a str),
-    EMPTY
+    Constraint(PatternConstraint<'a>),
+    And((Box<PatternExpr<'a>>, Box<PatternExpr<'a>>)),
+    Or((Box<PatternExpr<'a>>, Box<PatternExpr<'a>>)),
+    Concat((Box<PatternExpr<'a>>, Box<PatternExpr<'a>>)),
+    Extend(Box<PatternExpr<'a>>),
+    Constructor(&'a str),
+    Empty
 }
 
 fn eq_constraint(input: &str) -> Res<&str, PatternConstraint> {
@@ -733,7 +753,7 @@ fn eq_constraint(input: &str) -> Res<&str, PatternConstraint> {
         num
     )(input)
     .map(|(next, res)| {
-        (next, PatternConstraint::EQ(res))
+        (next, PatternConstraint::Eq(res))
     })
 }
 
@@ -744,7 +764,7 @@ fn neq_constraint(input: &str) -> Res<&str, PatternConstraint> {
         num
     )(input)
     .map(|(next, res)| {
-        (next, PatternConstraint::NEQ(res))
+        (next, PatternConstraint::Neq(res))
     })
 }
 
@@ -755,21 +775,21 @@ fn less_constraint(input: &str) -> Res<&str, PatternConstraint> {
         num
     )(input)
     .map(|(next, res)| {
-        (next, PatternConstraint::LESS(res))
+        (next, PatternConstraint::Less(res))
     })
 }
 
 fn constraint_pattern(input: &str) -> Res<&str, Box<PatternExpr>> {
     alt((eq_constraint, neq_constraint, less_constraint))(input)
     .map(|(next, res)| {
-        (next, Box::new(PatternExpr::CONSTRAINT(res)))
+        (next, Box::new(PatternExpr::Constraint(res)))
     })
 }
 
 fn constructor_pattern(input: &str) -> Res<&str, Box<PatternExpr>> {
     identifier(input)
     .map(|(next, res)| {
-        (next, Box::new(PatternExpr::CONSTRUCTOR(res)))
+        (next, Box::new(PatternExpr::Constructor(res)))
     })
 }
 
@@ -786,7 +806,7 @@ fn _pattern_expr(input: &str) -> Res<&str, Box<PatternExpr>> {
 
     let rest_rest = rest.trim_start();
     if rest_rest.len() >= 3 && &rest_rest[0..3] == "..." {
-        //let extend_expr = Box::new(PatternExpr::EXTEND(expr));
+        //let extend_expr = Box::new(PatternExpr::Extend(expr));
         //return Ok((&rest_rest[3..rest_rest.len()], extend_expr));
         return Ok((&rest_rest[3..rest_rest.len()], expr));
     }
@@ -815,19 +835,19 @@ fn pattern_expr(input: &str) -> Res<&str, Box<PatternExpr>> {
 
     for (op, operand) in ops {
         expr = match op {
-            "&" => Box::new(PatternExpr::AND((expr, operand))),
-            "|" => Box::new(PatternExpr::OR((expr, operand))),
-            ";" => Box::new(PatternExpr::CONCAT((expr, operand))),
+            "&" => Box::new(PatternExpr::And((expr, operand))),
+            "|" => Box::new(PatternExpr::Or((expr, operand))),
+            ";" => Box::new(PatternExpr::Concat((expr, operand))),
             _ => unreachable!("Unimplemented pattern opcode")
         }
     }
 
     /*if input.len() >= 3 && &input[0..3] == "..." {
-        expr = Box::new(PatternExpr::EXTEND(expr));
+        expr = Box::new(PatternExpr::Extend(expr));
         return Ok((&input[3..input.len()], expr));
     }*/
 
-    println!("{:?}", expr);
+    //println!("{:?}", expr);
     Ok((input, expr))
 }
 
@@ -840,17 +860,17 @@ fn pattern_section(input: &str) -> Res<&str, Box<PatternExpr>> {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum DisassemblyExpr<'a> {
-    ADD((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
-    SUB((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
-    MULT((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
-    DIV((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
-    SHIFT_LEFT((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
-    SHIFT_RIGHT((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
-    BIT_AND((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
-    BIT_OR((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
-    BIT_XOR((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
-    BIT_NOT(Box<DisassemblyExpr<'a>>),
-    IDENT(&'a str),
+    Add((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
+    Sub((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
+    Mult((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
+    Div((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
+    ShiftLeft((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
+    ShiftRight((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
+    BitAnd((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
+    BitOr((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
+    BitXor((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
+    BitNot(Box<DisassemblyExpr<'a>>),
+    Ident(&'a str),
     NUM(u64)
 }
 
@@ -863,14 +883,14 @@ pub struct DisassemblyAction<'a> {
 fn bit_not_disas_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
     preceded(char('~'), disassembly_expr)(input)
     .map(|(next, res)| {
-        (next, Box::new(DisassemblyExpr::BIT_NOT(res)))
+        (next, Box::new(DisassemblyExpr::BitNot(res)))
     })
 }
 
 fn constructor_disas_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
     identifier(input)
     .map(|(next, res)| {
-        (next, Box::new(DisassemblyExpr::IDENT(res)))
+        (next, Box::new(DisassemblyExpr::Ident(res)))
     })
 }
 
@@ -915,17 +935,17 @@ fn disassembly_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
 
     for (op, operand) in ops {
         expr = match op {
-            "&" => Box::new(DisassemblyExpr::BIT_AND((expr, operand))),
-            "|" => Box::new(DisassemblyExpr::BIT_OR((expr, operand))),
-            "^" => Box::new(DisassemblyExpr::BIT_XOR((expr, operand))),
-            "+" => Box::new(DisassemblyExpr::ADD((expr, operand))),
-            "-" => Box::new(DisassemblyExpr::SUB((expr, operand))),
-            "*" => Box::new(DisassemblyExpr::MULT((expr, operand))),
-            "/" => Box::new(DisassemblyExpr::DIV((expr, operand))),
-            "<<" => Box::new(DisassemblyExpr::SHIFT_LEFT((expr, operand))),
-            ">>" => Box::new(DisassemblyExpr::SHIFT_RIGHT((expr, operand))),
-            "$and" => Box::new(DisassemblyExpr::BIT_AND((expr, operand))),
-            "$or" => Box::new(DisassemblyExpr::BIT_OR((expr, operand))),
+            "&" => Box::new(DisassemblyExpr::BitAnd((expr, operand))),
+            "|" => Box::new(DisassemblyExpr::BitOr((expr, operand))),
+            "^" => Box::new(DisassemblyExpr::BitXor((expr, operand))),
+            "+" => Box::new(DisassemblyExpr::Add((expr, operand))),
+            "-" => Box::new(DisassemblyExpr::Sub((expr, operand))),
+            "*" => Box::new(DisassemblyExpr::Mult((expr, operand))),
+            "/" => Box::new(DisassemblyExpr::Div((expr, operand))),
+            "<<" => Box::new(DisassemblyExpr::ShiftLeft((expr, operand))),
+            ">>" => Box::new(DisassemblyExpr::ShiftRight((expr, operand))),
+            "$and" => Box::new(DisassemblyExpr::BitAnd((expr, operand))),
+            "$or" => Box::new(DisassemblyExpr::BitOr((expr, operand))),
             _ => unreachable!("Unimplemented disassembly action opcode")
         }
     }
@@ -958,14 +978,14 @@ fn disassembly_actions(input: &str) -> Res<&str, &str> {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum SemanticExprGotoDest<'a> {
-    IDENT(&'a str),
-    LABEL(&'a str)
+    Ident(&'a str),
+    Label(&'a str)
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum SemanticExprCallDest<'a> {
-    IDENT(&'a str),
-    INDIRECT(&'a str)
+    Ident(&'a str),
+    Indirect(&'a str)
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -983,8 +1003,8 @@ pub struct SemanticExprRef<'a> {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum SemanticExprLvalue<'a> {
-    VAR(SemanticExprVariable<'a>),
-    REF(Box<SemanticExprRef<'a>>)
+    Var(SemanticExprVariable<'a>),
+    Ref(Box<SemanticExprRef<'a>>)
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -995,43 +1015,43 @@ pub struct SemanticExprNum {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum SemanticExprValue<'a> {
-    ADD((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SUB((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    MULT((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    DIV((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SDIV((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    REM((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SREM((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SHIFT_LEFT((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SHIFT_RIGHT((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SIGNED_SHIFT_RIGHT((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    AND((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    OR((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    XOR((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    LESS((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SLESS((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    LESSEQUAL((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SLESSEQUAL((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    GREATER((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SGREATER((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    GREATEREQUAL((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SGREATEREQUAL((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    FLESS((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    FLESSEQUAL((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    FGREATER((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    FGREATEREQUAL((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    EQ((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    NEQ((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    FEQ((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    FNEQ((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    BOOL_AND((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    BOOL_OR((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    BOOL_XOR((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    BOOL_NOT(Box<SemanticExprValue<'a>>),
-    POPCOUNT(Box<SemanticExprValue<'a>>),
+    Add((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    Sub((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    Mult((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    Div((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    SDiv((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    Rem((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    SRem((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    ShiftLeft((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    ShiftRight((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    SignedShiftRight((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    And((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    Or((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    Xor((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    Less((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    SLess((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    LessEqual((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    SLessEqual((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    Greater((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    SGreater((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    GreaterEqual((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    SGreaterEqual((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    FLess((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    FLessEqual((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    FGreater((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    FGreaterEqual((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    Eq((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    Neq((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    FEq((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    FNeq((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    BoolAnd((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    BoolOr((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    BoolXor((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    BoolNot(Box<SemanticExprValue<'a>>),
+    PopCount(Box<SemanticExprValue<'a>>),
     ZEXT(Box<SemanticExprValue<'a>>),
     SEXT(Box<SemanticExprValue<'a>>),
-    TWOS_COMP(Box<SemanticExprValue<'a>>),
+    TwosComp(Box<SemanticExprValue<'a>>),
     NEGATE(Box<SemanticExprValue<'a>>),
     FNEGATE(Box<SemanticExprValue<'a>>),
     ISNAN(Box<SemanticExprValue<'a>>),
@@ -1040,30 +1060,30 @@ pub enum SemanticExprValue<'a> {
     TRUNC(Box<SemanticExprValue<'a>>),
     CEIL(Box<SemanticExprValue<'a>>),
     ROUND(Box<SemanticExprValue<'a>>),
-    FLOOR(Box<SemanticExprValue<'a>>),
-    CARRY((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SCARRY((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    BORROW((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SBORROW((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    USER_DEFINED((&'a str, Vec<Box<SemanticExprValue<'a>>>)),
-    VARIABLE(SemanticExprVariable<'a>),
-    REF(Box<SemanticExprRef<'a>>),
-    ADDROF((Option<u64>, Box<SemanticExprValue<'a>>)),
-    IDENT(&'a str),
+    FLOOr(Box<SemanticExprValue<'a>>),
+    Carry((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    SCarry((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    Borrow((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    SBorrow((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    UserDefined((&'a str, Vec<Box<SemanticExprValue<'a>>>)),
+    Variable(SemanticExprVariable<'a>),
+    Ref(Box<SemanticExprRef<'a>>),
+    AddrOf((Option<u64>, Box<SemanticExprValue<'a>>)),
+    Ident(&'a str),
     NUM(SemanticExprNum),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum SemanticExpr<'a> {
-    EXPORT(Box<SemanticExprValue<'a>>),
-    BUILD(&'a str),
-    LOCAL_ASSIGN((SemanticExprLvalue<'a>, Option<Box<SemanticExprValue<'a>>>),),
-    ASSIGN((SemanticExprLvalue<'a>, Box<SemanticExprValue<'a>>),),
-    IFGOTO((Box<SemanticExprValue<'a>>, SemanticExprGotoDest<'a>)),
-    GOTO(SemanticExprGotoDest<'a>),
-    LABEL(&'a str),
-    PCODEOP_CALL((&'a str, Vec<Box<SemanticExprValue<'a>>>)),
-    CALL(SemanticExprCallDest<'a>)
+    Export(Box<SemanticExprValue<'a>>),
+    Build(&'a str),
+    LocalAssign((SemanticExprLvalue<'a>, Option<Box<SemanticExprValue<'a>>>),),
+    Assign((SemanticExprLvalue<'a>, Box<SemanticExprValue<'a>>),),
+    IfGoto((Box<SemanticExprValue<'a>>, SemanticExprGotoDest<'a>)),
+    Goto(SemanticExprGotoDest<'a>),
+    Label(&'a str),
+    PcodeOpCall((&'a str, Vec<Box<SemanticExprValue<'a>>>)),
+    Call(SemanticExprCallDest<'a>)
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -1122,7 +1142,7 @@ fn popcount_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>
         delimited(terminated(char('('), space0), semantic_expr_value, preceded(space0, char(')')))
     )(input)
     .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::POPCOUNT(res)))
+        (next, Box::new(SemanticExprValue::PopCount(res)))
     })
 }
 
@@ -1132,7 +1152,7 @@ fn twos_comp_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue
         delimited(terminated(char('('), space0), semantic_expr_value, preceded(space0, char(')')))
     )(input)
     .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::TWOS_COMP(res)))
+        (next, Box::new(SemanticExprValue::TwosComp(res)))
     })
 }
 
@@ -1212,7 +1232,7 @@ fn floor_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
         delimited(terminated(char('('), space0), semantic_expr_value, preceded(space0, char(')')))
     )(input)
     .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::FLOOR(res)))
+        (next, Box::new(SemanticExprValue::FLOOr(res)))
     })
 }
 
@@ -1240,7 +1260,7 @@ fn carry_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
         )
     )(input)
     .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::CARRY(res)))
+        (next, Box::new(SemanticExprValue::Carry(res)))
     })
 }
 
@@ -1258,7 +1278,7 @@ fn scarry_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> 
         )
     )(input)
     .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::SCARRY(res)))
+        (next, Box::new(SemanticExprValue::SCarry(res)))
     })
 }
 
@@ -1276,7 +1296,7 @@ fn borrow_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> 
         )
     )(input)
     .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::BORROW(res)))
+        (next, Box::new(SemanticExprValue::Borrow(res)))
     })
 }
 
@@ -1294,7 +1314,7 @@ fn sborrow_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>>
         )
     )(input)
     .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::SBORROW(res)))
+        (next, Box::new(SemanticExprValue::SBorrow(res)))
     })
 }
 fn bool_not_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
@@ -1310,7 +1330,7 @@ fn bool_not_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>
         ))
     )(input)
     .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::BOOL_NOT(res)))
+        (next, Box::new(SemanticExprValue::BoolNot(res)))
     })
 }
 
@@ -1333,7 +1353,7 @@ fn user_defined_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprVa
     //println!("hello? {}", &input[0..20]);
     _user_defined_semantic_expr_value(input)
     .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::USER_DEFINED(res)))
+        (next, Box::new(SemanticExprValue::UserDefined(res)))
     })
 }
 
@@ -1370,21 +1390,21 @@ fn addrof_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> 
         ))
     )(input)
     .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::ADDROF(res)))
+        (next, Box::new(SemanticExprValue::AddrOf(res)))
     })
 }
 
 fn ref_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
     _ref_semantic_expr_value(input)
     .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::REF(res)))
+        (next, Box::new(SemanticExprValue::Ref(res)))
     })
 }
 
 fn ref_semantic_expr_value_lvalue(input: &str) -> Res<&str, SemanticExprLvalue> {
     _ref_semantic_expr_value(input)
     .map(|(next, res)| {
-        (next, SemanticExprLvalue::REF(res))
+        (next, SemanticExprLvalue::Ref(res))
     })
 }
 
@@ -1454,38 +1474,38 @@ fn semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
 
     for (op, operand) in ops {
         expr = match op {
-            "+" => Box::new(SemanticExprValue::ADD((expr, operand))),
-            "-" => Box::new(SemanticExprValue::SUB((expr, operand))),
-            "*" => Box::new(SemanticExprValue::MULT((expr, operand))),
-            "/" => Box::new(SemanticExprValue::DIV((expr, operand))),
-            "s/" => Box::new(SemanticExprValue::SDIV((expr, operand))),
-            "%" => Box::new(SemanticExprValue::REM((expr, operand))),
-            "s%" => Box::new(SemanticExprValue::SREM((expr, operand))),
-            "<<" => Box::new(SemanticExprValue::SHIFT_LEFT((expr, operand))),
-            ">>" => Box::new(SemanticExprValue::SHIFT_RIGHT((expr, operand))),
-            "s>>" => Box::new(SemanticExprValue::SIGNED_SHIFT_RIGHT((expr, operand))),
-            "&" => Box::new(SemanticExprValue::AND((expr, operand))),
-            "|" => Box::new(SemanticExprValue::OR((expr, operand))),
-            "^" => Box::new(SemanticExprValue::XOR((expr, operand))),
-            "<" => Box::new(SemanticExprValue::LESS((expr, operand))),
-            "s<" => Box::new(SemanticExprValue::SLESS((expr, operand))),
-            "<=" => Box::new(SemanticExprValue::LESSEQUAL((expr, operand))),
-            "s<=" => Box::new(SemanticExprValue::SLESSEQUAL((expr, operand))),
-            ">" => Box::new(SemanticExprValue::GREATER((expr, operand))),
-            "s>" => Box::new(SemanticExprValue::SGREATER((expr, operand))),
-            ">=" => Box::new(SemanticExprValue::GREATEREQUAL((expr, operand))),
-            "s>=" => Box::new(SemanticExprValue::SGREATEREQUAL((expr, operand))),
-            "f<" => Box::new(SemanticExprValue::FLESS((expr, operand))),
-            "f<=" => Box::new(SemanticExprValue::FLESSEQUAL((expr, operand))),
-            "f>" => Box::new(SemanticExprValue::FGREATER((expr, operand))),
-            "f>=" => Box::new(SemanticExprValue::FGREATEREQUAL((expr, operand))),
-            "f==" => Box::new(SemanticExprValue::FEQ((expr, operand))),
-            "f!=" => Box::new(SemanticExprValue::FNEQ((expr, operand))),
-            "==" => Box::new(SemanticExprValue::EQ((expr, operand))),
-            "!=" => Box::new(SemanticExprValue::NEQ((expr, operand))),
-            "&&" => Box::new(SemanticExprValue::BOOL_AND((expr, operand))),
-            "||" => Box::new(SemanticExprValue::BOOL_OR((expr, operand))),
-            "^^" => Box::new(SemanticExprValue::BOOL_XOR((expr, operand))),
+            "+" => Box::new(SemanticExprValue::Add((expr, operand))),
+            "-" => Box::new(SemanticExprValue::Sub((expr, operand))),
+            "*" => Box::new(SemanticExprValue::Mult((expr, operand))),
+            "/" => Box::new(SemanticExprValue::Div((expr, operand))),
+            "s/" => Box::new(SemanticExprValue::SDiv((expr, operand))),
+            "%" => Box::new(SemanticExprValue::Rem((expr, operand))),
+            "s%" => Box::new(SemanticExprValue::SRem((expr, operand))),
+            "<<" => Box::new(SemanticExprValue::ShiftLeft((expr, operand))),
+            ">>" => Box::new(SemanticExprValue::ShiftRight((expr, operand))),
+            "s>>" => Box::new(SemanticExprValue::SignedShiftRight((expr, operand))),
+            "&" => Box::new(SemanticExprValue::And((expr, operand))),
+            "|" => Box::new(SemanticExprValue::Or((expr, operand))),
+            "^" => Box::new(SemanticExprValue::Xor((expr, operand))),
+            "<" => Box::new(SemanticExprValue::Less((expr, operand))),
+            "s<" => Box::new(SemanticExprValue::SLess((expr, operand))),
+            "<=" => Box::new(SemanticExprValue::LessEqual((expr, operand))),
+            "s<=" => Box::new(SemanticExprValue::SLessEqual((expr, operand))),
+            ">" => Box::new(SemanticExprValue::Greater((expr, operand))),
+            "s>" => Box::new(SemanticExprValue::SGreater((expr, operand))),
+            ">=" => Box::new(SemanticExprValue::GreaterEqual((expr, operand))),
+            "s>=" => Box::new(SemanticExprValue::SGreaterEqual((expr, operand))),
+            "f<" => Box::new(SemanticExprValue::FLess((expr, operand))),
+            "f<=" => Box::new(SemanticExprValue::FLessEqual((expr, operand))),
+            "f>" => Box::new(SemanticExprValue::FGreater((expr, operand))),
+            "f>=" => Box::new(SemanticExprValue::FGreaterEqual((expr, operand))),
+            "f==" => Box::new(SemanticExprValue::FEq((expr, operand))),
+            "f!=" => Box::new(SemanticExprValue::FNeq((expr, operand))),
+            "==" => Box::new(SemanticExprValue::Eq((expr, operand))),
+            "!=" => Box::new(SemanticExprValue::Neq((expr, operand))),
+            "&&" => Box::new(SemanticExprValue::BoolAnd((expr, operand))),
+            "||" => Box::new(SemanticExprValue::BoolOr((expr, operand))),
+            "^^" => Box::new(SemanticExprValue::BoolXor((expr, operand))),
             _ => unreachable!()
         }
     }
@@ -1497,14 +1517,14 @@ fn semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
 fn export_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
     preceded(terminated(tag("export"), space1), semantic_expr_value)(input)
     .map(|(next, res)| {
-        (next, Box::new(SemanticExpr::EXPORT(res)))
+        (next, Box::new(SemanticExpr::Export(res)))
     })
 }
 
 fn ident_semantic_expr_dest(input: &str) -> Res<&str, SemanticExprGotoDest> {
     identifier(input)
     .map(|(next, res)| {
-        (next, SemanticExprGotoDest::IDENT(res))
+        (next, SemanticExprGotoDest::Ident(res))
     })
 }
 
@@ -1515,7 +1535,7 @@ fn goto_label_semantic_expr(input: &str) -> Res<&str, SemanticExprGotoDest> {
         char('>'),
     )(input)
     .map(|(next, res)| {
-        (next, SemanticExprGotoDest::LABEL(res))
+        (next, SemanticExprGotoDest::Label(res))
     })
 }
 
@@ -1530,7 +1550,7 @@ fn label_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
         char('>'),
     )(input)
     .map(|(next, res)| {
-        (next, Box::new(SemanticExpr::LABEL(res)))
+        (next, Box::new(SemanticExpr::Label(res)))
     })
 }
 
@@ -1552,7 +1572,7 @@ fn ifgoto_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
         )
     ))(input)
     .map(|(next, res)| {
-        (next, Box::new(SemanticExpr::IFGOTO(res)))
+        (next, Box::new(SemanticExpr::IfGoto(res)))
     })
 }
 
@@ -1563,7 +1583,7 @@ fn goto_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
         goto_dest_semantic_expr
     )(input)
     .map(|(next, res)| {
-        (next, Box::new(SemanticExpr::GOTO(res)))
+        (next, Box::new(SemanticExpr::Goto(res)))
     })
 }
 
@@ -1571,7 +1591,7 @@ fn build_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
     //println!("build hello? {}", &input[0..20]);
     preceded(terminated(tag("build"), space1), identifier)(input)
     .map(|(next, res)| {
-        (next, Box::new(SemanticExpr::BUILD(res)))
+        (next, Box::new(SemanticExpr::Build(res)))
     })
 }
 
@@ -1588,14 +1608,14 @@ fn _semantic_expr_variable(input: &str) -> Res<&str, SemanticExprVariable> {
 fn semantic_expr_variable(input: &str) -> Res<&str, Box<SemanticExprValue>> {
     _semantic_expr_variable(input)
     .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::VARIABLE(res)))
+        (next, Box::new(SemanticExprValue::Variable(res)))
     })
 }
 
 fn semantic_expr_variable_lvalue(input: &str) -> Res<&str, SemanticExprLvalue> {
     _semantic_expr_variable(input)
     .map(|(next, res)| {
-        (next, SemanticExprLvalue::VAR(res))
+        (next, SemanticExprLvalue::Var(res))
     })
 }
 
@@ -1616,7 +1636,7 @@ fn local_assign_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
         ))
     )(input)
     .map(|(next, res)| {
-        (next, Box::new(SemanticExpr::LOCAL_ASSIGN(res)))
+        (next, Box::new(SemanticExpr::LocalAssign(res)))
     })
 }
 
@@ -1629,7 +1649,7 @@ fn assign_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
     )(input)
     .map(|(next, res)| {
         //println!("{:?}", res);
-        (next, Box::new(SemanticExpr::ASSIGN(res)))
+        (next, Box::new(SemanticExpr::Assign(res)))
     })
 }
 
@@ -1638,14 +1658,14 @@ fn pcodeop_call_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
     _user_defined_semantic_expr_value(input)
     .map(|(next, res)| {
         //println!("{:?}", res);
-        (next, Box::new(SemanticExpr::PCODEOP_CALL(res)))
+        (next, Box::new(SemanticExpr::PcodeOpCall(res)))
     })
 }
 
 fn call_dest_identifier(input: &str) -> Res<&str, SemanticExprCallDest> {
     identifier(input)
     .map(|(next, res)| {
-        (next, SemanticExprCallDest::IDENT(res))
+        (next, SemanticExprCallDest::Ident(res))
     })
 }
 
@@ -1656,7 +1676,7 @@ fn call_dest_indirect(input: &str) -> Res<&str, SemanticExprCallDest> {
         char(']'),
     )(input)
     .map(|(next, res)| {
-        (next, SemanticExprCallDest::INDIRECT(res))
+        (next, SemanticExprCallDest::Indirect(res))
     })
 }
 
@@ -1673,7 +1693,7 @@ fn call_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
     )(input)
     .map(|(next, res)| {
         //println!("{:?}", res);
-        (next, Box::new(SemanticExpr::CALL(res)))
+        (next, Box::new(SemanticExpr::Call(res)))
     })
 }
 
@@ -1771,7 +1791,7 @@ fn table_header(input: &str) -> Res<&str, &str> {
         char(':')
     )(input)
     .map(|(next, res)| {
-        println!("table \"{}\"", res);
+        //println!("table \"{}\"", res);
         if res.len() == 0 {
             (next, "instruction")
         }
@@ -1797,8 +1817,8 @@ fn constructor(input: &str) -> Res<&str, Stmt> {
             actions: res.3,
             semantics: res.4
         };
-        println!("{:#?}", Stmt::CONSTRUCTOR(constructor.clone()));
-        (next, Stmt::CONSTRUCTOR(constructor))
+        //println!("{:#?}", Stmt::Constructor(constructor.clone()));
+        (next, Stmt::Constructor(constructor))
     })
 }
 
@@ -1828,18 +1848,198 @@ fn sleigh_macro(input: &str) -> Res<&str, Stmt> {
             params: res.1,
             body: res.2,
         };
-        println!("{:#?}", Stmt::MACRO(mac.clone()));
-        (next, Stmt::MACRO(mac))
+        //println!("{:#?}", Stmt::Macro(mac.clone()));
+        (next, Stmt::Macro(mac))
     })
 }
 
-fn main() {
-    let contents = read_file("output.txt");
-    let sleigh = program(&contents);
-    //println!("{:?}", sleigh);
+type DecisionTreeInner<'a> = (
+    &'a mut Vec<Vec<u8>>,
+    &'a mut Vec<&'a str>,
+    &'a mut Vec<Vec<Vec<u8>>>
+);
 
-    /*match sleigh.finish() {
-        Ok(prog) => println!("{:?}", prog),
-        Err(err) => println!("{}", err)
-    }*/
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct DecisionTree<'a> {
+    context_masks: Vec<Vec<u8>>,
+    token_names: Vec<&'a str>,
+    token_masks: Vec<Vec<Vec<u8>>>
+}
+
+fn accum_eq_constraint<'a>(field_name: &'a str,
+                        val: u64,
+                        tree: &mut DecisionTreeInner<'a>,
+                        tokens: &'a HashMap<&'a str, (&'a Token<'a>, &'a TokenField)>,
+                        ctx_fields: &HashMap<&'a str, &BitRange>)
+{
+    let (context_masks, token_names, token_masks) = tree;
+
+    // The field is part of the context
+    if let Some(ctx_field) = ctx_fields.get(field_name) {
+        for mask in (*context_masks).iter_mut() {
+            for i in 0..ctx_field.len {
+                let bit = ((val >> i) & 1) as u8;
+                mask[(ctx_field.start + i) as usize] |= bit;
+            }
+        }
+    }
+    else if let Some((token, token_field)) = tokens.get(field_name) {
+        if token_masks.len() == 0 {
+            let mut masks = vec![];
+            token_names.push(token.name);
+            token_masks.push(masks);
+        }
+
+        let curr_token_name = token_names[token_names.len()-1];
+
+        let num_masks = token_masks.len() - 1;
+        let mut curr_masks = &mut token_masks[num_masks];
+
+        if curr_token_name != token.name {
+            panic!("Expected pattern op to be part of token");
+        }
+
+        for mask in (*curr_masks).iter_mut() {
+            for i in 0..token_field.range.len {
+                let bit = ((val >> i) & 1) as u8;
+                mask[(token_field.range.start + i) as usize] |= bit;
+            }
+        }
+    }
+    else {
+        panic!("Pattern op is neither a context field nor a token field");
+    }
+}
+
+fn accum_neq_constraint<'a>(field_name: &str,
+                        va: u64,
+                        tree: &DecisionTreeInner<'a>,
+                        tokens: &'a HashMap<&'a str, (&Token<'a>, &TokenField)>,
+                        ctx_fields: &HashMap<&'a str, &BitRange>)
+{}
+
+fn accum_constraint<'a>(constraint: &PatternConstraint<'a>,
+                    tree: &mut DecisionTreeInner<'a>,
+                    tokens: &'a HashMap<&'a str, (&'a Token<'a>, &TokenField)>,
+                    ctx_fields: &HashMap<&'a str, &BitRange>)
+{
+    match constraint {
+        PatternConstraint::Eq((field_name, val)) => accum_eq_constraint(field_name, *val, tree, &tokens, &ctx_fields),
+        PatternConstraint::Neq((field_name, val)) => accum_neq_constraint(field_name, *val, tree, &tokens, &ctx_fields),
+        _ => todo!()
+    }
+}
+
+fn accum_constructor<'a>(constructor: &ConstructorStmt<'a>,
+                     tree: &mut DecisionTreeInner<'a>,
+                     tokens: &'a HashMap<&'a str, (&'a Token<'a>, &TokenField)>,
+                     ctx_fields: &HashMap<&'a str, &BitRange>)
+{
+    match &*constructor.pattern {
+        PatternExpr::Constraint(constraint) => accum_constraint(&constraint, tree, &tokens, &ctx_fields),
+        PatternExpr::And(constraint) => accum_constraint(&constraint, tree, &tokens, &ctx_fields),
+        _ => todo!()
+    }
+}
+
+fn build_decision_tree<'a>(stmts: &'a Vec<Stmt>,
+                           trees: &'a mut HashMap<&'a str, DecisionTree<'a>>,
+                           tokens: &'a HashMap<&'a str, (&'a Token<'a>, &TokenField)>,
+                           ctx_fields: &HashMap<&'a str, &BitRange>)
+{
+    for stmt in stmts {
+        if let Stmt::Constructor(constructor) = stmt {
+            println!("{:#?}", constructor);
+
+            if trees.get_mut(constructor.table) == None {
+                let tree = DecisionTree {
+                    context_masks: vec![],
+                    token_names: vec![],
+                    token_masks: vec![]
+                };
+                trees.insert(constructor.table, tree);
+            }
+
+            let tree = trees.get_mut(constructor.table).unwrap();
+            let mut tree_inner = (&mut tree.context_masks, &mut tree.token_names, &mut tree.token_masks);
+            accum_constructor(constructor, &mut tree_inner, tokens, ctx_fields);
+            break;
+        }
+
+        println!("{:#?}", trees.clone());
+    }
+}
+
+fn main() {
+    let lang = get_language("x86", "x86:LE:64:default").unwrap();
+
+    let contents = read_file("output.txt");
+    let sleigh = match program(&contents) {
+        Ok((_, prog)) => prog,
+        _ => panic!()
+    };
+
+    let mut token_fields: HashMap<&str, (&Token, &TokenField)> = HashMap::new();
+    for stmt in &sleigh.stmts {
+        if let Stmt::Define(DefineStmt::Token(token)) = stmt {
+            for field in &token.fields {
+                token_fields.insert(field.name, (token, field));
+            }
+        }
+    }
+
+    // Create a bit vector for the entire register space.
+    let mut reg_space_size: usize = 0;
+    let mut registers = HashMap::new();
+    let mut ctx_fields = HashMap::new();
+    let mut ctx_reg_name: Option<&str> = None;
+
+    for stmt in &sleigh.stmts {
+        if let Stmt::Define(DefineStmt::Names(defns)) = stmt {
+            if defns.name != "register" {
+                continue;
+            }
+
+            let mut off = defns.offset;
+
+            for name in &defns.names {
+                if let SpaceName::Name(reg_name) = name {
+                    //println!("{}", reg_name);
+                    registers.insert(reg_name, BitRange { start: off * 8, len: defns.size * 8 });
+                }
+
+                off += defns.size;
+            }
+
+            reg_space_size = reg_space_size.max(off as usize);
+        }
+        else if let Stmt::Define(DefineStmt::Context(ctx_defn)) = stmt {
+            ctx_reg_name = Some(ctx_defn.register);
+
+            for field in &ctx_defn.fields {
+                ctx_fields.insert(field.name, &field.range);
+            }
+        }
+    }
+    let ctx_base = &registers[&ctx_reg_name.unwrap()];
+
+    // TODO: Figure out how to properly initialize the BitVec.
+    let mut reg_space: BitVec<u8, Lsb0> = BitVec::with_capacity(reg_space_size * 8);
+    for _ in 0..(reg_space_size * 8) {
+        reg_space.push(false);
+    }
+
+    for (var, val) in lang.pspec.defaults {
+        if let Some(range) = ctx_fields.get(&*var) {
+            let start = (ctx_base.start + range.start) as usize;
+            let end = start + (range.len as usize);
+            reg_space[start .. end].store_le(val);
+        }
+    }
+    //println!("{:?}", reg_space);
+
+    let mut decision_trees: HashMap<&str, DecisionTree> = HashMap::new();
+    build_decision_tree(&sleigh.stmts, &mut decision_trees, &token_fields, &ctx_fields);
+    
+    let data: [u8; 1] = [0x55];
 }

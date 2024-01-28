@@ -7,3 +7,6 @@ edition = "2021"
 
 [dependencies]
 nom = "6.0"
+bitvec = "1"
+glob = "0.3.1"
+elementtree = "1.2.3"
