@@ -35,17 +35,46 @@ fn comment(input: &str) -> Res<&str, Stmt> {
     })
 }
 
+fn comment_no_newline(input: &str) -> Res<&str, Stmt> {
+    preceded(
+        preceded(space0, tag("#")),
+        take_until("\n"))(input)
+    .map(|(next, res)| {
+        (next, Stmt::COMMENT())
+    })
+}
+
 fn line_end_comment(input: &str) -> Res<&str, Option<Stmt>> {
     preceded(space0, opt(comment))(input)
 }
 
+fn line_end_comment_no_newline(input: &str) -> Res<&str, Option<Stmt>> {
+    preceded(space0, opt(comment_no_newline))(input)
+}
+
 fn program(input: &str) -> Res<&str, Program> {
-    many0(
+    /*separated_list0(
+        multispace1,
         terminated(
+            alt((
+                comment, stmt
+            )),
+            line_end_comment_no_newline
+        )
+    )(input)*/
+    many0(
+        alt((
+            terminated(
+                terminated(
+                    alt((comment, stmt)),
+                    line_end_comment),
+                take_while(is_newline_char)
+            ),
             terminated(
                 alt((comment, stmt)),
                 line_end_comment),
-            take_while(is_newline_char)))(input)
+        ))
+    )(input)
     .map(|(next, res)| {
         (next, Program { stmts: res })
     })
@@ -420,7 +449,7 @@ fn execute_undef<'b>(s: UndefStmt<'b>, vars: &mut HashMap<String, String>, out: 
 fn execute_include<'b>(s: IncludeStmt<'b>, vars: &mut HashMap<String, String>, out: &mut File) {
     println!("Processing {}", s.filename);
 
-    let included_contents = read_file(s.filename);
+    let included_contents = read_file(s.filename) + "\n"; // hack
     let sleigh_prepro = program(&included_contents);
     //println!("{:?}", sleigh_prepro);
 
