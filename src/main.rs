@@ -777,13 +777,14 @@ fn pattern_expr(input: &str) -> Res<&str, Box<PatternExpr>> {
                 space0,
                 alt((
                     tag("&"), tag("|"), tag(";"),
-                    tag("... &"), tag("... |"),
+                    tag("... &"), tag("... |")
                 )),
                 space0
             ),
             _pattern_expr
         )
     )(input)?;
+    let (input, _) = take_while(is_space_char)(input)?;
 
     let mut expr = first_expr;
 
@@ -796,6 +797,11 @@ fn pattern_expr(input: &str) -> Res<&str, Box<PatternExpr>> {
             "... |" => Box::new(PatternExpr::OR((Box::new(PatternExpr::EXTEND(expr)), operand))),
             _ => unreachable!("Unimplemented pattern opcode")
         }
+    }
+
+    if input.len() >= 3 && &input[0..3] == "..." {
+        expr = Box::new(PatternExpr::EXTEND(expr));
+        return Ok((&input[3..input.len()], expr));
     }
 
     println!("{:?}", expr);
@@ -901,7 +907,7 @@ fn disassembly_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
         }
     }
 
-    //println!("{:?}", expr);
+    println!("{:?}", expr);
     Ok((input, expr))
 }
 
@@ -923,6 +929,18 @@ fn disassembly_actions(input: &str) -> Res<&str, Vec<DisassemblyAction>> {
         separated_list0(multispace0, disassembly_action),
         preceded(multispace0, char(']'))
     )(input)
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum SemanticExprGotoDest<'a> {
+    IDENT(&'a str),
+    LABEL(&'a str)
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum SemanticExprCallDest<'a> {
+    IDENT(&'a str),
+    INDIRECT(&'a str)
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -1005,6 +1023,7 @@ pub enum SemanticExprValue<'a> {
     USER_DEFINED((&'a str, Vec<Box<SemanticExprValue<'a>>>)),
     VARIABLE(SemanticExprVariable<'a>),
     REF(Box<SemanticExprRef<'a>>),
+    ADDROF((Option<u64>, Box<SemanticExprValue<'a>>)),
     IDENT(&'a str),
     NUM(SemanticExprNum),
 }
@@ -1015,9 +1034,11 @@ pub enum SemanticExpr<'a> {
     BUILD(&'a str),
     LOCAL_ASSIGN((SemanticExprLvalue<'a>, Option<Box<SemanticExprValue<'a>>>),),
     ASSIGN((SemanticExprLvalue<'a>, Box<SemanticExprValue<'a>>),),
-    IFGOTO((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    GOTO(Box<SemanticExprValue<'a>>),
-    CALL((&'a str, Vec<Box<SemanticExprValue<'a>>>))
+    IFGOTO((Box<SemanticExprValue<'a>>, SemanticExprGotoDest<'a>)),
+    GOTO(SemanticExprGotoDest<'a>),
+    LABEL(&'a str),
+    PCODEOP_CALL((&'a str, Vec<Box<SemanticExprValue<'a>>>)),
+    CALL(SemanticExprCallDest<'a>)
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -1276,9 +1297,9 @@ fn _user_defined_semantic_expr_value(input: &str) -> Res<&str, (&str, Vec<Box<Se
     tuple((
         identifier,
         delimited(
-            char('('),
+            terminated(char('('), space0),
             separated_list0(terminated(char(','), space0), semantic_expr_value),
-            char(')')
+            preceded(space0, char(')'))
         )
     ))(input)
 }
@@ -1312,6 +1333,19 @@ fn _ref_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprRef>> {
     ))(input)
     .map(|(next, res)| {
         (next, Box::new(SemanticExprRef { space: res.0, size: res.1, ptr: res.2 }))
+    })
+}
+
+fn addrof_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
+    preceded(
+        char('&'),
+        tuple((
+            opt(preceded(char(':'), num)),
+            preceded(space0, semantic_expr_value)
+        ))
+    )(input)
+    .map(|(next, res)| {
+        (next, Box::new(SemanticExprValue::ADDROF(res)))
     })
 }
 
@@ -1353,6 +1387,7 @@ fn _semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
         ident_semantic_expr_value,
         num_semantic_expr_value,
         ref_semantic_expr_value,
+        addrof_semantic_expr_value,
         delimited(
             terminated(char('('), multispace0),
             semantic_expr_value,
@@ -1430,7 +1465,7 @@ fn semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
         }
     }
 
-    //println!("{:?}", expr);
+    println!("{:?}", expr);
     Ok((input, expr))
 }
 
@@ -1441,21 +1476,54 @@ fn export_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
     })
 }
 
+fn ident_semantic_expr_dest(input: &str) -> Res<&str, SemanticExprGotoDest> {
+    identifier(input)
+    .map(|(next, res)| {
+        (next, SemanticExprGotoDest::IDENT(res))
+    })
+}
+
+fn goto_label_semantic_expr(input: &str) -> Res<&str, SemanticExprGotoDest> {
+    delimited(
+        char('<'),
+        identifier,
+        char('>'),
+    )(input)
+    .map(|(next, res)| {
+        (next, SemanticExprGotoDest::LABEL(res))
+    })
+}
+
+fn goto_dest_semantic_expr(input: &str) -> Res<&str, SemanticExprGotoDest> {
+    alt((goto_label_semantic_expr, ident_semantic_expr_dest))(input)
+}
+
+fn label_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
+    delimited(
+        char('<'),
+        identifier,
+        char('>'),
+    )(input)
+    .map(|(next, res)| {
+        (next, Box::new(SemanticExpr::LABEL(res)))
+    })
+}
+
 fn ifgoto_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
     //println!("{}", &input[0..50]);
     tuple((
         delimited(
             terminated(tag("if"), space1),
             delimited(
-                char('('),
+                terminated(char('('), space0),
                 semantic_expr_value,
-                char(')')
+                preceded(space0, char(')'))
             ),
             space1
         ),
         preceded(
             terminated(tag("goto"), space1),
-            ident_semantic_expr_value
+            goto_dest_semantic_expr
         )
     ))(input)
     .map(|(next, res)| {
@@ -1467,7 +1535,7 @@ fn goto_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
     //println!("goto hello? {}", &input[0..20]);
     preceded(
         terminated(tag("goto"), space1),
-        ident_semantic_expr_value
+        goto_dest_semantic_expr
     )(input)
     .map(|(next, res)| {
         (next, Box::new(SemanticExpr::GOTO(res)))
@@ -1540,9 +1608,44 @@ fn assign_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
     })
 }
 
-fn call_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
+fn pcodeop_call_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
     //println!("call hello? {}", &input[0..20]);
     _user_defined_semantic_expr_value(input)
+    .map(|(next, res)| {
+        //println!("{:?}", res);
+        (next, Box::new(SemanticExpr::PCODEOP_CALL(res)))
+    })
+}
+
+fn call_dest_identifier(input: &str) -> Res<&str, SemanticExprCallDest> {
+    identifier(input)
+    .map(|(next, res)| {
+        (next, SemanticExprCallDest::IDENT(res))
+    })
+}
+
+fn call_dest_indirect(input: &str) -> Res<&str, SemanticExprCallDest> {
+    delimited(
+        char('['),
+        identifier,
+        char(']'),
+    )(input)
+    .map(|(next, res)| {
+        (next, SemanticExprCallDest::INDIRECT(res))
+    })
+}
+
+fn call_dest_semantic_expr_value(input: &str) -> Res<&str, SemanticExprCallDest> {
+    alt((call_dest_identifier, call_dest_indirect))(input)
+}
+
+fn call_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
+    //println!("call hello? {}", &input[0..20]);
+    //_user_defined_semantic_expr_value(input)
+    preceded(
+        terminated(tag("call"), space1),
+        call_dest_semantic_expr_value
+    )(input)
     .map(|(next, res)| {
         //println!("{:?}", res);
         (next, Box::new(SemanticExpr::CALL(res)))
@@ -1557,7 +1660,8 @@ fn semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
         build_semantic_expr,
         local_assign_semantic_expr,
         assign_semantic_expr,
-        call_semantic_expr
+        call_semantic_expr,
+        pcodeop_call_semantic_expr
     ))(input)
     .map(|(next, res)| {
         println!("{:?}", res);
@@ -1566,7 +1670,10 @@ fn semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
 }
 
 fn semantic_action(input: &str) -> Res<&str, SemanticAction> {
-    terminated(semantic_expr, char(';'))(input)
+    alt((
+        label_semantic_expr,
+        terminated(semantic_expr, preceded(space0, char(';')))
+    ))(input)
     .and_then(|(next, res)| {
         let action = SemanticAction { expr: res };
         for c in next.chars().skip_while(|&c| c.is_whitespace()) {
@@ -1654,8 +1761,8 @@ fn constructor(input: &str) -> Res<&str, Stmt> {
     tuple((
         terminated(table_header, space0),
         display_section,
-        terminated(pattern_section, space1),
-        opt(terminated(disassembly_actions, multispace1)),
+        terminated(pattern_section, multispace0),
+        opt(terminated(disassembly_actions, multispace0)),
         terminated(semantic_actions, space0),
     ))(input)
     .map(|(next, res)| {
