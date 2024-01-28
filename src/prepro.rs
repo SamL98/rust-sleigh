@@ -161,24 +161,24 @@ fn ifdef_line(input: &str) -> Res<&str, &str> {
 
 fn else_line(input: &str) -> Res<&str, &str> {
     terminated(
-        tag("@else"), 
+        terminated(tag("@else"), space0), 
         line_ending)(input)
 }
 
 fn else_stmt(input: &str) -> Res<&str, Option<Condition>> {
-    //println!("**else on {}", input);
+    //println!("**else on {}", &input[0..20]);
     preceded(
         else_line,
         many_till(stmt, endif_line))(input)
     .map(|(next, res)| {
-        //println!("else: {:?}, rest: {}", res, next);
+        //println!("else: {:?}, rest: {}", res, &next[0..20]);
         (next, Some(Condition::ALWAYS(res.0)))
     })
 }
 
 fn endif_line(input: &str) -> Res<&str, Option<Condition>> {
     terminated(
-        tag("@endif"),
+        terminated(tag("@endif"), space0),
         line_ending)(input)
     .map(|(next, _)| {
         //println!("endif, rest: \"{}\"", next);
