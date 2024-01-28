@@ -75,7 +75,7 @@ fn program(input: &str) -> Res<&str, Program> {
 }
 
 fn stmt(input: &str) -> Res<&str, Stmt> {
-    alt((define, attach, constructor))(input)
+    alt((define, attach, sleigh_macro, constructor))(input)
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -83,6 +83,7 @@ pub enum Stmt<'a> {
     DEFINE(DefineStmt<'a>),
     ATTACH(AttachStmt<'a>),
     CONSTRUCTOR(ConstructorStmt<'a>),
+    MACRO(MacroStmt<'a>),
     COMMENT
 }
 
@@ -602,6 +603,7 @@ fn attach(input: &str) -> Res<&str, Stmt> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum DisplayPart<'a> {
     LITERAL(char),
+    QUOTED_LITERAL(&'a str),
     IDENT(&'a str),
     EMPTY,
     SPACE,
@@ -640,8 +642,24 @@ fn literal_display_part(input: &str) -> Res<&str, DisplayPart> {
     })
 }
 
+fn quoted_literal_display_part(input: &str) -> Res<&str, DisplayPart> {
+    delimited(
+        char('"'),
+        take_until("\""),
+        char('"')
+    )(input)
+    .map(|(next, res)| {
+        (next, DisplayPart::QUOTED_LITERAL(res))
+    })
+}
+
 fn display_part(input: &str) -> Res<&str, DisplayPart> {
-    alt((ident_display_part, space_display_part, literal_display_part))(input)
+    alt((
+        ident_display_part,
+        space_display_part,
+        quoted_literal_display_part,
+        literal_display_part
+    ))(input)
 }
 
 fn display_section(input: &str) -> Res<&str, Vec<DisplayPart>> {
@@ -760,7 +778,7 @@ fn pattern_expr(input: &str) -> Res<&str, Box<PatternExpr>> {
             ";" => Box::new(PatternExpr::CONCAT((expr, operand))),
             "... &" => Box::new(PatternExpr::AND((Box::new(PatternExpr::EXTEND(expr)), operand))),
             "... |" => Box::new(PatternExpr::OR((Box::new(PatternExpr::EXTEND(expr)), operand))),
-            _ => unreachable!()
+            _ => unreachable!("Unimplemented pattern opcode")
         }
     }
 
@@ -856,11 +874,11 @@ fn disassembly_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
             "^" => Box::new(DisassemblyExpr::BIT_XOR((expr, operand))),
             "+" => Box::new(DisassemblyExpr::ADD((expr, operand))),
             "-" => Box::new(DisassemblyExpr::SUB((expr, operand))),
-            "+" => Box::new(DisassemblyExpr::MULT((expr, operand))),
+            "*" => Box::new(DisassemblyExpr::MULT((expr, operand))),
             "/" => Box::new(DisassemblyExpr::DIV((expr, operand))),
             "<<" => Box::new(DisassemblyExpr::SHIFT_LEFT((expr, operand))),
             ">>" => Box::new(DisassemblyExpr::SHIFT_RIGHT((expr, operand))),
-            _ => unreachable!()
+            _ => unreachable!("Unimplemented disassembly action opcode")
         }
     }
 
@@ -908,6 +926,11 @@ pub enum SemanticExprValue<'a> {
     SHIFT_RIGHT((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
     AND((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
     OR((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    BOOL_EQ((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    BOOL_NEQ((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    BOOL_AND((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    BOOL_OR((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    BOOL_NOT(Box<SemanticExprValue<'a>>),
     ZEXT(Box<SemanticExprValue<'a>>),
     SEXT(Box<SemanticExprValue<'a>>),
     USER_DEFINED((&'a str, Vec<Box<SemanticExprValue<'a>>>)),
@@ -923,6 +946,9 @@ pub enum SemanticExpr<'a> {
     BUILD(&'a str),
     LOCAL_ASSIGN((SemanticExprVariable<'a>, Option<Box<SemanticExprValue<'a>>>),),
     ASSIGN((SemanticExprVariable<'a>, Box<SemanticExprValue<'a>>),),
+    IFGOTO((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
+    GOTO(Box<SemanticExprValue<'a>>),
+    CALL((&'a str, Vec<Box<SemanticExprValue<'a>>>))
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -978,7 +1004,28 @@ fn sext_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
     })
 }
 
-fn user_defined_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
+fn bool_not_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
+    preceded(
+        char('!'),
+        alt((
+            delimited(
+                char('('),
+                semantic_expr_value,
+                char(')')
+            ),
+            semantic_expr_value
+        ))
+    )(input)
+    .map(|(next, res)| {
+        (next, Box::new(SemanticExprValue::BOOL_NOT(res)))
+    })
+}
+
+fn no_param_semantic_expr_value(input: &str) -> Res<&str, Vec<Box<SemanticExprValue>>> {
+    Ok((input, vec![]))
+}
+
+fn _user_defined_semantic_expr_value(input: &str) -> Res<&str, (&str, Vec<Box<SemanticExprValue>>)> {
     tuple((
         identifier,
         delimited(
@@ -987,6 +1034,11 @@ fn user_defined_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprVa
             char(')')
         )
     ))(input)
+}
+
+fn user_defined_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
+    //println!("hello? {}", &input[0..20]);
+    _user_defined_semantic_expr_value(input)
     .map(|(next, res)| {
         (next, Box::new(SemanticExprValue::USER_DEFINED(res)))
     })
@@ -1018,6 +1070,7 @@ fn ref_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
 
 fn _semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
     alt((
+        bool_not_semantic_expr_value,
         sext_semantic_expr_value,
         zext_semantic_expr_value,
         user_defined_semantic_expr_value,
@@ -1041,7 +1094,9 @@ fn semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
                 alt((
                     tag("+"), tag("-"), tag("*"),
                     tag("<<"), tag(">>"),
-                    tag("&"), tag("|")
+                    tag("=="), tag("!="),
+                    tag("&&"), tag("||"),
+                    tag("&"), tag("|"),
                 )),
                 space0
             ),
@@ -1060,6 +1115,10 @@ fn semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
             ">>" => Box::new(SemanticExprValue::SHIFT_RIGHT((expr, operand))),
             "&" => Box::new(SemanticExprValue::AND((expr, operand))),
             "|" => Box::new(SemanticExprValue::OR((expr, operand))),
+            "==" => Box::new(SemanticExprValue::BOOL_EQ((expr, operand))),
+            "!=" => Box::new(SemanticExprValue::BOOL_NEQ((expr, operand))),
+            "&&" => Box::new(SemanticExprValue::BOOL_AND((expr, operand))),
+            "||" => Box::new(SemanticExprValue::BOOL_OR((expr, operand))),
             _ => unreachable!()
         }
     }
@@ -1075,7 +1134,41 @@ fn export_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
     })
 }
 
+fn ifgoto_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
+    //println!("{}", &input[0..50]);
+    tuple((
+        delimited(
+            terminated(tag("if"), space1),
+            delimited(
+                char('('),
+                semantic_expr_value,
+                char(')')
+            ),
+            space1
+        ),
+        preceded(
+            terminated(tag("goto"), space1),
+            ident_semantic_expr_value
+        )
+    ))(input)
+    .map(|(next, res)| {
+        (next, Box::new(SemanticExpr::IFGOTO(res)))
+    })
+}
+
+fn goto_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
+    //println!("goto hello? {}", &input[0..20]);
+    preceded(
+        terminated(tag("goto"), space1),
+        ident_semantic_expr_value
+    )(input)
+    .map(|(next, res)| {
+        (next, Box::new(SemanticExpr::GOTO(res)))
+    })
+}
+
 fn build_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
+    //println!("build hello? {}", &input[0..20]);
     preceded(terminated(tag("build"), space1), identifier)(input)
     .map(|(next, res)| {
         (next, Box::new(SemanticExpr::BUILD(res)))
@@ -1093,6 +1186,7 @@ fn semantic_expr_variable(input: &str) -> Res<&str, SemanticExprVariable> {
 }
 
 fn local_assign_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
+    //println!("local hello? {}", &input[0..20]);
     preceded(
         terminated(tag("local"), space1),
         tuple((
@@ -1109,6 +1203,7 @@ fn local_assign_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
 }
 
 fn assign_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
+    //println!("assign hello? {}", &input[0..20]);
     separated_pair(
         semantic_expr_variable,
         delimited(space0, char('='), space0),
@@ -1120,12 +1215,24 @@ fn assign_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
     })
 }
 
+fn call_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
+    //println!("call hello? {}", &input[0..20]);
+    _user_defined_semantic_expr_value(input)
+    .map(|(next, res)| {
+        //println!("{:?}", res);
+        (next, Box::new(SemanticExpr::CALL(res)))
+    })
+}
+
 fn semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
     alt((
+        ifgoto_semantic_expr,
+        goto_semantic_expr,
         export_semantic_expr,
         build_semantic_expr,
         local_assign_semantic_expr,
         assign_semantic_expr,
+        call_semantic_expr
     ))(input)
     .map(|(next, res)| {
         println!("{:?}", res);
@@ -1141,16 +1248,27 @@ fn semantic_action(input: &str) -> Res<&str, SemanticAction> {
     })
 }
 
+fn single_semantic_action(input: &str) -> Res<&str, Vec<SemanticAction>> {
+    semantic_action(input)
+    .map(|(next, res)| {
+        (next, vec![res])
+    })
+}
+
 fn semantic_actions(input: &str) -> Res<&str, Vec<SemanticAction>> {
+    //println!("{}", &input[0..50]);
     delimited(
         terminated(char('{'), multispace0),
-        separated_list0(multispace0, semantic_action),
+        alt((
+            separated_list0(multispace0, semantic_action),
+            single_semantic_action,
+        )),
         preceded(multispace0, char('}'))
     )(input)
-    .map(|(next, res)| {
-        //println!("{:?}", res);
+    /*.map(|(next, res)| {
+        println!("{:?}", res);
         (next, res)
-    })
+    })*/
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -1200,6 +1318,37 @@ fn constructor(input: &str) -> Res<&str, Stmt> {
         };
         println!("{:#?}", Stmt::CONSTRUCTOR(constructor.clone()));
         (next, Stmt::CONSTRUCTOR(constructor))
+    })
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct MacroStmt<'a> {
+    name: &'a str,
+    params: Vec<&'a str>,
+    body: Vec<SemanticAction<'a>>
+}
+
+fn sleigh_macro(input: &str) -> Res<&str, Stmt> {
+    tuple((
+        preceded(terminated(tag("macro"), space1), identifier),
+        terminated(
+            delimited(
+                char('('),
+                separated_list0(terminated(char(','), space0), identifier),
+                char(')')
+            ),
+            space1
+        ),
+        semantic_actions
+    ))(input)
+    .map(|(next, res)| {
+        let mac = MacroStmt {
+            name: res.0,
+            params: res.1,
+            body: res.2,
+        };
+        println!("{:#?}", Stmt::MACRO(mac.clone()));
+        (next, Stmt::MACRO(mac))
     })
 }
 

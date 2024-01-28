@@ -770,6 +770,7 @@ unlock:		is lockprefx=1 { UNLOCK(); }
 unlock:		is epsilon { }
 macro conditionalAssign(dest, cond, trueVal, falseVal) {
 dest = zext(cond) * trueVal | zext(!cond) * falseVal;	
+}
 macro ptr2(r,x) {
 r = zext(x);
 }
