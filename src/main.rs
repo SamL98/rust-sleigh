@@ -1866,108 +1866,268 @@ pub struct DecisionTree<'a> {
     token_masks: Vec<Vec<Vec<u8>>>
 }
 
-fn accum_eq_constraint<'a>(field_name: &'a str,
-                        val: u64,
-                        tree: &mut DecisionTreeInner<'a>,
-                        tokens: &'a HashMap<&'a str, (&'a Token<'a>, &'a TokenField)>,
-                        ctx_fields: &HashMap<&'a str, &BitRange>)
-{
-    let (context_masks, token_names, token_masks) = tree;
+#[repr(u8)]
+#[derive(PartialEq, Eq, Hash, Copy, Clone, Debug)]
+pub enum TernaryBit {
+    DontCare = 1,
+    Zero,
+    One,
+    Always
+}
 
-    // The field is part of the context
-    if let Some(ctx_field) = ctx_fields.get(field_name) {
-        for mask in (*context_masks).iter_mut() {
-            for i in 0..ctx_field.len {
-                let bit = ((val >> i) & 1) as u8;
-                mask[(ctx_field.start + i) as usize] |= bit;
-            }
+impl<'a> TernaryBit {
+    pub fn from(value: u8) -> Self {
+        match value {
+            0 => TernaryBit::Zero,
+            1 => TernaryBit::One,
+            _ => panic!()
         }
     }
+
+    pub fn or(&self, other: u8) -> Self {
+        match TernaryBit::from(other) {
+            TernaryBit::Zero => {
+                match self {
+                    TernaryBit::Zero => TernaryBit::Zero,
+                    TernaryBit::One => TernaryBit::One,
+                    TernaryBit::Always => TernaryBit::Always,
+                    _ => TernaryBit::Zero
+                }
+            },
+            TernaryBit::One => {
+                match self {
+                    TernaryBit::Zero => TernaryBit::One,
+                    TernaryBit::One => TernaryBit::One,
+                    TernaryBit::Always => TernaryBit::Always,
+                    _ => TernaryBit::Zero
+                }
+            },
+            TernaryBit::Always => {
+                TernaryBit::Always
+            },
+            _ => *self
+        }
+    }
+
+    pub fn and(&self, other: &TernaryBit) -> Self {
+        match other {
+            TernaryBit::DontCare => *other,
+            TernaryBit::Zero => TernaryBit::Zero,
+            TernaryBit::One => {
+                match self {
+                    TernaryBit::Zero => TernaryBit::Zero,
+                    TernaryBit::One => TernaryBit::One,
+                    TernaryBit::Always => TernaryBit::Always,
+                    _ => TernaryBit::DontCare
+                }
+            },
+            TernaryBit::Always => {
+                match self {
+                    TernaryBit::Zero => TernaryBit::Zero,
+                    TernaryBit::One => TernaryBit::Always,
+                    TernaryBit::Always => TernaryBit::Always,
+                    _ => TernaryBit::DontCare
+                }
+            },
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum BitPattern<'a> {
+    Context(Vec<TernaryBit>),
+    Token((&'a str, Vec<TernaryBit>)),
+    Concat((Box<BitPattern<'a>>, Box<BitPattern<'a>>)),
+}
+
+fn _eval_eq_constraint<'a>(val: u64, size: usize, start: usize, totalSize: usize) -> Vec<TernaryBit> {
+    let mut mask: Vec<TernaryBit> = Vec::with_capacity(totalSize);
+    for _ in 0..totalSize {
+        mask.push(TernaryBit::DontCare);
+    }
+    for i in 0..size {
+        let bit = ((val >> i) & 1) as u8;
+        mask[start + i] = mask[start + i].or(bit);
+    }
+    return mask;
+}
+
+fn _eval_token<'a>(val: u64, size: usize, start: usize, totalSize: usize) -> Vec<TernaryBit> {
+    let mut mask: Vec<TernaryBit> = Vec::with_capacity(totalSize);
+    for _ in 0..totalSize {
+        mask.push(TernaryBit::DontCare);
+    }
+    for i in 0..size {
+        let bit = ((val >> i) & 1) as u8;
+        mask[start + i] = mask[start + i].or(bit);
+    }
+    return mask;
+}
+
+fn _eval_field<'a>(size: usize, start: usize, totalSize: usize) -> Vec<TernaryBit> {
+    let mut mask: Vec<TernaryBit> = Vec::with_capacity(totalSize);
+    for _ in 0..totalSize {
+        mask.push(TernaryBit::DontCare);
+    }
+    for i in 0..size {
+        mask[start + i] = TernaryBit::Always;
+    }
+    return mask;
+}
+
+fn eval_eq_constraint<'a>
+(
+    field_name: &'a str,
+    val: u64,
+    tokens: &'a HashMap<&'a str, (&'a Token<'a>, &'a TokenField)>,
+    ctx_reg: &BitRange,
+    ctx_fields: &HashMap<&'a str, &BitRange>
+) -> Vec<(Option<BitPattern<'a>>, BitPattern<'a>)>
+{
+    if let Some(ctx_field) = ctx_fields.get(field_name) {
+        println!("{}, {:?}", field_name, ctx_field);
+        let mask = _eval_eq_constraint(val, ctx_field.len as usize, ctx_field.start as usize, ctx_reg.len as usize);
+        return vec![(BitPattern::Context(mask)), vec![]);
+    }
     else if let Some((token, token_field)) = tokens.get(field_name) {
-        if token_masks.len() == 0 {
-            let mut masks = vec![];
-            token_names.push(token.name);
-            token_masks.push(masks);
-        }
-
-        let curr_token_name = token_names[token_names.len()-1];
-
-        let num_masks = token_masks.len() - 1;
-        let mut curr_masks = &mut token_masks[num_masks];
-
-        if curr_token_name != token.name {
-            panic!("Expected pattern op to be part of token");
-        }
-
-        for mask in (*curr_masks).iter_mut() {
-            for i in 0..token_field.range.len {
-                let bit = ((val >> i) & 1) as u8;
-                mask[(token_field.range.start + i) as usize] |= bit;
-            }
-        }
+        let mask = _eval_eq_constraint(val, token_field.range.len as usize, token_field.range.start as usize, token.bit_size as usize);
+        return (None, vec![BitPattern::Token((token.name, mask))]);
     }
     else {
         panic!("Pattern op is neither a context field nor a token field");
     }
 }
 
-fn accum_neq_constraint<'a>(field_name: &str,
-                        va: u64,
-                        tree: &DecisionTreeInner<'a>,
-                        tokens: &'a HashMap<&'a str, (&Token<'a>, &TokenField)>,
-                        ctx_fields: &HashMap<&'a str, &BitRange>)
-{}
-
-fn accum_constraint<'a>(constraint: &PatternConstraint<'a>,
-                    tree: &mut DecisionTreeInner<'a>,
-                    tokens: &'a HashMap<&'a str, (&'a Token<'a>, &TokenField)>,
-                    ctx_fields: &HashMap<&'a str, &BitRange>)
+fn eval_constraint<'a>
+(
+    constraint: &PatternConstraint<'a>,
+    tokens: &'a HashMap<&'a str, (&'a Token<'a>, &TokenField)>,
+    ctx_reg: &BitRange,
+    ctx_fields: &HashMap<&'a str, &BitRange>
+) -> Vec<BitPattern<'a>>
 {
     match constraint {
-        PatternConstraint::Eq((field_name, val)) => accum_eq_constraint(field_name, *val, tree, &tokens, &ctx_fields),
-        PatternConstraint::Neq((field_name, val)) => accum_neq_constraint(field_name, *val, tree, &tokens, &ctx_fields),
+        PatternConstraint::Eq((field_name, val)) => eval_eq_constraint(field_name, *val, &tokens, &ctx_reg, &ctx_fields),
         _ => todo!()
     }
 }
 
-fn accum_constructor<'a>(constructor: &ConstructorStmt<'a>,
-                     tree: &mut DecisionTreeInner<'a>,
-                     tokens: &'a HashMap<&'a str, (&'a Token<'a>, &TokenField)>,
-                     ctx_fields: &HashMap<&'a str, &BitRange>)
-{
-    match &*constructor.pattern {
-        PatternExpr::Constraint(constraint) => accum_constraint(&constraint, tree, &tokens, &ctx_fields),
-        PatternExpr::And(constraint) => accum_constraint(&constraint, tree, &tokens, &ctx_fields),
-        _ => todo!()
+fn _eval_and(lhs: &Vec<TernaryBit>, rhs: &Vec<TernaryBit>) -> Vec<TernaryBit> {
+    let mut res: Vec<TernaryBit> = Vec::with_capacity(lhs.len());
+    for _ in 0..lhs.len() {
+        res.push(TernaryBit::DontCare);
     }
+    for (i, (bit1, bit2)) in lhs.iter().zip(rhs.iter()).enumerate() {
+        res[i] = bit1.and(bit2);
+    }
+    return res;
 }
 
-fn build_decision_tree<'a>(stmts: &'a Vec<Stmt>,
-                           trees: &'a mut HashMap<&'a str, DecisionTree<'a>>,
-                           tokens: &'a HashMap<&'a str, (&'a Token<'a>, &TokenField)>,
-                           ctx_fields: &HashMap<&'a str, &BitRange>)
-{
-    for stmt in stmts {
-        if let Stmt::Constructor(constructor) = stmt {
-            println!("{:#?}", constructor);
+fn eval_and<'a>(lhs: &BitPattern<'a>, rhs: &BitPattern<'a>) -> BitPattern<'a> {
+    if let (BitPattern::Context(mask1), BitPattern::Context(mask2)) = (lhs, rhs) {
+        BitPattern::Context(_eval_and(mask1, mask2))
+    }
+    else if let (BitPattern::Token((tok1, mask1)), BitPattern::Token((tok2, mask2))) = (lhs, rhs) {
+        if tok1 != tok2 {
+            panic!("Tokens should match");
+        }
+        BitPattern::Token((tok2, _eval_and(mask1, mask2)))
+    }
+    else {
+        panic!("Don't know how to combine bit patterns {:?} and {:?}", lhs, rhs);
+    }
+    /*else if let (BitPattern::Context(mask1), BitPattern::Token((tok2, mask2))) = (lhs, rhs) {
+        BitPattern::Concat((
+            Box::new(BitPattern::Context(mask1.clone())),
+            Box::new(BitPattern::Token((tok2, mask2.clone())))
+        ))
+    }
+    else if let (BitPattern::Token((tok1, mask1)), BitPattern::Context(mask2)) = (lhs, rhs) {
+        BitPattern::Concat((
+            Box::new(BitPattern::Token((tok1, mask1.clone()))),
+            Box::new(BitPattern::Context(mask2.clone()))
+        ))
+    }*/
+}
 
-            if trees.get_mut(constructor.table) == None {
-                let tree = DecisionTree {
-                    context_masks: vec![],
-                    token_names: vec![],
-                    token_masks: vec![]
-                };
-                trees.insert(constructor.table, tree);
+fn eval_pattern<'a>
+(
+    pattern: &PatternExpr<'a>,
+    constructors: &'a HashMap<&'a str, Vec<PatternExpr<'a>>>,
+    tokens: &'a HashMap<&'a str, (&'a Token<'a>, &TokenField)>,
+    ctx_reg: &BitRange,
+    ctx_fields: &HashMap<&'a str, &BitRange>
+) -> Vec<(Option<BitPattern<'a>>, BitPattern<'a>)>
+{
+    println!("{:#?}", pattern);
+    let pats = match pattern {
+        PatternExpr::Constraint(constraint) => {
+            eval_constraint(&constraint, &tokens, &ctx_reg, &ctx_fields)
+        },
+        PatternExpr::And((lhs_pat, rhs_pat)) => {
+            let l_pats = eval_pattern(lhs_pat, constructors, &tokens, &ctx_reg, &ctx_fields);
+            let r_pats = eval_pattern(rhs_pat, constructors, &tokens, &ctx_reg, &ctx_fields);
+            let mut pats: Vec<BitPattern> = Vec::with_capacity(lhs_pats.len() * rhs_pats.len());
+
+            for (l_ctx, l_pat) in &l_pats {
+                for (r_ctx, r_pat) in &r_pats {
+                    let ctx = eval_and(&l_ctx, &r_ctx);
+                    let pat = eval_and(&lhs, &rhs)
+                    let _ = &pats.push((ctx, pat));
+                }
             }
 
-            let tree = trees.get_mut(constructor.table).unwrap();
-            let mut tree_inner = (&mut tree.context_masks, &mut tree.token_names, &mut tree.token_masks);
-            accum_constructor(constructor, &mut tree_inner, tokens, ctx_fields);
-            break;
-        }
+            pats
+        },
+        PatternExpr::Concat((lhs_pat, rhs_pat)) => {
+            let l_pats = eval_pattern(lhs_pat, constructors, &tokens, &ctx_reg, &ctx_fields);
+            let r_pats = eval_pattern(rhs_pat, constructors, &tokens, &ctx_reg, &ctx_fields);
+            let mut pats: Vec<BitPattern> = Vec::with_capacity(lhs_pats.len() + rhs_pats.len());
 
-        println!("{:#?}", trees.clone());
+            for (l_ctx, l_pat) in &l_pats {
+                for (r_ctx, r_pat) in &r_pats {
+                    let ctx = eval_and(&l_ctx, &r_ctx);
+                    let pat = BitPattern::Concat((Box::new(lhs.clone()), Box::new(rhs.clone())))
+                    let _ = &pats.push((ctx, pat));
+                }
+            }
+
+            pats
+        },
+        PatternExpr::Constructor(child_table_name) => {
+            if let Some((token, token_field)) = tokens.get(child_table_name) {
+                let bits = _eval_field(token_field.range.len as usize, token_field.range.start as usize, token.bit_size as usize);
+                vec![(None, BitPattern::Token((token.name, bits)))]
+            }
+            else {
+                eval_table(child_table_name, constructors, tokens, ctx_reg, ctx_fields)
+            }
+        },
+        _ => todo!()
+    };
+    
+    println!("Created pattern {:?} with context {:?}", pats, ctx);
+    return pats;
+}
+
+fn eval_table<'a>(
+    table_name: &'a str,
+    constructors: &'a HashMap<&'a str, Vec<PatternExpr>>,
+    tokens: &'a HashMap<&'a str, (&'a Token<'a>, &TokenField)>,
+    ctx_reg: &BitRange,
+    ctx_fields: &HashMap<&'a str, &BitRange>
+) -> Vec<(Option<BitPattern<'a>>, BitPattern<'a>)>
+{
+    let mut all_pats = vec![];
+
+    if let Some(patterns) = constructors.get(table_name) {
+        for pattern in patterns {
+            let pats = eval_pattern(pattern, constructors, tokens, ctx_reg, ctx_fields);
+            all_pats.extend(pats);
+        }
     }
+
+    return all_pats;
 }
 
 fn main() {
@@ -2038,8 +2198,23 @@ fn main() {
     }
     //println!("{:?}", reg_space);
 
-    let mut decision_trees: HashMap<&str, DecisionTree> = HashMap::new();
-    build_decision_tree(&sleigh.stmts, &mut decision_trees, &token_fields, &ctx_fields);
+    let mut constructors: HashMap<&str, Vec<PatternExpr>> = HashMap::new();
+    let mut tables: HashMap<&str, Vec<BitPattern>> = HashMap::new();
+
+    for stmt in &sleigh.stmts {
+        if let Stmt::Constructor(constructor) = stmt {
+            let table_name = constructor.table;
+            constructors.entry(table_name).or_insert(vec![]).push(*constructor.pattern.clone());
+        }
+    }
+
+    for (table_name, _) in constructors.iter() {
+        if tables.get(table_name) == None {
+            println!("Processing {}", table_name);
+            let pats = eval_table(table_name, &constructors, &token_fields, &ctx_base, &ctx_fields);
+            tables.insert(table_name, pats);
+        }
+    }
     
     let data: [u8; 1] = [0x55];
 }
