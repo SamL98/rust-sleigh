@@ -152,25 +152,53 @@ pub struct ConstructorTemplate {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct OpTemplate {
+pub struct OpTemplate<'a> {
+    code: &'a str,
+    output: Option<VarnodeTemplate<'a>>,
+    inputs: Vec<VarnodeTemplate<'a>>
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct HandleTemplate {
+pub struct HandleTemplate<'a> {
+    space_template: ConstTemplate<'a>,
+    size_template: ConstTemplate<'a>,
+    exported_size_template: ConstTemplate<'a>,
+    offset_template: ConstTemplate<'a>,
+    exported_offset_template: ConstTemplate<'a>,
+    unk_template3: ConstTemplate<'a>,
+    unk_template4: ConstTemplate<'a>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum ConsTemplate {
-    Op(OpTemplate),
-    Handle(HandleTemplate),
+pub enum ConsTemplate<'a> {
+    Op(OpTemplate<'a>),
+    Handle(HandleTemplate<'a>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct VarnodeTemplate {
+pub struct ConcreteVarnodeTemplate<'a> {
+    space: &'a str,
+    offset: u64,
+    size: u32
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct ConstTemplate {
+pub struct VarnodeTemplate<'a> {
+    space_template: ConstTemplate<'a>,
+    offset_template: ConstTemplate<'a>,
+    size_template: ConstTemplate<'a>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum ConstTemplate<'a> {
+    SpaceId(&'a str),
+    Val(u64),
+    Handle(u32),
+    Relative(u32),
+    Start,
+    Next,
+    CurSpace,
+    CurSpaceSize,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -226,6 +254,10 @@ fn spaces(input: &str) -> Res<&str, (&str, Vec<Space>)> {
 
 fn u32hex(s: &str) -> u32 {
     u32::from_str_radix(&s[2..], 16).unwrap()
+}
+
+fn u64hex(s: &str) -> u64 {
+    u64::from_str_radix(&s[2..], 16).unwrap()
 }
 
 fn u32dec(s: &str) -> u32 {
@@ -529,8 +561,22 @@ fn const_template(input: &str) -> Res<&str, ConstTemplate> {
         tag("/>")
     )(input)
     .map(|(next, res)| {
-        //println!("{:?}", res.1);
-        (next, ConstTemplate {})
+        let (_, attrs) = attrs(res).finish().unwrap();
+        //println!("{} {:?}", res, attrs);
+
+        let const_template = match attrs[0].1 {
+            "spaceid" => ConstTemplate::SpaceId(attrs[1].1),
+            "real" => ConstTemplate::Val(u64hex(attrs[1].1)),
+            "handle" => ConstTemplate::Handle(u32dec(attrs[1].1)),
+            "relative" => ConstTemplate::Relative(u32hex(attrs[1].1)),
+            "start" => ConstTemplate::Start,
+            "next" => ConstTemplate::Next,
+            "curspace" => ConstTemplate::CurSpace,
+            "curspace_size" => ConstTemplate::CurSpaceSize,
+            _ => todo!()
+        };
+
+        (next, const_template)
     })
 }
 
@@ -547,14 +593,19 @@ fn nonnull_varnode_template(input: &str) -> Res<&str, Option<VarnodeTemplate>> {
     )(input)
     .map(|(next, res)| {
         //println!("varnode {:?}", res.1);
-        (next, None)
+        let varnode_template = VarnodeTemplate {
+            space_template: res.0,
+            offset_template: res.1,
+            size_template: res.2
+        };
+        (next, Some(varnode_template))
     })
 }
 
 fn null_varnode_template(input: &str) -> Res<&str, Option<VarnodeTemplate>> {
     tag("<null/>")(input)
     .map(|(next, res)| {
-        (next, Some(VarnodeTemplate {}))
+        (next, None)
     })
 }
 
@@ -587,7 +638,13 @@ fn op_template(input: &str) -> Res<&str, ConsTemplate> {
     )(input)
     .map(|(next, res)| {
         //println!("op {:?}", res.1);
-        (next, ConsTemplate::Op(OpTemplate {}))
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        let op_template = OpTemplate {
+            code: attrs[0].1,
+            output: res.1,
+            inputs: res.2.into_iter().filter_map(|x| x).collect()
+        };
+        (next, ConsTemplate::Op(op_template))
     })
 }
 
@@ -610,7 +667,16 @@ fn handle_template(input: &str) -> Res<&str, ConsTemplate> {
     )(input)
     .map(|(next, res)| {
         //println!("op {:?}", res.1);
-        (next, ConsTemplate::Handle(HandleTemplate {}))
+        let handle_template = HandleTemplate {
+            space_template: res.0,
+            size_template: res.1,
+            exported_size_template: res.2,
+            offset_template: res.3,
+            exported_offset_template: res.4,
+            unk_template3: res.5,
+            unk_template4: res.6,
+        };
+        (next, ConsTemplate::Handle(handle_template))
     })
 }
 
