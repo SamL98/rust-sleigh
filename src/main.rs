@@ -46,17 +46,22 @@ pub struct Space {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Scope {
+    id: u32,
+    parent: u32
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct SymbolHead {
+pub struct SymbolHead<'a> {
+    name: &'a str,
+    id: u32,
+    scope: u32
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum Symbol {
+pub enum Symbol<'a> {
     Scope(Scope),
-    SymHead(SymbolHead),
-    Subtable(Subtable),
+    SymHead(SymbolHead<'a>),
+    Subtable(Subtable<'a>),
     Varnode,
     Value,
     Varlist,
@@ -70,7 +75,12 @@ pub enum Symbol {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Subtable {
+pub struct Subtable<'a> {
+    name: &'a str,
+    id: u32,
+    scope: u32,
+    constructors: Vec<Constructor>,
+    decision_tree: DecisionTree
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -87,17 +97,17 @@ pub struct OperandContextExpr {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Expr {
-    Const,
+    Const(i64),
     Operand,
     Field,
-    Xor,
-    Not,
-    Add,
-    Lshift,
-    Rshift,
-    Mult,
-    And,
-    Or,
+    Not(Box<Expr>),
+    Xor((Box<Expr>, Box<Expr>)),
+    Add((Box<Expr>, Box<Expr>)),
+    Lshift((Box<Expr>, Box<Expr>)),
+    Rshift((Box<Expr>, Box<Expr>)),
+    Mult((Box<Expr>, Box<Expr>)),
+    And((Box<Expr>, Box<Expr>)),
+    Or((Box<Expr>, Box<Expr>)),
     End,
     Start,
     Next2
@@ -105,10 +115,18 @@ pub enum Expr {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Constructor {
+    parent: u32,
+    first: i32,
+    length: u32,
+    operands: Option<Vec<u32>>,
+    print_commands: Option<Vec<PrintCommand>>,
+    context_ops: Option<Vec<ContextOp>>,
+    template: Option<ConstructorTemplate>
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct OpPrintCommand {
+    id: u32
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -123,6 +141,10 @@ pub enum PrintCommand {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ContextOp {
+    i: u32,
+    shift: u32,
+    mask: u32,
+    expr: Expr
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -152,9 +174,14 @@ pub struct ConstTemplate {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Program {
+pub struct Program<'a> {
+    version: u32,
+    bigendian: bool,
+    align: u32,
+    uniqbase: u64,
+    default_space: &'a str,
     spaces: Vec<Space>,
-    symbols: Vec<Symbol>
+    symbols: Vec<Symbol<'a>>
 }
 
 fn source_files(input: &str) -> Res<&str, &str> {
@@ -176,11 +203,11 @@ fn space(input: &str) -> Res<&str, Space> {
     })
 }
 
-fn spaces(input: &str) -> Res<&str, Vec<Space>> {
+fn spaces(input: &str) -> Res<&str, (&str, Vec<Space>)> {
     tuple((
         terminated(
             delimited(
-                tag("<spaces"),
+                tag("<spaces "),
                 take_until(">"),
                 tag(">")
             ),
@@ -192,31 +219,43 @@ fn spaces(input: &str) -> Res<&str, Vec<Space>> {
         )
     ))(input)
     .map(|(next, res)| {
-        (next, res.1)
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        (next, (attrs[0].1, res.1))
     })
+}
+
+fn u32hex(s: &str) -> u32 {
+    u32::from_str_radix(&s[2..], 16).unwrap()
+}
+
+fn u32dec(s: &str) -> u32 {
+    u32::from_str_radix(&s, 10).unwrap()
+}
+
+fn i32dec(s: &str) -> i32 {
+    i32::from_str_radix(&s, 10).unwrap()
+}
+
+fn i64dec(s: &str) -> i64 {
+    i64::from_str_radix(&s, 10).unwrap()
 }
 
 fn scope(input: &str) -> Res<&str, Symbol> {
     delimited(
-        tag("<scope"),
+        tag("<scope "),
         take_until("/>"),
         tag("/>"),
     )(input)
     .map(|(next, res)| {
-        (next, Symbol::Scope(Scope{}))
+        let (_, attrs) = attrs(res).finish().unwrap();
+        //println!("{} {:?}", res, attrs);
+        let scope = Scope {
+            id: u32hex(&attrs[0].1),
+            parent: u32hex(&attrs[1].1)
+        };
+        (next, Symbol::Scope(scope))
     })
 }
-
-/*fn subtable(input: &str) -> Res<&str, Symbol> {
-    delimited(
-        tag("<scope"),
-        take_until("/>"),
-        tag("/>"),
-    )(input)
-    .map(|(next, res)| {
-        (next, Symbol{})
-    })
-}*/
 
 fn sym_head(input: &str) -> Res<&str, Symbol> {
     delimited(
@@ -230,27 +269,43 @@ fn sym_head(input: &str) -> Res<&str, Symbol> {
                         tag("varlist"), tag("value"), tag("context"),
                         tag("operand")
                     )),
-                    tag("_sym_head")
+                    tag("_sym_head ")
                 ),
-                tag("userop_head")
+                tag("userop_head ")
             ))
         ),
         take_until("/>"),
         tag("/>")
     )(input)
     .map(|(next, res)| {
-        (next, Symbol::SymHead(SymbolHead{}))
+        let (_, attrs) = attrs(res).finish().unwrap();
+        //println!("{} {:?}", res, attrs);
+        let sym_head = SymbolHead {
+            name: attrs[0].1,
+            id: u32hex(attrs[1].1),
+            scope: u32hex(attrs[2].1)
+        };
+        (next, Symbol::SymHead(sym_head))
     })
 }
 
-fn operands(input: &str) -> Res<&str, Vec<&str>> {
+fn operand(input: &str) -> Res<&str, u32> {
+    delimited(
+        tag("<oper"),
+        take_until("/>"),
+        tag("/>")
+    )(input)
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        //println!("{} {:?}", res, attrs);
+        (next, u32hex(attrs[0].1))
+    })
+}
+
+fn operands(input: &str) -> Res<&str, Vec<u32>> {
     separated_list1(
         line_ending,
-        delimited(
-            tag("<oper"),
-            take_until("/>"),
-            tag("/>")
-        )
+        operand
     )(input)
 }
 
@@ -261,7 +316,8 @@ fn opprint(input: &str) -> Res<&str, PrintCommand> {
         tag("/>")
     )(input)
     .map(|(next, res)| {
-        (next, PrintCommand::Op(OpPrintCommand{}))
+        let (_, attrs) = attrs(res).finish().unwrap();
+        (next, PrintCommand::Op(OpPrintCommand{ id: u32dec(attrs[0].1) }))
     })
 }
 
@@ -288,13 +344,17 @@ fn print_commands(input: &str) -> Res<&str, Vec<PrintCommand>> {
 }
 
 fn const_expr(input: &str) -> Res<&str, Expr> {
+    //println!("const {}", &input[0..20]);
     delimited(
         tag("<intb"),
         take_until("/>"),
         tag("/>")
     )(input)
     .map(|(next, res)| {
-        (next, Expr::Const)
+        //println!("foobar {:?}", res);
+        let (_, attrs) = attrs(res).finish().unwrap();
+        //println!("{} {:?}", res, attrs);
+        (next, Expr::Const(i64dec(attrs[0].1)))
     })
 }
 
@@ -318,6 +378,7 @@ fn contextfield(input: &str) -> Res<&str, &str> {
 }
 
 fn field_expr(input: &str) -> Res<&str, Expr> {
+    //println!("* field {}", &input[0..20]);
     field(input)
     .map(|(next, res)| {
         (next, Expr::Field)
@@ -325,135 +386,93 @@ fn field_expr(input: &str) -> Res<&str, Expr> {
 }
 
 fn start_expr(input: &str) -> Res<&str, Expr> {
-    tag("<start_exp/>")(input).map(|(next, res)| { (next, (Expr::Start ))})
+    tag("<start_exp/>")(input).map(|(next, res)| { (next, (Expr::Start)) })
 }
 
 fn end_expr(input: &str) -> Res<&str, Expr> {
-    tag("<end_exp/>")(input).map(|(next, res)| { (next, (Expr::End ))})
+    tag("<end_exp/>")(input).map(|(next, res)| { (next, (Expr::End)) })
 }
 
 fn next2_expr(input: &str) -> Res<&str, Expr> {
-    tag("<next2_exp/>")(input).map(|(next, res)| { (next, (Expr::Next2 ))})
+    tag("<next2_exp/>")(input).map(|(next, res)| { (next, (Expr::Next2)) })
 }
 
-fn not_expr(input: &str) -> Res<&str, Expr> {
-    delimited(
-        terminated(tag("<not_exp>"), line_ending),
+fn unary_expr(input: &str) -> Res<&str, Expr> {
+    //println!("* unary {}", &input[0..20]);
+    let expr_types = alt((
+        tag("not_exp"),
+        tag("dummy_exp"),
+    ));
+
+    let (input, (expr_type, hs_expr, _)) = tuple((
+        terminated(
+            delimited(char('<'), expr_types, char('>')),
+            line_ending
+        ),
         expr,
-        terminated(line_ending, tag("</not_exp>"))
-    )(input)
-    .map(|(next, res)| {
-        (next, Expr::Not)
-    })
-}
-
-fn xor_expr(input: &str) -> Res<&str, Expr> {
-    delimited(
-        terminated(tag("<xor_exp>"), line_ending),
-        separated_pair(
-            expr,
+        preceded(
             line_ending,
-            expr
-        ),
-        terminated(line_ending, tag("</xor_exp>"))
-    )(input)
-    .map(|(next, res)| {
-        (next, Expr::Xor)
-    })
+            delimited(tag("</"), identifier, char('>'))
+        )
+    ))(input)?;
+
+    let hs = Box::new(hs_expr);
+
+    let expr = match expr_type {
+        "not_exp" => Expr::Not(hs),
+        _ => todo!()
+    };
+
+    Ok((input, expr))
 }
 
-fn or_expr(input: &str) -> Res<&str, Expr> {
-    delimited(
-        terminated(tag("<or_exp>"), line_ending),
+fn binary_expr(input: &str) -> Res<&str, Expr> {
+    //println!("* binary {}", &input[0..20]);
+    let expr_types = alt((
+        tag("plus_exp"),
+        tag("and_exp"),
+        tag("xor_exp"),
+        tag("or_exp"),
+        tag("lshift_exp"),
+        tag("rshift_exp"),
+        tag("mult_exp"),
+    ));
+
+    let (input, (expr_type, (lhs_expr, rhs_expr), _)) = tuple((
+        terminated(
+            delimited(char('<'), expr_types, char('>')),
+            line_ending
+        ),
         separated_pair(
             expr,
+            opt(line_ending),
+            expr
+        ),
+        preceded(
             line_ending,
-            expr
-        ),
-        terminated(line_ending, tag("</or_exp>"))
-    )(input)
-    .map(|(next, res)| {
-        (next, Expr::Xor)
-    })
-}
+            delimited(tag("</"), identifier, char('>'))
+        )
+    ))(input)?;
 
-fn and_expr(input: &str) -> Res<&str, Expr> {
-    delimited(
-        terminated(tag("<and_exp>"), line_ending),
-        separated_pair(
-            expr,
-            line_ending,
-            expr
-        ),
-        terminated(line_ending, tag("</and_exp>"))
-    )(input)
-    .map(|(next, res)| {
-        (next, Expr::And)
-    })
-}
+    let lhs = Box::new(lhs_expr);
+    let rhs = Box::new(rhs_expr);
 
-fn add_expr(input: &str) -> Res<&str, Expr> {
-    delimited(
-        terminated(tag("<plus_exp>"), line_ending),
-        separated_pair(
-            expr,
-            opt(line_ending),
-            expr
-        ),
-        terminated(line_ending, tag("</plus_exp>"))
-    )(input)
-    .map(|(next, res)| {
-        (next, Expr::Add)
-    })
-}
+    let expr = match expr_type {
+        "plus_exp" => Expr::Add((lhs, rhs)),
+        "and_exp" => Expr::And((lhs, rhs)),
+        "or_exp" => Expr::Or((lhs, rhs)),
+        "xor_exp" => Expr::Xor((lhs, rhs)),
+        "lshift_exp" => Expr::Lshift((lhs, rhs)),
+        "rshift_exp" => Expr::Rshift((lhs, rhs)),
+        "mult_exp" => Expr::Mult((lhs, rhs)),
+        _ => todo!()
+    };
 
-fn lshift_expr(input: &str) -> Res<&str, Expr> {
-    delimited(
-        terminated(tag("<lshift_exp>"), line_ending),
-        separated_pair(
-            expr,
-            opt(line_ending),
-            expr
-        ),
-        terminated(line_ending, tag("</lshift_exp>"))
-    )(input)
-    .map(|(next, res)| {
-        (next, Expr::Lshift)
-    })
-}
-
-fn rshift_expr(input: &str) -> Res<&str, Expr> {
-    delimited(
-        terminated(tag("<rshift_exp>"), line_ending),
-        separated_pair(
-            expr,
-            opt(line_ending),
-            expr
-        ),
-        terminated(line_ending, tag("</rshift_exp>"))
-    )(input)
-    .map(|(next, res)| {
-        (next, Expr::Rshift)
-    })
-}
-
-fn mult_expr(input: &str) -> Res<&str, Expr> {
-    delimited(
-        terminated(tag("<mult_exp>"), line_ending),
-        separated_pair(
-            expr,
-            opt(line_ending),
-            expr
-        ),
-        terminated(line_ending, tag("</mult_exp>"))
-    )(input)
-    .map(|(next, res)| {
-        (next, Expr::Mult)
-    })
+    Ok((input, expr))
 }
 
 fn expr(input: &str) -> Res<&str, Expr> {
-    println!("* context expr {}", &input[0..20]);
+    //println!("* context expr {}", &input[0..20]);
     alt((
         start_expr,
         end_expr,
@@ -461,14 +480,8 @@ fn expr(input: &str) -> Res<&str, Expr> {
         const_expr,
         operand_expr,
         field_expr,
-        not_expr,
-        xor_expr,
-        or_expr,
-        and_expr,
-        add_expr,
-        lshift_expr,
-        rshift_expr,
-        mult_expr
+        unary_expr,
+        binary_expr
     ))(input)
 }
 
@@ -488,8 +501,16 @@ fn context_op(input: &str) -> Res<&str, ContextOp> {
         ),
     ))(input)
     .map(|(next, res)| {
-        println!("context {:?}", res.1);
-        (next, ContextOp {})
+        //println!("context {:?}", res.0);
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        //println!("{} {:?}", res.0, attrs);
+        let context_op = ContextOp {
+            i: u32dec(attrs[0].1),
+            shift: u32dec(attrs[1].1),
+            mask: u32hex(attrs[2].1),
+            expr: res.1
+        };
+        (next, context_op)
     })
 }
 
@@ -525,7 +546,7 @@ fn nonnull_varnode_template(input: &str) -> Res<&str, Option<VarnodeTemplate>> {
         tag("</varnode_tpl>")
     )(input)
     .map(|(next, res)| {
-        println!("varnode {:?}", res.1);
+        //println!("varnode {:?}", res.1);
         (next, None)
     })
 }
@@ -565,7 +586,7 @@ fn op_template(input: &str) -> Res<&str, ConsTemplate> {
         ))
     )(input)
     .map(|(next, res)| {
-        println!("op {:?}", res.1);
+        //println!("op {:?}", res.1);
         (next, ConsTemplate::Op(OpTemplate {}))
     })
 }
@@ -626,14 +647,18 @@ fn constructor_template(input: &str) -> Res<&str, ConstructorTemplate> {
         tag("</construct_tpl>")
     )(input)
     .map(|(next, res)| {
-        println!("construtor_tpl {:?}", res);
+        //println!("construtor_tpl {:?}", res);
         (next, ConstructorTemplate {})
     })
 }
 
 fn constructor(input: &str) -> Res<&str, Constructor> {
     tuple((
-        terminated(tag("<constructor"), terminated(take_until("\n"), line_ending)),
+        delimited(
+            tag("<constructor "),
+            take_until(">"),
+            terminated(tag(">"), line_ending)
+        ),
         terminated(
             tuple((
                 opt(terminated(operands, line_ending)),
@@ -645,19 +670,30 @@ fn constructor(input: &str) -> Res<&str, Constructor> {
         )
     ))(input)
     .map(|(next, res)| {
-        println!("constructor {:?}", res.1);
-        (next, Constructor {})
+        //println!("constructor {:?}", res.1);
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        //println!("{:?}", attrs);
+        let constructor = Constructor {
+            parent: u32hex(attrs[0].1),
+            first: i32dec(attrs[1].1),
+            length: u32dec(attrs[2].1),
+            operands: res.1.0,
+            print_commands: res.1.1,
+            context_ops: res.1.2,
+            template: res.1.3
+        };
+        (next, constructor)
     })
 }
 
 fn mask_word(input: &str) -> Res<&str, MaskWord> {
     delimited(
-        tag("<mask_word"),
+        tag("<mask_word "),
         take_until("/>"),
         tag("/>")
     )(input)
     .map(|(next, res)| {
-        println!("mask word {:?}", res);
+        //println!("mask word {:?}", res);
         (next, MaskWord {})
     })
 }
@@ -666,7 +702,7 @@ fn pattern_block(input: &str) -> Res<&str, PatternBlock> {
     tuple((
         terminated(
             delimited(
-                tag("<pat_block"),
+                tag("<pat_block "),
                 take_until(">"),
                 tag(">")
             ),
@@ -688,7 +724,7 @@ fn pattern_block(input: &str) -> Res<&str, PatternBlock> {
         tag("</pat_block>")
     ))(input)
     .map(|(next, res)| {
-        println!("pattern block {:?}", res);
+        //println!("pattern block {:?}", res);
         (next, PatternBlock {})
     })
 }
@@ -704,7 +740,7 @@ fn combine_pattern(input: &str) -> Res<&str, DecisionPattern> {
         preceded(line_ending, tag("</combine_pat>"))
     )(input)
     .map(|(next, res)| {
-        println!("combine pattern {:?}", res);
+        //println!("combine pattern {:?}", res);
         (next, DecisionPattern::Combine)
     })
 }
@@ -716,7 +752,7 @@ fn context_pattern(input: &str) -> Res<&str, DecisionPattern> {
         preceded(line_ending, tag("</context_pat>"))
     )(input)
     .map(|(next, res)| {
-        println!("context pattern {:?}", res);
+        //println!("context pattern {:?}", res);
         (next, DecisionPattern::Context)
     })
 }
@@ -728,7 +764,7 @@ fn instruction_pattern(input: &str) -> Res<&str, DecisionPattern> {
         preceded(line_ending, tag("</instruct_pat>"))
     )(input)
     .map(|(next, res)| {
-        println!("instruct pattern {:?}", res);
+        //println!("instruct pattern {:?}", res);
         (next, DecisionPattern::Instruction)
     })
 }
@@ -745,7 +781,7 @@ fn decision_pair(input: &str) -> Res<&str, DecisionPattern> {
     delimited(
         terminated(
             delimited(
-                tag("<pair"),
+                tag("<pair "),
                 take_until(">"),
                 tag(">")
             ),
@@ -762,7 +798,7 @@ fn decision_pairs(input: &str) -> Res<&str, DecisionTree> {
         decision_pair
     )(input)
     .map(|(next, res)| {
-        println!("decision pairs {:?}", res);
+        //println!("decision pairs {:?}", res);
         (next, DecisionTree::Leaf)
     })
 }
@@ -786,7 +822,7 @@ fn decision_tree(input: &str) -> Res<&str, DecisionTree> {
         tag("</decision>")
     )(input)
     .map(|(next, res)| {
-        println!("decision body {:?}", res);
+        //println!("decision body {:?}", res);
         (next, DecisionTree::NonLeaf)
     })
 }
@@ -794,7 +830,11 @@ fn decision_tree(input: &str) -> Res<&str, DecisionTree> {
 fn subtable_sym(input: &str) -> Res<&str, Symbol> {
     //println!("subtable_sym {}", &input[0..50]);
     tuple((
-        terminated(tag("<subtable_sym"), terminated(take_until("\n"), line_ending)),
+        delimited(
+            tag("<subtable_sym "),
+            take_until(">"),
+            terminated(tag(">"), line_ending)
+        ),
         terminated(
             tuple((
                 terminated(
@@ -807,8 +847,17 @@ fn subtable_sym(input: &str) -> Res<&str, Symbol> {
         )
     ))(input)
     .map(|(next, res)| {
-        println!("{:?}", res.1.0.len());
-        (next, Symbol::Subtable(Subtable {}))
+        //println!("{:?}", res.1.0.len());
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        //println!("{} {:?}", res.0, attrs);
+        let subtable = Subtable {
+            name: attrs[0].1,
+            id: u32hex(attrs[1].1),
+            scope: u32hex(attrs[2].1),
+            constructors: res.1.0,
+            decision_tree: res.1.1
+        };
+        (next, Symbol::Subtable(subtable))
     })
 }
 
@@ -976,7 +1025,7 @@ fn userop(input: &str) -> Res<&str, Symbol> {
 }
 
 fn sym(input: &str) -> Res<&str, Symbol> {
-    println!("** {}", &input[0..20]);
+    //println!("** {}", &input[0..20]);
     alt((
         subtable_sym, varnode_sym, start_sym, end_sym,
         next2_sym, valuemap_sym, varlist_sym, value_sym,
@@ -994,7 +1043,7 @@ fn symbol_table(input: &str) -> Res<&str, Vec<Symbol>> {
     tuple((
         terminated(
             delimited(
-                tag("<symbol_table"),
+                tag("<symbol_table "),
                 take_until(">"),
                 tag(">")
             ),
@@ -1006,8 +1055,27 @@ fn symbol_table(input: &str) -> Res<&str, Vec<Symbol>> {
         )
     ))(input)
     .map(|(next, res)| {
-        println!("{:?}", res.1.len());
+        //println!("{:?}", res.1.len());
         (next, res.1)
+    })
+}
+
+fn attrs(input: &str) -> Res<&str, Vec<(&str, &str)>> {
+    //println!("{:?}", &input);
+    preceded(
+        space0,
+        separated_list0(
+            char(' '),
+            separated_pair(
+                identifier,
+                char('='),
+                string
+            )
+        )
+    )(input)
+    .map(|(next, res)| {
+        //println!("{:?}", res);
+        (next, res)
     })
 }
 
@@ -1015,12 +1083,9 @@ fn program(input: &str) -> Res<&str, Program> {
     tuple((
         terminated(
             delimited(
-                char('<'),
-                preceded(
-                    tag("sleigh"),
-                    take_until(">")
-                ),
-                char('>')
+                tag("<sleigh "),
+                take_until(">"),
+                tag(">")
             ),
             line_ending
         ),
@@ -1038,7 +1103,17 @@ fn program(input: &str) -> Res<&str, Program> {
         )
     ))(input)
     .map(|(next, res)| {
-        (next, Program { spaces: res.2, symbols: res.3 })
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        let prog = Program {
+            version: u32::from_str_radix(attrs[0].1, 10).unwrap(),
+            bigendian: attrs[1].1.parse::<bool>().unwrap(),
+            align: u32::from_str_radix(attrs[2].1, 10).unwrap(),
+            uniqbase: u64::from_str_radix(&attrs[3].1[2..], 16).unwrap(),
+            default_space: res.2.0,
+            spaces: res.2.1,
+            symbols: res.3
+        };
+        (next, prog)
     })
 }
 
@@ -1054,9 +1129,9 @@ fn identifier_ws(input: &str) -> Res<&str, &str> {
 }
 
 fn string(input: &str) -> Res<&str, &str> {
-     delimited(char('"'),
-               take_until("\""),
-               char('"'))(input)
+    delimited(char('"'),
+              take_until("\""),
+              char('"'))(input)
 }
 
 fn read_file(filename: &str) -> String {
