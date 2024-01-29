@@ -79,27 +79,49 @@ pub struct Subtable<'a> {
     name: &'a str,
     id: u32,
     scope: u32,
-    constructors: Vec<Constructor>,
+    constructors: Vec<Constructor<'a>>,
     decision_tree: DecisionTree
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct ConstContextExpr {
+pub struct ContextField {
+    sign_bit: bool,
+    start_bit: u32,
+    end_bit: u32,
+    start_byte: u32,
+    end_byte: u32,
+    shift: u32,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct FieldContextExpr {
+pub struct TokenField {
+    big_endian: bool,
+    sign_bit: bool,
+    start_bit: u32,
+    end_bit: u32,
+    start_byte: u32,
+    end_byte: u32,
+    shift: u32,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct OperandContextExpr {
+pub enum Field {
+    Context(ContextField),
+    Token(TokenField)
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct OperandExpr {
+    idx: u32,
+    table: u32,
+    ct: u32
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Expr {
     Const(i64),
-    Operand,
-    Field,
+    Operand(OperandExpr),
+    Field(Field),
     Not(Box<Expr>),
     Xor((Box<Expr>, Box<Expr>)),
     Add((Box<Expr>, Box<Expr>)),
@@ -114,29 +136,20 @@ pub enum Expr {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Constructor {
+pub struct Constructor<'a> {
     parent: u32,
     first: i32,
     length: u32,
     operands: Option<Vec<u32>>,
-    print_commands: Option<Vec<PrintCommand>>,
+    print_commands: Option<Vec<PrintCommand<'a>>>,
     context_ops: Option<Vec<ContextOp>>,
-    template: Option<ConstructorTemplate>
+    template: Option<ConstructorTemplate<'a>>
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct OpPrintCommand {
-    id: u32
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct PrintPieceCommand {
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum PrintCommand {
-    Op(OpPrintCommand),
-    Piece(PrintPieceCommand)
+pub enum PrintCommand<'a> {
+    Op(u32),
+    Piece(&'a str)
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -148,7 +161,9 @@ pub struct ContextOp {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct ConstructorTemplate {
+pub struct ConstructorTemplate<'a> {
+    num_labels: u32,
+    statements: Vec<ConsTemplate<'a>>
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -252,6 +267,10 @@ fn spaces(input: &str) -> Res<&str, (&str, Vec<Space>)> {
     })
 }
 
+fn to_bool(s: &str) -> bool {
+    s.parse::<bool>().unwrap()
+}
+
 fn u32hex(s: &str) -> u32 {
     u32::from_str_radix(&s[2..], 16).unwrap()
 }
@@ -349,7 +368,7 @@ fn opprint(input: &str) -> Res<&str, PrintCommand> {
     )(input)
     .map(|(next, res)| {
         let (_, attrs) = attrs(res).finish().unwrap();
-        (next, PrintCommand::Op(OpPrintCommand{ id: u32dec(attrs[0].1) }))
+        (next, PrintCommand::Op(u32dec(attrs[0].1)))
     })
 }
 
@@ -360,7 +379,7 @@ fn print_piece(input: &str) -> Res<&str, PrintCommand> {
         tag("/>")
     )(input)
     .map(|(next, res)| {
-        (next, PrintCommand::Piece(PrintPieceCommand{}))
+        (next, PrintCommand::Piece(res))
     })
 }
 
@@ -397,23 +416,42 @@ fn operand_expr(input: &str) -> Res<&str, Expr> {
         tag("/>")
     )(input)
     .map(|(next, res)| {
-        (next, Expr::Operand)
+        let (_, attrs) = attrs(res).finish().unwrap();
+        //println!("{} {:?}", res, attrs);
+        let operand_expr = OperandExpr {
+            idx: u32dec(attrs[0].1),
+            table: u32hex(attrs[1].1),
+            ct: u32hex(attrs[2].1),
+        };
+        (next, Expr::Operand(operand_expr))
     })
 }
 
-fn contextfield(input: &str) -> Res<&str, &str> {
+fn contextfield(input: &str) -> Res<&str, Field> {
     delimited(
         tag("<contextfield"),
         take_until("/>"),
         tag("/>")
     )(input)
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        let context_field = ContextField {
+            sign_bit: to_bool(attrs[0].1),
+            start_bit: u32dec(attrs[1].1),
+            end_bit: u32dec(attrs[2].1),
+            start_byte: u32dec(attrs[3].1),
+            end_byte: u32dec(attrs[4].1),
+            shift: u32dec(attrs[5].1),
+        };
+        (next, Field::Context(context_field))
+    })
 }
 
 fn field_expr(input: &str) -> Res<&str, Expr> {
     //println!("* field {}", &input[0..20]);
     field(input)
     .map(|(next, res)| {
-        (next, Expr::Field)
+        (next, Expr::Field(res))
     })
 }
 
@@ -688,7 +726,7 @@ fn null_ops(input: &str) -> Res<&str, Vec<ConsTemplate>> {
 }
 
 fn constructor_template(input: &str) -> Res<&str, ConstructorTemplate> {
-    delimited(
+    tuple((
         terminated(
             delimited(
                 tag("<construct_tpl"),
@@ -697,24 +735,39 @@ fn constructor_template(input: &str) -> Res<&str, ConstructorTemplate> {
             ),
             line_ending
         ),
-        alt((
-            terminated(
-                separated_list0(
-                    line_ending,
-                    alt((
-                        op_template,
-                        handle_template
-                    ))
+        terminated(
+            alt((
+                terminated(
+                    separated_list0(
+                        line_ending,
+                        alt((
+                            op_template,
+                            handle_template
+                        ))
+                    ),
+                    line_ending
                 ),
-                line_ending
-            ),
-            null_ops,
-        )),
-        tag("</construct_tpl>")
-    )(input)
+                null_ops,
+            )),
+            tag("</construct_tpl>")
+        )
+    ))(input)
     .map(|(next, res)| {
         //println!("construtor_tpl {:?}", res);
-        (next, ConstructorTemplate {})
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        
+        let num_labels = match attrs.len() {
+            0 => 0,
+            1 => u32dec(attrs[0].1),
+            _ => todo!()
+        };
+
+        let constructor_template = ConstructorTemplate {
+            num_labels: num_labels,
+            statements: res.1
+        };
+
+        (next, constructor_template)
     })
 }
 
@@ -952,15 +1005,28 @@ fn varnode_sym(input: &str) -> Res<&str, Symbol> {
     .map(|(next, res)| { (next, Symbol::Varnode) })
 }
 
-fn tokenfield(input: &str) -> Res<&str, &str> {
+fn tokenfield(input: &str) -> Res<&str, Field> {
     delimited(
         tag("<tokenfield"),
         take_until("/>"),
         tag("/>")
     )(input)
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        let token_field = TokenField {
+            big_endian: to_bool(attrs[0].1),
+            sign_bit: to_bool(attrs[1].1),
+            start_bit: u32dec(attrs[2].1),
+            end_bit: u32dec(attrs[3].1),
+            start_byte: u32dec(attrs[4].1),
+            end_byte: u32dec(attrs[5].1),
+            shift: u32dec(attrs[6].1),
+        };
+        (next, Field::Token(token_field))
+    })
 }
 
-fn field(input: &str) -> Res<&str, &str> {
+fn field(input: &str) -> Res<&str, Field> {
     alt((contextfield, tokenfield))(input)
 }
 
