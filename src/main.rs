@@ -21,27 +21,38 @@ type Res<T, U> = IResult<T, U, Error<T>>;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct MaskWord {
+    mask: u64,
+    val: u64
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct PatternBlock {
+    offset: u32,
+    nonzero: u32,
+    masks: Vec<MaskWord>
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum DecisionPattern {
-    Context,
-    Instruction,
-    Combine,
+    Context(PatternBlock),
+    Instruction(PatternBlock),
+    Combine((Box<DecisionPattern>, Box<DecisionPattern>)),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum DecisionTree {
-    Leaf,
-    NonLeaf
+    Leaf(Vec<(u32, DecisionPattern)>),
+    NonLeaf((bool, u32, u32, Vec<DecisionTree>))
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Space {
+pub struct Space<'a> {
+    name: &'a str,
+    index: u32,
+    big_endian: bool,
+    delay: u32,
+    size: u32,
+    physical: bool
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -223,7 +234,7 @@ pub struct Program<'a> {
     align: u32,
     uniqbase: u64,
     default_space: &'a str,
-    spaces: Vec<Space>,
+    spaces: Vec<Space<'a>>,
     symbols: Vec<Symbol<'a>>
 }
 
@@ -237,12 +248,26 @@ fn source_files(input: &str) -> Res<&str, &str> {
 
 fn space(input: &str) -> Res<&str, Space> {
     delimited(
-        tag("<space"),
+        alt((
+            tag("<space_other"),
+            tag("<space_unique"),
+            tag("<space"),
+        )),
         take_until("/>"),
         tag("/>"),
     )(input)
     .map(|(next, res)| {
-        (next, Space{})
+        let (_, attrs) = attrs(res).finish().unwrap();
+        //println!("{} {:?}", res, attrs);
+        let space = Space {
+            name: attrs[0].1,
+            index: u32dec(attrs[1].1),
+            big_endian: to_bool(attrs[2].1),
+            delay: u32dec(attrs[3].1),
+            size: u32dec(attrs[4].1),
+            physical: to_bool(attrs[5].1),
+        };
+        (next, space)
     })
 }
 
@@ -813,7 +838,12 @@ fn mask_word(input: &str) -> Res<&str, MaskWord> {
     )(input)
     .map(|(next, res)| {
         //println!("mask word {:?}", res);
-        (next, MaskWord {})
+        let (_, attrs) = attrs(res).finish().unwrap();
+        let mask_word = MaskWord {
+            mask: u64hex(attrs[0].1),
+            val: u64hex(attrs[1].1)
+        };
+        (next, mask_word)
     })
 }
 
@@ -844,7 +874,13 @@ fn pattern_block(input: &str) -> Res<&str, PatternBlock> {
     ))(input)
     .map(|(next, res)| {
         //println!("pattern block {:?}", res);
-        (next, PatternBlock {})
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        let pattern_block = PatternBlock {
+            offset: u32dec(attrs[0].1),
+            nonzero: u32dec(attrs[1].1),
+            masks: res.1
+        };
+        (next, pattern_block)
     })
 }
 
@@ -860,7 +896,7 @@ fn combine_pattern(input: &str) -> Res<&str, DecisionPattern> {
     )(input)
     .map(|(next, res)| {
         //println!("combine pattern {:?}", res);
-        (next, DecisionPattern::Combine)
+        (next, DecisionPattern::Combine((Box::new(res.0), Box::new(res.1))))
     })
 }
 
@@ -872,7 +908,7 @@ fn context_pattern(input: &str) -> Res<&str, DecisionPattern> {
     )(input)
     .map(|(next, res)| {
         //println!("context pattern {:?}", res);
-        (next, DecisionPattern::Context)
+        (next, DecisionPattern::Context(res))
     })
 }
 
@@ -884,7 +920,7 @@ fn instruction_pattern(input: &str) -> Res<&str, DecisionPattern> {
     )(input)
     .map(|(next, res)| {
         //println!("instruct pattern {:?}", res);
-        (next, DecisionPattern::Instruction)
+        (next, DecisionPattern::Instruction(res))
     })
 }
 
@@ -896,8 +932,8 @@ fn decision_pattern(input: &str) -> Res<&str, DecisionPattern> {
     ))(input)
 }
 
-fn decision_pair(input: &str) -> Res<&str, DecisionPattern> {
-    delimited(
+fn decision_pair(input: &str) -> Res<&str, (u32, DecisionPattern)> {
+    tuple((
         terminated(
             delimited(
                 tag("<pair "),
@@ -906,9 +942,16 @@ fn decision_pair(input: &str) -> Res<&str, DecisionPattern> {
             ),
             line_ending
         ),
-        terminated(decision_pattern, line_ending),
-        tag("</pair>")
-    )(input)
+        terminated(
+            terminated(decision_pattern, line_ending),
+            tag("</pair>")
+        )
+    ))(input)
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        let id = u32dec(attrs[0].1);
+        (next, (id, res.1))
+    })
 }
 
 fn decision_pairs(input: &str) -> Res<&str, DecisionTree> {
@@ -918,7 +961,7 @@ fn decision_pairs(input: &str) -> Res<&str, DecisionTree> {
     )(input)
     .map(|(next, res)| {
         //println!("decision pairs {:?}", res);
-        (next, DecisionTree::Leaf)
+        (next, DecisionTree::Leaf(res))
     })
 }
 
@@ -928,21 +971,28 @@ fn decision_body(input: &str) -> Res<&str, DecisionTree> {
 
 fn decision_tree(input: &str) -> Res<&str, DecisionTree> {
     //println!("decision tree {}", &input[0..20]);
-    delimited(
+    tuple((
         delimited(
             tag("<decision"),
             take_until(">"),
             terminated(tag(">"), line_ending)
         ),
-        alt((
-            terminated(separated_list1(line_ending, decision_body), line_ending),
-            separated_list0(line_ending, decision_body),
-        )),
-        tag("</decision>")
-    )(input)
+        terminated(
+            alt((
+                terminated(separated_list1(line_ending, decision_body), line_ending),
+                separated_list0(line_ending, decision_body),
+            )),
+            tag("</decision>")
+        )
+    ))(input)
     .map(|(next, res)| {
         //println!("decision body {:?}", res);
-        (next, DecisionTree::NonLeaf)
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        //println!("{} {:?}", res.0, attrs);
+        let is_context = to_bool(attrs[1].1);
+        let start = u32dec(attrs[2].1);
+        let size = u32dec(attrs[3].1);
+        (next, DecisionTree::NonLeaf((is_context, start, size, res.1)))
     })
 }
 
@@ -1277,7 +1327,7 @@ fn main() {
 
     match res.finish() {
         Ok((rest, sla)) => {
-            println!("{:?}", sla);
+            //println!("{:?}", sla);
             println!("success! {}", rest)
         },
         Err(err) => println!("err")
