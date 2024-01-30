@@ -1,4 +1,11 @@
+mod sleigh;
+mod utils;
+mod arch;
+
+use crate::arch::get_language;
+
 extern crate nom;
+extern crate bitvec;
 
 use nom::character::complete::*;
 use nom::bytes::complete::*;
@@ -9,6 +16,8 @@ use nom::branch::*;
 use nom::error::*;
 use nom::multi::*;
 use nom::*;
+
+use bitvec::prelude::*;
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -1535,15 +1544,56 @@ fn read_file(filename: &str) -> String {
 }
 
 fn main() {
-    let contents = read_file("x86-64.sla");
-    let res = program(&contents);
-    //println!("{:?}", sla);
+    let lang = get_language("x86", "x86:LE:64:default").unwrap();
 
-    match res.finish() {
-        Ok((rest, sla)) => {
-            //println!("{:?}", sla);
-            println!("success! {}", rest)
-        },
-        Err(err) => println!("err")
+    let contents = read_file("x86-64.sla");
+    let (_, sla) = program(&contents).finish().unwrap();
+    //println!("{:?}", sla);
+    
+    let mut tables: HashMap<&str, Vec<Subtable>> = HashMap::new();
+    let mut varnodes: HashMap<&str, Varnode> = HashMap::new();
+    let mut context_syms: HashMap<&str, Context> = HashMap::new();
+    let mut reg_space_size: usize = 0;
+
+    for sym in sla.symbols {
+        match sym {
+            Symbol::Subtable(subtable) => {
+                tables.entry(subtable.name).or_insert(vec![]).push(subtable);
+            },
+            Symbol::Varnode(varnode) =>  {
+                varnodes.insert(varnode.name, varnode.clone());
+
+                if varnode.space == "register" {
+                    reg_space_size = reg_space_size.max((varnode.offset + varnode.size) as usize);
+                }
+            },
+            Symbol::Context(ctx) =>  {
+                context_syms.insert(ctx.name, ctx.clone());
+            }
+            _ => ()
+        }
     }
+
+    let insn_table = &tables["instruction"][0];
+    let ctx_reg = &varnodes["contextreg"];
+    //println!("{:#?}", insn_table.decision_tree);
+
+    // Create a bit vector for the entire register space.
+    // TODO: Figure out how to properly initialize the BitVec.
+    let mut reg_space: BitVec<u8, Lsb0> = BitVec::with_capacity(reg_space_size * 8);
+    for _ in 0..(reg_space_size * 8) {
+        reg_space.push(false);
+    }
+
+    for (var, val) in lang.pspec.defaults {
+        //println!("{} {:?}", var, context_syms.get(var.as_str()));
+        if let Some(sym) = context_syms.get(var.as_str()) {
+            let start = (ctx_reg.offset * 8 + (sym.low as u64)) as usize;
+            let end = (ctx_reg.offset * 8  + (sym.high as u64) + 1) as usize;
+            reg_space[start .. end].store_le(val);
+            println!("{}, {}, {:?}", var, val, reg_space[start .. end].load_le::<u32>());
+        }
+    }
+
+    //let data: [u8; 1] = [0x55];
 }
