@@ -69,20 +69,91 @@ pub struct SymbolHead<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Varnode<'a> {
+    name: &'a str,
+    id: u32,
+    scope: u32,
+    space: &'a str,
+    offset: u64,
+    size: u64
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Value<'a> {
+    name: &'a str,
+    id: u32,
+    scope: u32,
+    field: Field,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Varlist<'a> {
+    name: &'a str,
+    id: u32,
+    scope: u32,
+    field: Field,
+    vars: Vec<Option<u32>>
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Valuemap<'a> {
+    name: &'a str,
+    id: u32,
+    scope: u32,
+    field: Field,
+    vars: Vec<u64>
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Operand<'a> {
+    name: &'a str,
+    id: u32,
+    scope: u32,
+    subsym: u32,
+    off: u64,
+    base: i64,
+    min_len: u64,
+    idx: u64,
+    is_code: bool,
+    operand_expr: OperandExpr,
+    expr: Option<Expr>
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Context<'a> {
+    name: &'a str,
+    id: u32,
+    scope: u32,
+    varnode: u32,
+    low: u32,
+    high: u32,
+    flow: bool,
+    context_field: ContextField
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct UserOp<'a> {
+    name: &'a str,
+    id: u32,
+    scope: u32,
+    idx: u32
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Symbol<'a> {
     Scope(Scope),
     SymHead(SymbolHead<'a>),
     Subtable(Subtable<'a>),
-    Varnode,
-    Value,
-    Varlist,
-    Valuemap,
-    Operand,
-    Context,
-    UserOp,
-    Start,
-    End,
-    Next2,
+    Varnode(Varnode<'a>),
+    Value(Value<'a>),
+    Varlist(Varlist<'a>),
+    Valuemap(Valuemap<'a>),
+    Operand(Operand<'a>),
+    Context(Context<'a>),
+    UserOp(UserOp<'a>),
+    Start(SymbolHead<'a>),
+    End(SymbolHead<'a>),
+    Next2(SymbolHead<'a>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -302,6 +373,10 @@ fn u32hex(s: &str) -> u32 {
 
 fn u64hex(s: &str) -> u64 {
     u64::from_str_radix(&s[2..], 16).unwrap()
+}
+
+fn u64dec(s: &str) -> u64 {
+    u64::from_str_radix(&s, 10).unwrap()
 }
 
 fn u32dec(s: &str) -> u32 {
@@ -1032,15 +1107,39 @@ fn subtable_sym(input: &str) -> Res<&str, Symbol> {
 
 fn start_sym(input: &str) -> Res<&str, Symbol> {
     delimited(tag("<start_sym "), take_until("/>"), tag("/>"))(input)
-    .map(|(next, res)| { (next, Symbol::Start) })
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        let sym_head = SymbolHead {
+            name: attrs[0].1,
+            id: u32hex(attrs[1].1),
+            scope: u32hex(attrs[2].1),
+        };
+        (next, Symbol::Start(sym_head))
+    })
 }
 fn end_sym(input: &str) -> Res<&str, Symbol> {
     delimited(tag("<end_sym "), take_until("/>"), tag("/>"))(input)
-    .map(|(next, res)| { (next, Symbol::Start) })
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        let sym_head = SymbolHead {
+            name: attrs[0].1,
+            id: u32hex(attrs[1].1),
+            scope: u32hex(attrs[2].1),
+        };
+        (next, Symbol::End(sym_head))
+    })
 }
 fn next2_sym(input: &str) -> Res<&str, Symbol> {
     delimited(tag("<next2_sym "), take_until("/>"), tag("/>"))(input)
-    .map(|(next, res)| { (next, Symbol::Start) })
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        let sym_head = SymbolHead {
+            name: attrs[0].1,
+            id: u32hex(attrs[1].1),
+            scope: u32hex(attrs[2].1),
+        };
+        (next, Symbol::Next2(sym_head))
+    })
 }
 
 fn varnode_sym(input: &str) -> Res<&str, Symbol> {
@@ -1052,7 +1151,19 @@ fn varnode_sym(input: &str) -> Res<&str, Symbol> {
         ),
         tag("</varnode_sym>")
     )(input)
-    .map(|(next, res)| { (next, Symbol::Varnode) })
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        //println!("{} {:?}", res, attrs);
+        let varnode = Varnode {
+            name: attrs[0].1,
+            id: u32hex(attrs[1].1),
+            scope: u32hex(attrs[2].1),
+            space: attrs[3].1,
+            offset: u64hex(attrs[4].1),
+            size: u64dec(attrs[5].1),
+        };
+        (next, Symbol::Varnode(varnode))
+    })
 }
 
 fn tokenfield(input: &str) -> Res<&str, Field> {
@@ -1080,121 +1191,213 @@ fn field(input: &str) -> Res<&str, Field> {
     alt((contextfield, tokenfield))(input)
 }
 
-fn valuetab(input: &str) -> Res<&str, &str> {
+fn valuetab(input: &str) -> Res<&str, u64> {
     //println!("valuetab {}", &input[0..20]);
     delimited(
         tag("<valuetab"),
         take_until("/>"),
         tag("/>")
     )(input)
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        let val = u64dec(attrs[0].1);
+        (next, val)
+    })
 }
 
 fn valuemap_sym(input: &str) -> Res<&str, Symbol> {
-    delimited(
+    tuple((
         delimited(
             tag("<valuemap_sym "),
             take_until(">"),
             terminated(tag(">"), line_ending)
         ),
-        separated_pair(
-            field,
-            line_ending,
-            terminated(
-                separated_list0(
-                    line_ending,
-                    valuetab
+        terminated(
+            separated_pair(
+                field,
+                line_ending,
+                terminated(
+                    separated_list0(
+                        line_ending,
+                        valuetab
+                    ),
+                    line_ending
                 ),
-                line_ending
             ),
-        ),
-        tag("</valuemap_sym>")
-    )(input)
-    .map(|(next, res)| { (next, Symbol::Valuemap) })
+            tag("</valuemap_sym>")
+        )
+    ))(input)
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        let valuemap = Valuemap {
+            name: attrs[0].1,
+            id: u32hex(attrs[1].1),
+            scope: u32hex(attrs[2].1),
+            field: res.1.0,
+            vars: res.1.1
+        };
+        (next, Symbol::Valuemap(valuemap))
+    })
 }
 
-fn nonnull_var(input: &str) -> Res<&str, Option<&str>> {
+fn nonnull_var(input: &str) -> Res<&str, Option<u32>> {
     delimited(
         tag("<var"),
         take_until("/>"),
         tag("/>")
     )(input)
-    .map(|(next, res)| { (next, Some(res)) })
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        let id = u32hex(attrs[0].1);
+        (next, Some(id))
+    })
 }
 
-fn null_var(input: &str) -> Res<&str, Option<&str>> {
+fn null_var(input: &str) -> Res<&str, Option<u32>> {
     tag("<null/>")(input)
     .map(|(next, res)| { (next, None) })
 }
 
-fn var(input: &str) -> Res<&str, Option<&str>> {
+fn var(input: &str) -> Res<&str, Option<u32>> {
     //println!("var {}", &input[0..20]);
     alt((nonnull_var, null_var))(input)
 }
 
 fn varlist_sym(input: &str) -> Res<&str, Symbol> {
     //println!("varlist {}", &input[0..50]);
-    delimited(
+    tuple((
         delimited(
             tag("<varlist_sym "),
             take_until(">"),
             terminated(tag(">"), line_ending)
         ),
-        separated_pair(
-            field,
-            line_ending,
-            terminated(
-                separated_list0(
-                    line_ending,
-                    var
+        terminated(
+            separated_pair(
+                field,
+                line_ending,
+                terminated(
+                    separated_list0(
+                        line_ending,
+                        var
+                    ),
+                    line_ending
                 ),
-                line_ending
             ),
-        ),
-        tag("</varlist_sym>")
-    )(input)
-    .map(|(next, res)| { (next, Symbol::Varlist) })
+            tag("</varlist_sym>")
+        )
+    ))(input)
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        let varlist = Varlist {
+            name: attrs[0].1,
+            id: u32hex(attrs[1].1),
+            scope: u32hex(attrs[2].1),
+            field: res.1.0,
+            vars: res.1.1
+        };
+        (next, Symbol::Varlist(varlist))
+    })
 }
 
 fn value_sym(input: &str) -> Res<&str, Symbol> {
-    delimited(
+    tuple((
         delimited(
             tag("<value_sym "),
             take_until(">"),
             terminated(tag(">"), line_ending)
         ),
-        tokenfield,
-        preceded(line_ending, tag("</value_sym>"))
-    )(input)
-    .map(|(next, res)| { (next, Symbol::Value) })
+        terminated(
+            tokenfield,
+            preceded(line_ending, tag("</value_sym>"))
+        )
+    ))(input)
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        let value = Value {
+            name: attrs[0].1,
+            id: u32hex(attrs[1].1),
+            scope: u32hex(attrs[2].1),
+            field: res.1
+        };
+        (next, Symbol::Value(value))
+    })
 }
 
 fn context_sym(input: &str) -> Res<&str, Symbol> {
-    delimited(
+    tuple((
         delimited(
             tag("<context_sym "),
             take_until(">"),
             terminated(tag(">"), line_ending)
         ),
-        contextfield,
-        preceded(line_ending, tag("</context_sym>"))
-    )(input)
-    .map(|(next, res)| { (next, Symbol::Context) })
+        terminated(
+            contextfield,
+            preceded(line_ending, tag("</context_sym>"))
+        )
+    ))(input)
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+
+        let context_field = match res.1 {
+            Field::Context(ctx_field) => ctx_field,
+            _ => panic!()
+        };
+
+        let context = Context {
+            name: attrs[0].1,
+            id: u32hex(attrs[1].1),
+            scope: u32hex(attrs[2].1),
+            varnode: u32hex(attrs[3].1),
+            low: u32dec(attrs[4].1),
+            high: u32dec(attrs[5].1),
+            flow: to_bool(attrs[6].1),
+            context_field: context_field
+        };
+        (next, Symbol::Context(context))
+    })
 }
 
 fn operand_sym(input: &str) -> Res<&str, Symbol> {
-    delimited(
+    tuple((
         delimited(
             tag("<operand_sym "),
             take_until(">"),
             terminated(tag(">"), line_ending)
         ),
-        tuple((
-            operand_expr,
-            opt(preceded(line_ending, expr)),
-        )),
-        preceded(line_ending, tag("</operand_sym>"))
-    )(input)
-    .map(|(next, res)| { (next, Symbol::Operand) })
+        terminated(
+            tuple((
+                operand_expr,
+                opt(preceded(line_ending, expr)),
+            )),
+            preceded(line_ending, tag("</operand_sym>"))
+        )
+    ))(input)
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        //println!("{} {:?}", res.0, attrs);
+
+        let operand_expr = match res.1.0 {
+            Expr::Operand(op_expr) => op_expr,
+            _ => panic!()
+        };
+
+        let kvs: HashMap<&str, &str> = attrs.into_iter().collect();
+
+        let operand = Operand {
+            name: kvs["name"],
+            id: u32hex(kvs["id"]),
+            scope: u32hex(kvs["scope"]),
+            subsym: kvs.get("subsym").map(|s| u32hex(s)).unwrap_or(0),
+            off: kvs.get("off").map(|s| u64dec(s)).unwrap_or(0),
+            base: kvs.get("base").map(|s| i64dec(s)).unwrap_or(0),
+            min_len: kvs.get("minlen").map(|s| u64dec(s)).unwrap_or(0),
+            idx: kvs.get("idx").map(|s| u64dec(s)).unwrap_or(0),
+            is_code: kvs.get("code").map(|s| to_bool(s)).unwrap_or(false),
+            operand_expr: operand_expr,
+            expr: res.1.1
+        };
+        (next, Symbol::Operand(operand))
+    })
 }
 
 fn userop(input: &str) -> Res<&str, Symbol> {
@@ -1203,7 +1406,18 @@ fn userop(input: &str) -> Res<&str, Symbol> {
         take_until("/>"),
         tag("/>")
     )(input)
-    .map(|(next, res)| { (next, Symbol::UserOp) })
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+
+        let userop = UserOp {
+            name: attrs[0].1,
+            id: u32hex(attrs[1].1),
+            scope: u32hex(attrs[2].1),
+            idx: u32dec(attrs[3].1)
+        };
+
+        (next, Symbol::UserOp(userop))
+    })
 }
 
 fn sym(input: &str) -> Res<&str, Symbol> {
