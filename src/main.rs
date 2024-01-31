@@ -32,8 +32,8 @@ type Res<T, U> = IResult<T, U, Error<T>>;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct MaskWord {
-    mask: u64,
-    val: u64
+    mask: u32,
+    val: u32
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -980,8 +980,8 @@ fn mask_word(input: &str) -> Res<&str, MaskWord> {
         //println!("mask word {:?}", res);
         let (_, attrs) = attrs(res).finish().unwrap();
         let mask_word = MaskWord {
-            mask: u64hex(attrs[0].1),
-            val: u64hex(attrs[1].1)
+            mask: u32hex(attrs[0].1),
+            val: u32hex(attrs[1].1)
         };
         (next, mask_word)
     })
@@ -1599,6 +1599,29 @@ fn read_file(filename: &str) -> String {
     fs::read_to_string(format!("{}/{}", SLEIGH_PATH, filename)).expect("can't read file")
 }
 
+fn match_pattern_block(block: &PatternBlock, word: u32) -> bool {
+    let mut matched = false;
+    for mask_word in &block.masks {
+        if (word & mask_word.mask) == mask_word.val {
+            matched = true;
+            break;
+        }
+    }
+    return matched;
+}
+
+fn match_pattern(pattern: &DecisionPattern, insn_word: u32, ctx_word: u32) -> bool {
+    match pattern {
+        DecisionPattern::Context(pat_blk) => {
+            match_pattern_block(pat_blk, ctx_word)
+        },
+        DecisionPattern::Instruction(pat_blk) => {
+            match_pattern_block(pat_blk, insn_word)
+        },
+        DecisionPattern::Combine((pat1, pat2)) => match_pattern(&*pat1, insn_word, ctx_word) && match_pattern(&*pat2, insn_word, ctx_word)
+    }
+}
+
 fn main() {
     let lang = get_language("x86", "x86:LE:64:default").unwrap();
 
@@ -1692,13 +1715,15 @@ fn main() {
         };
     }*/
 
+    let mut constructor: Option<Constructor> = None;
+
     loop {
         match dtree {
             DecisionTree::NonLeaf((is_context, start, size, children)) => {
                 if !is_context {
                     let bit_start = 8 - (start + size);
                     let idx = ((byte >> bit_start) & ((1 << size) - 1)) as usize;
-                    println!("non-context {}, {}, {}, {}", start, size, children.len(), idx);
+                    //println!("non-context {}, {}, {}, {}", start, size, children.len(), idx);
                     dtree = &children[idx.min(children.len() - 1)];
                 }
                 else {
@@ -1706,17 +1731,31 @@ fn main() {
                     let ctx_start = (ctx_reg.offset * 8 + (*start as u64)) as usize;
                     let ctx_end = ctx_start + (*size as usize);
                     let idx = reg_space[ctx_start..ctx_end].load_be::<usize>();
-                    println!("* {}, {}, {}, {}, {}", ctx_start, ctx_end, idx, start, size);
+                    //println!("* {}, {}, {}, {}, {}", ctx_start, ctx_end, idx, start, size);
                     dtree = &children[idx.min(children.len() - 1)];
                 }
             },
             DecisionTree::Leaf(pairs) => {
+                let ctx_base = (ctx_reg.offset * 8) as usize;
+                let ctx_end = (ctx_base + 32) as usize;
+                let ctx_word = reg_space[ctx_base..ctx_end].load_be::<u32>();
+
                 for (ct_id, pattern) in pairs {
                     let ct = &insn_table.constructors[*ct_id as usize];
-                    println!("{:#?}", ct.print_commands);
+                    //println!("{:?}", ct.print_commands);
+                    //println!("{:#?}", pattern);
+
+                    if match_pattern(pattern, (byte as u32) << 24, ctx_word) {
+                        //println!("matched!");
+                        constructor = Some(ct.to_owned());
+                        break;
+                    }
                 }
-                panic!();
+
+                break;
             }
         };
     }
+
+    println!("{:#?}", constructor);
 }
