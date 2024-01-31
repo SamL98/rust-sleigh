@@ -1776,7 +1776,7 @@ fn build_handle<'a>(handle_tpl: &'a HandleTemplate, operands: &'a Vec<Varnode>, 
 }
 
 fn build_varnode<'a>(vnode_tpl: &'a VarnodeTemplate, operands: &'a Vec<Varnode>, spaces: &'a HashMap<&'a str, u64>) -> Varnode {
-    println!("varnode {:?}", vnode_tpl);
+    //println!("varnode {:?}", vnode_tpl);
     let space = match build_value(&vnode_tpl.space_template, operands) {
         VarnodeValue::String(name) => name,
         VarnodeValue::Op(op) => op.space.as_str(),
@@ -1804,7 +1804,7 @@ fn build_varnode<'a>(vnode_tpl: &'a VarnodeTemplate, operands: &'a Vec<Varnode>,
 }
 
 fn build_pcodeop<'a>(seq: SeqNum, op_tpl: &'a OpTemplate, operands: &'a Vec<Varnode>, spaces: &'a HashMap<&'a str, u64>) -> PcodeOp {
-    println!("pcop {:?}", op_tpl);
+    //println!("pcop {:?}", op_tpl);
     PcodeOp {
         seq: seq,
         opcode: OpCode::from_str(op_tpl.code),
@@ -1817,7 +1817,7 @@ fn build_sym<'a>(matched_sym: &'a MatchedSymbol, pc: &Address, spaces: &'a HashM
     let mut built_pcodeops = vec![];
     let mut built_varnodes = vec![];
 
-    println!("sym {:?}", matched_sym);
+    //println!("sym {:?}", matched_sym);
 
     match &matched_sym {
         MatchedSymbol::Constructor((ct, operands)) => {
@@ -1874,8 +1874,32 @@ fn build_sym<'a>(matched_sym: &'a MatchedSymbol, pc: &Address, spaces: &'a HashM
         }
     }
 
-    println!("built {:?} and {:?}", built_pcodeops, built_varnodes);
+    //println!("built {:?} and {:?}", built_pcodeops, built_varnodes);
     (built_pcodeops, built_varnodes)
+}
+
+fn build_cmd_text(cmd: &PrintCommand, operands: &Vec<MatchedSymbol>) -> String {
+    match cmd {
+        PrintCommand::Op(op_idx) => build_text(&operands[*op_idx as usize]),
+        PrintCommand::Piece(piece) => piece.to_string()
+    }
+}
+
+fn build_text(matched_sym: &MatchedSymbol) -> String {
+    match &matched_sym {
+        MatchedSymbol::Constructor((ct, operands)) => {
+            match &ct.print_commands {
+                Some(cmds) => cmds.iter().map(|c| build_cmd_text(&c, &operands)).collect::<Vec<String>>().join(""),
+                None => "".to_owned()
+            }
+        },
+        MatchedSymbol::Symbol(sym) => {
+            match &sym.body {
+                SymbolBody::Varnode(vnode) => vnode.name.to_owned(),
+                _ => panic!()
+            }
+        }
+    }
 }
 
 fn main() {
@@ -1949,6 +1973,9 @@ fn main() {
         offset: 0x1337
     };
     
-    let (pcodeops, _) = build_sym(&matched_symbol.unwrap(), &pc, &spaces);
+    let (pcodeops, _) = build_sym(&matched_symbol.as_ref().unwrap(), &pc, &spaces);
     println!("{:#?}", pcodeops);
+
+    let asm = build_text(&matched_symbol.as_ref().unwrap());
+    println!("{}", asm);
 }
