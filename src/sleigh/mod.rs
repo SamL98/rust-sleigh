@@ -8,7 +8,7 @@ pub mod instruction;
 pub mod context;
 
 pub use self::address::AddressIface;
-pub use self::varnode::VarnodeIface;
+//pub use self::varnode::VarnodeIface;
 pub use self::pcode::PcodeIface;
 pub use self::instruction::InstructionIface;
 pub use self::context::ContextIface;

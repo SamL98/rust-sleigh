@@ -1,8 +1,7 @@
 use super::types::{
     Context,
     Instruction,
-    GenericVarnode,
-    RegisterVarnode
+    Varnode,
 };
 use super::instruction::InstructionIface;
 use crate::arch::Language;

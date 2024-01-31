@@ -14,24 +14,10 @@ pub struct SeqNum {
 }
 
 #[derive(Eq, PartialEq, Hash, Clone)]
-pub struct GenericVarnode {
+pub struct Varnode {
     pub space: String,
     pub offset: u64,
-    pub size: u32
-}
-
-#[derive(Eq, PartialEq, Hash, Clone)]
-pub struct RegisterVarnode {
-    pub name: String,
-    pub space: String,
-    pub offset: u64,
-    pub size: u32
-}
-
-#[derive(Eq, PartialEq, Hash, Clone)]
-pub enum Varnode {
-    Generic(GenericVarnode),
-    Register(RegisterVarnode)
+    pub size: u64
 }
 
 pub struct PcodeOp {
@@ -49,7 +35,4 @@ pub struct Instruction {
     pub ops: Vec<PcodeOp>
 }
 
-pub struct Context {
-    pub registers: HashMap<GenericVarnode, RegisterVarnode>
-}
-
+pub struct Context {}

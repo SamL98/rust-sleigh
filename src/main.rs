@@ -3,6 +3,8 @@ mod utils;
 mod arch;
 
 use crate::arch::get_language;
+use crate::sleigh::types::{PcodeOp, Varnode, SeqNum, Address};
+use crate::sleigh::opcode::OpCode;
 
 extern crate nom;
 extern crate bitvec;
@@ -131,7 +133,7 @@ pub struct SymbolHead<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Varnode<'a> {
+pub struct VarnodeSym<'a> {
     name: &'a str,
     scope: u32,
     space: &'a str,
@@ -199,7 +201,7 @@ pub enum SymbolBody<'a> {
     Scope(Scope),
     SymHead(SymbolHead<'a>),
     Subtable(Subtable<'a>),
-    Varnode(Varnode<'a>),
+    Varnode(VarnodeSym<'a>),
     Value(Value<'a>),
     Varlist(Varlist<'a>),
     Valuemap(Valuemap<'a>),
@@ -1218,7 +1220,7 @@ fn varnode_sym(input: &str) -> Res<&str, Symbol> {
         let (_, attrs) = attrs(res).finish().unwrap();
         //println!("{} {:?}", res, attrs);
         let id = u32hex(attrs[1].1);
-        let varnode = Varnode {
+        let varnode = VarnodeSym {
             name: attrs[0].1,
             scope: u32hex(attrs[2].1),
             space: attrs[3].1,
@@ -1627,7 +1629,7 @@ pub enum MatchedSymbol<'a> {
     Symbol(&'a Symbol<'a>)
 }
 
-fn resolve_constructor<'a>(byte: u8, table: &'a Subtable, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a Varnode, reg_space: &BitVec<u8, Msb0>) -> Option<&'a Constructor<'a>> {
+fn resolve_constructor<'a>(byte: u8, table: &'a Subtable, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a VarnodeSym, reg_space: &BitVec<u8, Msb0>) -> Option<&'a Constructor<'a>> {
     let mut dtree = &table.decision_tree;
 
     loop {
@@ -1665,7 +1667,7 @@ fn resolve_constructor<'a>(byte: u8, table: &'a Subtable, symbols: &'a HashMap<u
     }
 }
 
-fn resolve_varlist<'a>(byte: u8, varlist: &'a Varlist, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a Varnode, reg_space: &BitVec<u8, Msb0>) -> Option<MatchedSymbol<'a>> {
+fn resolve_varlist<'a>(byte: u8, varlist: &'a Varlist, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a VarnodeSym, reg_space: &BitVec<u8, Msb0>) -> Option<MatchedSymbol<'a>> {
     match &varlist.field {
         Field::Token(token) => {
             let start = token.start_bit;
@@ -1678,7 +1680,7 @@ fn resolve_varlist<'a>(byte: u8, varlist: &'a Varlist, symbols: &'a HashMap<u32,
     }
 }
 
-fn resolve_operands<'a>(byte: u8, ct: &'a Constructor, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a Varnode, reg_space: &BitVec<u8, Msb0>) -> Vec<MatchedSymbol<'a>> {
+fn resolve_operands<'a>(byte: u8, ct: &'a Constructor, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a VarnodeSym, reg_space: &BitVec<u8, Msb0>) -> Vec<MatchedSymbol<'a>> {
     let mut matched_ops = vec![];
 
     for op_idx in &ct.operands {
@@ -1694,7 +1696,7 @@ fn resolve_operands<'a>(byte: u8, ct: &'a Constructor, symbols: &'a HashMap<u32,
     matched_ops
 }
 
-fn resolve_symbol<'a>(byte: u8, sym: &'a Symbol, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a Varnode, reg_space: &BitVec<u8, Msb0>) -> Option<MatchedSymbol<'a>> {
+fn resolve_symbol<'a>(byte: u8, sym: &'a Symbol, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a VarnodeSym, reg_space: &BitVec<u8, Msb0>) -> Option<MatchedSymbol<'a>> {
     match &sym.body {
         SymbolBody::Subtable(table) => {
             match resolve_constructor(byte, table, symbols, ctx_reg, reg_space) {
@@ -1726,6 +1728,156 @@ fn get_operand<'a>(id: &u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Operand<'
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum VarnodeValue<'a> {
+    String(&'a str),
+    Int(u64),
+    Op(&'a Varnode)
+}
+
+fn build_value<'a>(const_tpl: &'a ConstTemplate, operands: &'a Vec<Varnode>) -> VarnodeValue<'a> {
+    match const_tpl {
+        ConstTemplate::SpaceId(space) => VarnodeValue::String(space),
+        ConstTemplate::Val(val) => VarnodeValue::Int(*val),
+        ConstTemplate::Handle(idx) => VarnodeValue::Op(&operands[*idx as usize]),
+        ConstTemplate::Relative(idx) => todo!(),
+        ConstTemplate::Start => todo!(),
+        ConstTemplate::Next => todo!(),
+        ConstTemplate::CurSpace => todo!(),
+        ConstTemplate::CurSpaceSize => todo!(),
+    }
+}
+
+fn build_handle<'a>(handle_tpl: &'a HandleTemplate, operands: &'a Vec<Varnode>, spaces: &'a HashMap<&'a str, u64>) -> Varnode {
+    let space = match build_value(&handle_tpl.space_template, operands) {
+        VarnodeValue::String(name) => name,
+        VarnodeValue::Op(op) => op.space.as_str(),
+        _ => panic!()
+    };
+
+    let offset = match build_value(&handle_tpl.offset_template, operands) {
+        VarnodeValue::Int(off) => off,
+        VarnodeValue::Op(op) => op.offset,
+        VarnodeValue::String(name) => spaces[name],
+        _ => panic!()
+    };
+
+    let size = match build_value(&handle_tpl.size_template, operands) {
+        VarnodeValue::Int(sz) => sz,
+        VarnodeValue::Op(op) => op.size,
+        _ => panic!()
+    };
+
+    Varnode {
+        space: space.to_owned(),
+        offset: offset,
+        size: size
+    }
+}
+
+fn build_varnode<'a>(vnode_tpl: &'a VarnodeTemplate, operands: &'a Vec<Varnode>, spaces: &'a HashMap<&'a str, u64>) -> Varnode {
+    println!("varnode {:?}", vnode_tpl);
+    let space = match build_value(&vnode_tpl.space_template, operands) {
+        VarnodeValue::String(name) => name,
+        VarnodeValue::Op(op) => op.space.as_str(),
+        _ => panic!()
+    };
+
+    let offset = match build_value(&vnode_tpl.offset_template, operands) {
+        VarnodeValue::Int(off) => off,
+        VarnodeValue::Op(op) => op.offset,
+        VarnodeValue::String(name) => spaces[name],
+        _ => panic!()
+    };
+
+    let size = match build_value(&vnode_tpl.size_template, operands) {
+        VarnodeValue::Int(sz) => sz,
+        VarnodeValue::Op(op) => op.size,
+        _ => panic!()
+    };
+
+    Varnode {
+        space: space.to_owned(),
+        offset: offset,
+        size: size
+    }
+}
+
+fn build_pcodeop<'a>(seq: SeqNum, op_tpl: &'a OpTemplate, operands: &'a Vec<Varnode>, spaces: &'a HashMap<&'a str, u64>) -> PcodeOp {
+    println!("pcop {:?}", op_tpl);
+    PcodeOp {
+        seq: seq,
+        opcode: OpCode::from_str(op_tpl.code),
+        inputs: op_tpl.inputs.iter().map(|tpl| build_varnode(&tpl, operands, spaces)).collect(),
+        output: op_tpl.output.as_ref().map(|tpl| build_varnode(&tpl, operands, spaces))
+    }
+}
+
+fn build_sym<'a>(matched_sym: &'a MatchedSymbol, pc: &Address, spaces: &'a HashMap<&'a str, u64>) -> (Vec<PcodeOp>, Vec<Varnode>) {
+    let mut built_pcodeops = vec![];
+    let mut built_varnodes = vec![];
+
+    println!("sym {:?}", matched_sym);
+
+    match &matched_sym {
+        MatchedSymbol::Constructor((ct, operands)) => {
+            let template = ct.template.as_ref().unwrap();
+            let mut built_ops = vec![];
+
+            for operand in operands {
+                let (op_ops, op_vnodes) = build_sym(operand, pc, spaces);
+                built_ops.push(op_ops);
+                built_varnodes.extend(op_vnodes);
+            }
+
+            for stmt in &template.statements {
+                match stmt {
+                    ConsTemplate::Op(op_template) => {
+                        if op_template.code == "BUILD" {
+                            match op_template.inputs[0].offset_template {
+                                ConstTemplate::Val(op_idx) => {
+                                    let op_pcops = built_ops[op_idx as usize].clone();
+                                    built_pcodeops.extend(op_pcops);
+                                },
+                                _ => panic!()
+                            };
+                        }
+                        else {
+                            let seq = SeqNum {
+                                pc: pc.to_owned(),
+                                uniq: built_pcodeops.len() as u32,
+                                order: 0
+                            };
+                            let pcodeop = build_pcodeop(seq, &op_template, &built_varnodes, spaces);
+                            built_pcodeops.push(pcodeop)
+                        }
+                    },
+                    ConsTemplate::Handle(handle_template) => {
+                        let built_vnode = build_handle(&handle_template, &built_varnodes, spaces);
+                        built_varnodes.push(built_vnode);
+                    }
+                }
+            }
+        },
+        MatchedSymbol::Symbol(sym) => {
+            match &sym.body {
+                SymbolBody::Varnode(vnode) => {
+                    let varnode = Varnode {
+                        space: vnode.space.to_owned(),
+                        offset: vnode.offset,
+                        size: vnode.size
+                    };
+                    built_varnodes.push(varnode);
+                },
+                _ => panic!()
+            }
+        }
+    }
+
+    println!("built {:?} and {:?}", built_pcodeops, built_varnodes);
+    (built_pcodeops, built_varnodes)
+}
+
 fn main() {
     let lang = get_language("x86", "x86:LE:64:default").unwrap();
 
@@ -1733,10 +1885,15 @@ fn main() {
     let (_, sla) = program(&contents).finish().unwrap();
     
     let mut symbols: HashMap<u32, Symbol> = HashMap::new();
-    let mut varnodes: HashMap<&str, Varnode> = HashMap::new();
+    let mut spaces: HashMap<&str, u64> = HashMap::new();
+    let mut varnodes: HashMap<&str, VarnodeSym> = HashMap::new();
     let mut context_syms: HashMap<&str, Context> = HashMap::new();
     let mut reg_space_size: usize = 0;
     let mut insn_table_id = 0;
+
+    for space in sla.spaces {
+        spaces.insert(space.name, spaces.len() as u64);
+    }
 
     for sym in sla.symbols {
         match &sym.body {
@@ -1785,5 +1942,13 @@ fn main() {
     let data: [u8; 1] = [0x55];
     let byte = data[0];
     let matched_symbol = resolve_symbol(byte, &symbols[&insn_table_id], &symbols, ctx_reg, &reg_space);
-    println!("{:#?}", matched_symbol);
+    //println!("{:#?}", matched_symbol);
+    
+    let pc = Address {
+        space: "ram".to_owned(),
+        offset: 0x1337
+    };
+    
+    let (pcodeops, _) = build_sym(&matched_symbol.unwrap(), &pc, &spaces);
+    println!("{:#?}", pcodeops);
 }

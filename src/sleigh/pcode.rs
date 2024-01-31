@@ -114,7 +114,7 @@ impl PcodeOp {
     }
 }
 
-impl fmt::Display for PcodeOp {
+impl fmt::Debug for PcodeOp {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
         write!(f, "{}{}", self.fmt_output(), self.fmt_inputs())
     }
