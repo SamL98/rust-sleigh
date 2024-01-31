@@ -121,21 +121,18 @@ pub struct Space<'a> {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Scope {
-    id: u32,
     parent: u32
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct SymbolHead<'a> {
     name: &'a str,
-    id: u32,
     scope: u32
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Varnode<'a> {
     name: &'a str,
-    id: u32,
     scope: u32,
     space: &'a str,
     offset: u64,
@@ -145,7 +142,6 @@ pub struct Varnode<'a> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Value<'a> {
     name: &'a str,
-    id: u32,
     scope: u32,
     field: Field,
 }
@@ -153,7 +149,6 @@ pub struct Value<'a> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Varlist<'a> {
     name: &'a str,
-    id: u32,
     scope: u32,
     field: Field,
     vars: Vec<Option<u32>>
@@ -162,7 +157,6 @@ pub struct Varlist<'a> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Valuemap<'a> {
     name: &'a str,
-    id: u32,
     scope: u32,
     field: Field,
     vars: Vec<u64>
@@ -171,7 +165,6 @@ pub struct Valuemap<'a> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Operand<'a> {
     name: &'a str,
-    id: u32,
     scope: u32,
     subsym: u32,
     off: u64,
@@ -186,7 +179,6 @@ pub struct Operand<'a> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Context<'a> {
     name: &'a str,
-    id: u32,
     scope: u32,
     varnode: u32,
     low: u32,
@@ -198,13 +190,12 @@ pub struct Context<'a> {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct UserOp<'a> {
     name: &'a str,
-    id: u32,
     scope: u32,
     idx: u32
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum Symbol<'a> {
+pub enum SymbolBody<'a> {
     Scope(Scope),
     SymHead(SymbolHead<'a>),
     Subtable(Subtable<'a>),
@@ -221,9 +212,14 @@ pub enum Symbol<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Symbol<'a> {
+    id: u32,
+    body: SymbolBody<'a>
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Subtable<'a> {
     name: &'a str,
-    id: u32,
     scope: u32,
     constructors: Vec<Constructor<'a>>,
     decision_tree: DecisionTree
@@ -286,9 +282,9 @@ pub struct Constructor<'a> {
     parent: u32,
     first: i32,
     length: u32,
-    operands: Option<Vec<u32>>,
+    operands: Vec<u32>,
     print_commands: Option<Vec<PrintCommand<'a>>>,
-    context_ops: Option<Vec<ContextOp>>,
+    context_ops: Vec<ContextOp>,
     template: Option<ConstructorTemplate<'a>>
 }
 
@@ -464,11 +460,11 @@ fn scope(input: &str) -> Res<&str, Symbol> {
     .map(|(next, res)| {
         let (_, attrs) = attrs(res).finish().unwrap();
         //println!("{} {:?}", res, attrs);
+        let id = u32hex(attrs[1].1);
         let scope = Scope {
-            id: u32hex(&attrs[0].1),
             parent: u32hex(&attrs[1].1)
         };
-        (next, Symbol::Scope(scope))
+        (next, Symbol { id: id, body: SymbolBody::Scope(scope) })
     })
 }
 
@@ -495,12 +491,12 @@ fn sym_head(input: &str) -> Res<&str, Symbol> {
     .map(|(next, res)| {
         let (_, attrs) = attrs(res).finish().unwrap();
         //println!("{} {:?}", res, attrs);
+        let id = u32hex(attrs[1].1);
         let sym_head = SymbolHead {
             name: attrs[0].1,
-            id: u32hex(attrs[1].1),
             scope: u32hex(attrs[2].1)
         };
-        (next, Symbol::SymHead(sym_head))
+        (next, Symbol { id: id, body: SymbolBody::SymHead(sym_head) })
     })
 }
 
@@ -961,9 +957,9 @@ fn constructor(input: &str) -> Res<&str, Constructor> {
             parent: u32hex(attrs[0].1),
             first: i32dec(attrs[1].1),
             length: u32dec(attrs[2].1),
-            operands: res.1.0,
+            operands: res.1.0.unwrap_or_default(),
             print_commands: res.1.1,
-            context_ops: res.1.2,
+            context_ops: res.1.2.unwrap_or_default(),
             template: res.1.3
         };
         (next, constructor)
@@ -1159,14 +1155,14 @@ fn subtable_sym(input: &str) -> Res<&str, Symbol> {
         //println!("{:?}", res.1.0.len());
         let (_, attrs) = attrs(res.0).finish().unwrap();
         //println!("{} {:?}", res.0, attrs);
+        let id = u32hex(attrs[1].1);
         let subtable = Subtable {
             name: attrs[0].1,
-            id: u32hex(attrs[1].1),
             scope: u32hex(attrs[2].1),
             constructors: res.1.0,
             decision_tree: res.1.1
         };
-        (next, Symbol::Subtable(subtable))
+        (next, Symbol { id: id, body: SymbolBody::Subtable(subtable) })
     })
 }
 
@@ -1174,36 +1170,38 @@ fn start_sym(input: &str) -> Res<&str, Symbol> {
     delimited(tag("<start_sym "), take_until("/>"), tag("/>"))(input)
     .map(|(next, res)| {
         let (_, attrs) = attrs(res).finish().unwrap();
+        let id = u32hex(attrs[1].1);
         let sym_head = SymbolHead {
             name: attrs[0].1,
-            id: u32hex(attrs[1].1),
             scope: u32hex(attrs[2].1),
         };
-        (next, Symbol::Start(sym_head))
+        (next, Symbol { id: id, body: SymbolBody::Start(sym_head) })
     })
 }
+
 fn end_sym(input: &str) -> Res<&str, Symbol> {
     delimited(tag("<end_sym "), take_until("/>"), tag("/>"))(input)
     .map(|(next, res)| {
         let (_, attrs) = attrs(res).finish().unwrap();
+        let id = u32hex(attrs[1].1);
         let sym_head = SymbolHead {
             name: attrs[0].1,
-            id: u32hex(attrs[1].1),
             scope: u32hex(attrs[2].1),
         };
-        (next, Symbol::End(sym_head))
+        (next, Symbol { id: id, body: SymbolBody::End(sym_head) })
     })
 }
+
 fn next2_sym(input: &str) -> Res<&str, Symbol> {
     delimited(tag("<next2_sym "), take_until("/>"), tag("/>"))(input)
     .map(|(next, res)| {
         let (_, attrs) = attrs(res).finish().unwrap();
+        let id = u32hex(attrs[1].1);
         let sym_head = SymbolHead {
             name: attrs[0].1,
-            id: u32hex(attrs[1].1),
             scope: u32hex(attrs[2].1),
         };
-        (next, Symbol::Next2(sym_head))
+        (next, Symbol { id: id, body: SymbolBody::Next2(sym_head) })
     })
 }
 
@@ -1219,15 +1217,15 @@ fn varnode_sym(input: &str) -> Res<&str, Symbol> {
     .map(|(next, res)| {
         let (_, attrs) = attrs(res).finish().unwrap();
         //println!("{} {:?}", res, attrs);
+        let id = u32hex(attrs[1].1);
         let varnode = Varnode {
             name: attrs[0].1,
-            id: u32hex(attrs[1].1),
             scope: u32hex(attrs[2].1),
             space: attrs[3].1,
             offset: u64hex(attrs[4].1),
             size: u64dec(attrs[5].1),
         };
-        (next, Symbol::Varnode(varnode))
+        (next, Symbol { id: id, body: SymbolBody::Varnode(varnode) })
     })
 }
 
@@ -1294,14 +1292,14 @@ fn valuemap_sym(input: &str) -> Res<&str, Symbol> {
     ))(input)
     .map(|(next, res)| {
         let (_, attrs) = attrs(res.0).finish().unwrap();
+        let id = u32hex(attrs[1].1);
         let valuemap = Valuemap {
             name: attrs[0].1,
-            id: u32hex(attrs[1].1),
             scope: u32hex(attrs[2].1),
             field: res.1.0,
             vars: res.1.1
         };
-        (next, Symbol::Valuemap(valuemap))
+        (next, Symbol { id: id, body: SymbolBody::Valuemap(valuemap) })
     })
 }
 
@@ -1353,14 +1351,14 @@ fn varlist_sym(input: &str) -> Res<&str, Symbol> {
     ))(input)
     .map(|(next, res)| {
         let (_, attrs) = attrs(res.0).finish().unwrap();
+        let id = u32hex(attrs[1].1);
         let varlist = Varlist {
             name: attrs[0].1,
-            id: u32hex(attrs[1].1),
             scope: u32hex(attrs[2].1),
             field: res.1.0,
             vars: res.1.1
         };
-        (next, Symbol::Varlist(varlist))
+        (next, Symbol { id: id, body: SymbolBody::Varlist(varlist) })
     })
 }
 
@@ -1378,13 +1376,13 @@ fn value_sym(input: &str) -> Res<&str, Symbol> {
     ))(input)
     .map(|(next, res)| {
         let (_, attrs) = attrs(res.0).finish().unwrap();
+        let id = u32hex(attrs[1].1);
         let value = Value {
             name: attrs[0].1,
-            id: u32hex(attrs[1].1),
             scope: u32hex(attrs[2].1),
             field: res.1
         };
-        (next, Symbol::Value(value))
+        (next, Symbol { id: id, body: SymbolBody::Value(value) })
     })
 }
 
@@ -1408,9 +1406,10 @@ fn context_sym(input: &str) -> Res<&str, Symbol> {
             _ => panic!()
         };
 
+        let id = u32hex(attrs[1].1);
+
         let context = Context {
             name: attrs[0].1,
-            id: u32hex(attrs[1].1),
             scope: u32hex(attrs[2].1),
             varnode: u32hex(attrs[3].1),
             low: u32dec(attrs[4].1),
@@ -1418,7 +1417,7 @@ fn context_sym(input: &str) -> Res<&str, Symbol> {
             flow: to_bool(attrs[6].1),
             context_field: context_field
         };
-        (next, Symbol::Context(context))
+        (next, Symbol { id: id, body: SymbolBody::Context(context) })
     })
 }
 
@@ -1447,10 +1446,10 @@ fn operand_sym(input: &str) -> Res<&str, Symbol> {
         };
 
         let kvs: HashMap<&str, &str> = attrs.into_iter().collect();
+        let id = u32hex(kvs["id"]);
 
         let operand = Operand {
             name: kvs["name"],
-            id: u32hex(kvs["id"]),
             scope: u32hex(kvs["scope"]),
             subsym: kvs.get("subsym").map(|s| u32hex(s)).unwrap_or(0),
             off: kvs.get("off").map(|s| u64dec(s)).unwrap_or(0),
@@ -1461,7 +1460,7 @@ fn operand_sym(input: &str) -> Res<&str, Symbol> {
             operand_expr: operand_expr,
             expr: res.1.1
         };
-        (next, Symbol::Operand(operand))
+        (next, Symbol { id: id, body: SymbolBody::Operand(operand) })
     })
 }
 
@@ -1473,15 +1472,15 @@ fn userop(input: &str) -> Res<&str, Symbol> {
     )(input)
     .map(|(next, res)| {
         let (_, attrs) = attrs(res).finish().unwrap();
+        let id = u32hex(attrs[1].1);
 
         let userop = UserOp {
             name: attrs[0].1,
-            id: u32hex(attrs[1].1),
             scope: u32hex(attrs[2].1),
             idx: u32dec(attrs[3].1)
         };
 
-        (next, Symbol::UserOp(userop))
+        (next, Symbol { id: id, body: SymbolBody::UserOp(userop) })
     })
 }
 
@@ -1622,13 +1621,20 @@ fn match_pattern(pattern: &DecisionPattern, insn_word: u32, ctx_word: u32) -> bo
     }
 }
 
-fn find_constructor<'a>(byte: u8, table: &'a Subtable, ctx_reg: &'a Varnode, reg_space: &BitVec<u8, Msb0>) -> Option<&'a Constructor<'a>> {
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum MatchedSymbol<'a> {
+    Constructor((&'a Constructor<'a>, Vec<MatchedSymbol<'a>>)),
+    Symbol(&'a Symbol<'a>)
+}
+
+fn resolve_constructor<'a>(byte: u8, table: &'a Subtable, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a Varnode, reg_space: &BitVec<u8, Msb0>) -> Option<&'a Constructor<'a>> {
     let mut dtree = &table.decision_tree;
 
     loop {
         match dtree {
             DecisionTree::NonLeaf((is_context, start, size, children)) => {
                 if !is_context {
+                    //println!("{} {}", start, size);
                     let bit_start = 8 - (start + size);
                     let idx = ((byte >> bit_start) & ((1 << size) - 1)) as usize;
                     dtree = &children[idx.min(children.len() - 1)];
@@ -1659,49 +1665,101 @@ fn find_constructor<'a>(byte: u8, table: &'a Subtable, ctx_reg: &'a Varnode, reg
     }
 }
 
+fn resolve_varlist<'a>(byte: u8, varlist: &'a Varlist, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a Varnode, reg_space: &BitVec<u8, Msb0>) -> Option<MatchedSymbol<'a>> {
+    match &varlist.field {
+        Field::Token(token) => {
+            let start = token.start_bit;
+            let size = token.end_bit - start + 1;
+            let idx = ((byte >> start) & ((1 << size) - 1)) as usize;
+            let var = &symbols[&varlist.vars[idx].unwrap()];
+            Some(MatchedSymbol::Symbol(var))
+        },
+        _ => todo!()
+    }
+}
+
+fn resolve_operands<'a>(byte: u8, ct: &'a Constructor, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a Varnode, reg_space: &BitVec<u8, Msb0>) -> Vec<MatchedSymbol<'a>> {
+    let mut matched_ops = vec![];
+
+    for op_idx in &ct.operands {
+        let operand = get_operand(&op_idx, &symbols);
+        let op_sym = &symbols[&operand.subsym];
+
+        match resolve_symbol(byte, op_sym, symbols, ctx_reg, reg_space) {
+            Some(matched_sym) => matched_ops.push(matched_sym),
+            None => ()
+        };
+    }
+
+    matched_ops
+}
+
+fn resolve_symbol<'a>(byte: u8, sym: &'a Symbol, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a Varnode, reg_space: &BitVec<u8, Msb0>) -> Option<MatchedSymbol<'a>> {
+    match &sym.body {
+        SymbolBody::Subtable(table) => {
+            match resolve_constructor(byte, table, symbols, ctx_reg, reg_space) {
+                Some(ct) => {
+                    let operands = resolve_operands(byte, ct, symbols, ctx_reg, reg_space);
+                    Some(MatchedSymbol::Constructor((ct, operands)))
+                },
+                None => None
+            }
+        },
+        SymbolBody::Varlist(varlist) => resolve_varlist(byte, varlist, symbols, ctx_reg, reg_space),
+        _ => todo!()
+    }
+}
+
+fn get_table<'a>(id: u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Subtable<'a> {
+    let sym = &symbols[&id];
+    match &sym.body {
+        SymbolBody::Subtable(subtable) => subtable,
+        _ => panic!()
+    }
+}
+
+fn get_operand<'a>(id: &u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Operand<'a> {
+    let sym = &symbols[id];
+    match &sym.body {
+        SymbolBody::Operand(operand) => operand,
+        _ => panic!()
+    }
+}
+
 fn main() {
     let lang = get_language("x86", "x86:LE:64:default").unwrap();
 
     let contents = read_file("x86-64.sla");
     let (_, sla) = program(&contents).finish().unwrap();
-    //println!("{:?}", sla);
     
-    let mut tables: HashMap<u32, Subtable> = HashMap::new();
+    let mut symbols: HashMap<u32, Symbol> = HashMap::new();
     let mut varnodes: HashMap<&str, Varnode> = HashMap::new();
-    let mut operands: HashMap<u32, Operand> = HashMap::new();
     let mut context_syms: HashMap<&str, Context> = HashMap::new();
-    //let mut constructors: Vec<Constructor> = vec![];
     let mut reg_space_size: usize = 0;
     let mut insn_table_id = 0;
 
     for sym in sla.symbols {
-        match sym {
-            Symbol::Subtable(subtable) => {
-                /*for constructor in &subtable.constructors {
-                    constructors.push(constructor.clone().to_owned());
-                }*/
-
+        match &sym.body {
+            SymbolBody::Subtable(subtable) => {
                 if subtable.name == "instruction" {
-                    insn_table_id = subtable.id;
+                    insn_table_id = sym.id;
                 }
-
-                //tables.entry(subtable.id).or_insert(vec![]).push(subtable);
-                tables.insert(subtable.id, subtable);
             },
-            Symbol::Varnode(varnode) =>  {
+            SymbolBody::Varnode(varnode) =>  {
                 varnodes.insert(varnode.name, varnode.clone());
 
                 if varnode.space == "register" {
                     reg_space_size = reg_space_size.max((varnode.offset + varnode.size) as usize);
                 }
             },
-            Symbol::Context(ctx) => { context_syms.insert(ctx.name, ctx.clone()); },
-            Symbol::Operand(op) => { operands.insert(op.id, op.clone()); },
+            SymbolBody::Context(ctx) => { context_syms.insert(ctx.name, ctx.clone()); },
             _ => ()
         }
+
+        symbols.insert(sym.id, sym);
     }
 
-    let insn_table = &tables[&insn_table_id];
+    //let insn_table = get_table(insn_table_id, &symbols);
     let ctx_reg = &varnodes["contextreg"];
     //println!("{:#?}", insn_table.decision_tree);
 
@@ -1726,18 +1784,6 @@ fn main() {
     //println!("{:#?}", tables["Reg8"][0].decision_tree);
     let data: [u8; 1] = [0x55];
     let byte = data[0];
-    
-    let mut constructor = find_constructor(byte, insn_table, ctx_reg, &reg_space);
-
-    println!("{:#?}", constructor);
-    if let Some(op_idxs) = &constructor.unwrap().operands {
-        for op_idx in op_idxs {
-            let operand = &operands[&op_idx];
-            println!("{:#?}", operand);
-
-            let op_table = &tables[&operand.subsym];
-            let op_ctor = find_constructor(byte, op_table, ctx_reg, &reg_space);
-            println!("{:#?}", op_ctor);
-        }
-    }
+    let matched_symbol = resolve_symbol(byte, &symbols[&insn_table_id], &symbols, ctx_reg, &reg_space);
+    println!("{:#?}", matched_symbol);
 }
