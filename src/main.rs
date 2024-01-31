@@ -19,7 +19,9 @@ use nom::*;
 
 use bitvec::prelude::*;
 
+use std::hash::{Hash, Hasher};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::Write;
 use std::fs::File;
 use std::fs;
@@ -52,6 +54,59 @@ pub enum DecisionPattern {
 pub enum DecisionTree {
     Leaf(Vec<(u32, DecisionPattern)>),
     NonLeaf((bool, u32, u32, Vec<DecisionTree>))
+}
+
+impl Hash for DecisionTree {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            DecisionTree::Leaf(patterns) => {
+                "Leaf".hash(state);
+                patterns.hash(state);
+            }
+            DecisionTree::NonLeaf((b, u1, u2, subtrees)) => {
+                "NonLeaf".hash(state);
+                b.hash(state);
+                u1.hash(state);
+                u2.hash(state);
+                subtrees.hash(state);
+            }
+        }
+    }
+}
+
+impl Hash for MaskWord {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.mask.hash(state);
+        self.val.hash(state);
+    }
+}
+
+impl Hash for PatternBlock {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.offset.hash(state);
+        self.nonzero.hash(state);
+        self.masks.hash(state);
+    }
+}
+
+impl Hash for DecisionPattern {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            DecisionPattern::Context(block) => {
+                "Context".hash(state);
+                block.hash(state);
+            }
+            DecisionPattern::Instruction(block) => {
+                "Instruction".hash(state);
+                block.hash(state);
+            }
+            DecisionPattern::Combine((p1, p2)) => {
+                "Combine".hash(state);
+                p1.hash(state);
+                p2.hash(state);
+            }
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -483,12 +538,13 @@ fn opprint(input: &str) -> Res<&str, PrintCommand> {
 
 fn print_piece(input: &str) -> Res<&str, PrintCommand> {
     delimited(
-        tag("<print piece"),
+        tag("<print"),
         take_until("/>"),
         tag("/>")
     )(input)
     .map(|(next, res)| {
-        (next, PrintCommand::Piece(res))
+        let (_, attrs) = attrs(res).finish().unwrap();
+        (next, PrintCommand::Piece(attrs[0].1))
     })
 }
 
@@ -1580,7 +1636,7 @@ fn main() {
 
     // Create a bit vector for the entire register space.
     // TODO: Figure out how to properly initialize the BitVec.
-    let mut reg_space: BitVec<u8, Lsb0> = BitVec::with_capacity(reg_space_size * 8);
+    let mut reg_space: BitVec<u8, Msb0> = BitVec::with_capacity(reg_space_size * 8);
     for _ in 0..(reg_space_size * 8) {
         reg_space.push(false);
     }
@@ -1590,10 +1646,77 @@ fn main() {
         if let Some(sym) = context_syms.get(var.as_str()) {
             let start = (ctx_reg.offset * 8 + (sym.low as u64)) as usize;
             let end = (ctx_reg.offset * 8  + (sym.high as u64) + 1) as usize;
-            reg_space[start .. end].store_le(val);
-            println!("{}, {}, {:?}", var, val, reg_space[start .. end].load_le::<u32>());
+            println!("{}, {}, {}, {}", var, start, end, val);
+            let existing = reg_space[start..end].load_be::<u32>();
+            reg_space[start..end].store_be(val | existing);
         }
     }
 
-    //let data: [u8; 1] = [0x55];
+    //println!("{:#?}", tables["Reg8"][0].decision_tree);
+    let data: [u8; 1] = [0x55];
+    let byte = data[0];
+    
+    let mut dtree = &insn_table.decision_tree;
+    /*let mut buf = vec![(&insn_table.decision_tree, vec![])];
+    let mut visited = HashSet::new();
+
+    while let Some((dtree, path)) = buf.pop() {
+        if visited.contains(dtree) {
+            continue;
+        }
+        visited.insert(dtree);
+
+        match dtree {
+            DecisionTree::NonLeaf((is_ctx, start, size, children)) => {
+                for (i, child) in children.into_iter().enumerate() {
+                    let mut child_path = path.clone();
+                    child_path.push((is_ctx, start, size, i));
+                    buf.push((&child, child_path));
+                }
+            },
+            DecisionTree::Leaf(pairs) => {
+                for (ct_id, pattern) in pairs {
+                    let ct = &insn_table.constructors[*ct_id as usize];
+
+                    if let Some(pcs) = &ct.print_commands {
+                        if pcs.len() > 0 {
+                            if let PrintCommand::Piece("PUSH") = pcs[0] {
+                                println!("{:?}", path);
+                                println!("{:?} {:?}", pcs, pattern);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        };
+    }*/
+
+    loop {
+        match dtree {
+            DecisionTree::NonLeaf((is_context, start, size, children)) => {
+                if !is_context {
+                    let bit_start = 8 - (start + size);
+                    let idx = ((byte >> bit_start) & ((1 << size) - 1)) as usize;
+                    println!("non-context {}, {}, {}, {}", start, size, children.len(), idx);
+                    dtree = &children[idx.min(children.len() - 1)];
+                }
+                else {
+                    //println!("context {}, {}, {}", start, size, children.len());
+                    let ctx_start = (ctx_reg.offset * 8 + (*start as u64)) as usize;
+                    let ctx_end = ctx_start + (*size as usize);
+                    let idx = reg_space[ctx_start..ctx_end].load_be::<usize>();
+                    println!("* {}, {}, {}, {}, {}", ctx_start, ctx_end, idx, start, size);
+                    dtree = &children[idx.min(children.len() - 1)];
+                }
+            },
+            DecisionTree::Leaf(pairs) => {
+                for (ct_id, pattern) in pairs {
+                    let ct = &insn_table.constructors[*ct_id as usize];
+                    println!("{:#?}", ct.print_commands);
+                }
+                panic!();
+            }
+        };
+    }
 }
