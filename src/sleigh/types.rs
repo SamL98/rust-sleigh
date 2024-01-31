@@ -15,6 +15,7 @@ pub struct SeqNum {
 
 #[derive(Eq, PartialEq, Hash, Clone)]
 pub struct Varnode {
+    pub name: Option<String>,
     pub space: String,
     pub offset: u64,
     pub size: u64

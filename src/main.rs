@@ -1748,7 +1748,7 @@ fn build_value<'a>(const_tpl: &'a ConstTemplate, operands: &'a Vec<Varnode>) -> 
     }
 }
 
-fn build_handle<'a>(handle_tpl: &'a HandleTemplate, operands: &'a Vec<Varnode>, spaces: &'a HashMap<&'a str, u64>) -> Varnode {
+fn build_handle<'a>(handle_tpl: &'a HandleTemplate, operands: &'a Vec<Varnode>, spaces: &'a HashMap<&'a str, u64>, varnode_map: &'a HashMap<(u64, u64), &'a str>) -> Varnode {
     let space = match build_value(&handle_tpl.space_template, operands) {
         VarnodeValue::String(name) => name,
         VarnodeValue::Op(op) => op.space.as_str(),
@@ -1768,14 +1768,20 @@ fn build_handle<'a>(handle_tpl: &'a HandleTemplate, operands: &'a Vec<Varnode>, 
         _ => panic!()
     };
 
+    let name = match space {
+        "register" => varnode_map.get(&(offset, size)).map(|x| x.to_string()),
+        _ => None
+    };
+
     Varnode {
+        name: name,
         space: space.to_owned(),
         offset: offset,
         size: size
     }
 }
 
-fn build_varnode<'a>(vnode_tpl: &'a VarnodeTemplate, operands: &'a Vec<Varnode>, spaces: &'a HashMap<&'a str, u64>) -> Varnode {
+fn build_varnode<'a>(vnode_tpl: &'a VarnodeTemplate, operands: &'a Vec<Varnode>, spaces: &'a HashMap<&'a str, u64>, varnode_map: &'a HashMap<(u64, u64), &'a str>) -> Varnode {
     //println!("varnode {:?}", vnode_tpl);
     let space = match build_value(&vnode_tpl.space_template, operands) {
         VarnodeValue::String(name) => name,
@@ -1796,24 +1802,30 @@ fn build_varnode<'a>(vnode_tpl: &'a VarnodeTemplate, operands: &'a Vec<Varnode>,
         _ => panic!()
     };
 
+    let name = match space {
+        "register" => varnode_map.get(&(offset, size)).map(|x| x.to_string()),
+        _ => None
+    };
+
     Varnode {
+        name: name,
         space: space.to_owned(),
         offset: offset,
         size: size
     }
 }
 
-fn build_pcodeop<'a>(seq: SeqNum, op_tpl: &'a OpTemplate, operands: &'a Vec<Varnode>, spaces: &'a HashMap<&'a str, u64>) -> PcodeOp {
+fn build_pcodeop<'a>(seq: SeqNum, op_tpl: &'a OpTemplate, operands: &'a Vec<Varnode>, spaces: &'a HashMap<&'a str, u64>, varnode_map: &'a HashMap<(u64, u64), &'a str>) -> PcodeOp {
     //println!("pcop {:?}", op_tpl);
     PcodeOp {
         seq: seq,
         opcode: OpCode::from_str(op_tpl.code),
-        inputs: op_tpl.inputs.iter().map(|tpl| build_varnode(&tpl, operands, spaces)).collect(),
-        output: op_tpl.output.as_ref().map(|tpl| build_varnode(&tpl, operands, spaces))
+        inputs: op_tpl.inputs.iter().map(|tpl| build_varnode(&tpl, operands, spaces, varnode_map)).collect(),
+        output: op_tpl.output.as_ref().map(|tpl| build_varnode(&tpl, operands, spaces, varnode_map))
     }
 }
 
-fn build_sym<'a>(matched_sym: &'a MatchedSymbol, pc: &Address, spaces: &'a HashMap<&'a str, u64>) -> (Vec<PcodeOp>, Vec<Varnode>) {
+fn build_sym<'a>(matched_sym: &'a MatchedSymbol, pc: &Address, spaces: &'a HashMap<&'a str, u64>, varnode_map: &'a HashMap<(u64, u64), &'a str>) -> (Vec<PcodeOp>, Vec<Varnode>) {
     let mut built_pcodeops = vec![];
     let mut built_varnodes = vec![];
 
@@ -1825,7 +1837,7 @@ fn build_sym<'a>(matched_sym: &'a MatchedSymbol, pc: &Address, spaces: &'a HashM
             let mut built_ops = vec![];
 
             for operand in operands {
-                let (op_ops, op_vnodes) = build_sym(operand, pc, spaces);
+                let (op_ops, op_vnodes) = build_sym(operand, pc, spaces, varnode_map);
                 built_ops.push(op_ops);
                 built_varnodes.extend(op_vnodes);
             }
@@ -1848,12 +1860,12 @@ fn build_sym<'a>(matched_sym: &'a MatchedSymbol, pc: &Address, spaces: &'a HashM
                                 uniq: built_pcodeops.len() as u32,
                                 order: 0
                             };
-                            let pcodeop = build_pcodeop(seq, &op_template, &built_varnodes, spaces);
+                            let pcodeop = build_pcodeop(seq, &op_template, &built_varnodes, spaces, varnode_map);
                             built_pcodeops.push(pcodeop)
                         }
                     },
                     ConsTemplate::Handle(handle_template) => {
-                        let built_vnode = build_handle(&handle_template, &built_varnodes, spaces);
+                        let built_vnode = build_handle(&handle_template, &built_varnodes, spaces, varnode_map);
                         built_varnodes.push(built_vnode);
                     }
                 }
@@ -1862,7 +1874,13 @@ fn build_sym<'a>(matched_sym: &'a MatchedSymbol, pc: &Address, spaces: &'a HashM
         MatchedSymbol::Symbol(sym) => {
             match &sym.body {
                 SymbolBody::Varnode(vnode) => {
+                    let name = match vnode.space {
+                        "register" => varnode_map.get(&(vnode.offset, vnode.size)),
+                        _ => None
+                    };
+
                     let varnode = Varnode {
+                        name: name.map(|x| x.to_string()),
                         space: vnode.space.to_owned(),
                         offset: vnode.offset,
                         size: vnode.size
@@ -1911,6 +1929,7 @@ fn main() {
     let mut symbols: HashMap<u32, Symbol> = HashMap::new();
     let mut spaces: HashMap<&str, u64> = HashMap::new();
     let mut varnodes: HashMap<&str, VarnodeSym> = HashMap::new();
+    let mut varnode_map: HashMap<(u64, u64), &str> = HashMap::new();
     let mut context_syms: HashMap<&str, Context> = HashMap::new();
     let mut reg_space_size: usize = 0;
     let mut insn_table_id = 0;
@@ -1931,6 +1950,7 @@ fn main() {
 
                 if varnode.space == "register" {
                     reg_space_size = reg_space_size.max((varnode.offset + varnode.size) as usize);
+                    varnode_map.insert((varnode.offset, varnode.size), varnode.name);
                 }
             },
             SymbolBody::Context(ctx) => { context_syms.insert(ctx.name, ctx.clone()); },
@@ -1973,7 +1993,7 @@ fn main() {
         offset: 0x1337
     };
     
-    let (pcodeops, _) = build_sym(&matched_symbol.as_ref().unwrap(), &pc, &spaces);
+    let (pcodeops, _) = build_sym(&matched_symbol.as_ref().unwrap(), &pc, &spaces, &varnode_map);
     println!("{:#?}", pcodeops);
 
     let asm = build_text(&matched_symbol.as_ref().unwrap());
