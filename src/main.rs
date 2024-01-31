@@ -1622,6 +1622,43 @@ fn match_pattern(pattern: &DecisionPattern, insn_word: u32, ctx_word: u32) -> bo
     }
 }
 
+fn find_constructor<'a>(byte: u8, table: &'a Subtable, ctx_reg: &'a Varnode, reg_space: &BitVec<u8, Msb0>) -> Option<&'a Constructor<'a>> {
+    let mut dtree = &table.decision_tree;
+
+    loop {
+        match dtree {
+            DecisionTree::NonLeaf((is_context, start, size, children)) => {
+                if !is_context {
+                    let bit_start = 8 - (start + size);
+                    let idx = ((byte >> bit_start) & ((1 << size) - 1)) as usize;
+                    dtree = &children[idx.min(children.len() - 1)];
+                }
+                else {
+                    let ctx_start = (ctx_reg.offset * 8 + (*start as u64)) as usize;
+                    let ctx_end = ctx_start + (*size as usize);
+                    let idx = reg_space[ctx_start..ctx_end].load_be::<usize>();
+                    dtree = &children[idx.min(children.len() - 1)];
+                }
+            },
+            DecisionTree::Leaf(pairs) => {
+                let ctx_base = (ctx_reg.offset * 8) as usize;
+                let ctx_end = (ctx_base + 32) as usize;
+                let ctx_word = reg_space[ctx_base..ctx_end].load_be::<u32>();
+
+                for (ct_id, pattern) in pairs {
+                    let ct = &table.constructors[*ct_id as usize];
+
+                    if match_pattern(pattern, (byte as u32) << 24, ctx_word) {
+                        return Some(ct);
+                    }
+                }
+
+                return None;
+            }
+        };
+    }
+}
+
 fn main() {
     let lang = get_language("x86", "x86:LE:64:default").unwrap();
 
@@ -1629,15 +1666,27 @@ fn main() {
     let (_, sla) = program(&contents).finish().unwrap();
     //println!("{:?}", sla);
     
-    let mut tables: HashMap<&str, Vec<Subtable>> = HashMap::new();
+    let mut tables: HashMap<u32, Subtable> = HashMap::new();
     let mut varnodes: HashMap<&str, Varnode> = HashMap::new();
+    let mut operands: HashMap<u32, Operand> = HashMap::new();
     let mut context_syms: HashMap<&str, Context> = HashMap::new();
+    //let mut constructors: Vec<Constructor> = vec![];
     let mut reg_space_size: usize = 0;
+    let mut insn_table_id = 0;
 
     for sym in sla.symbols {
         match sym {
             Symbol::Subtable(subtable) => {
-                tables.entry(subtable.name).or_insert(vec![]).push(subtable);
+                /*for constructor in &subtable.constructors {
+                    constructors.push(constructor.clone().to_owned());
+                }*/
+
+                if subtable.name == "instruction" {
+                    insn_table_id = subtable.id;
+                }
+
+                //tables.entry(subtable.id).or_insert(vec![]).push(subtable);
+                tables.insert(subtable.id, subtable);
             },
             Symbol::Varnode(varnode) =>  {
                 varnodes.insert(varnode.name, varnode.clone());
@@ -1646,14 +1695,13 @@ fn main() {
                     reg_space_size = reg_space_size.max((varnode.offset + varnode.size) as usize);
                 }
             },
-            Symbol::Context(ctx) =>  {
-                context_syms.insert(ctx.name, ctx.clone());
-            }
+            Symbol::Context(ctx) => { context_syms.insert(ctx.name, ctx.clone()); },
+            Symbol::Operand(op) => { operands.insert(op.id, op.clone()); },
             _ => ()
         }
     }
 
-    let insn_table = &tables["instruction"][0];
+    let insn_table = &tables[&insn_table_id];
     let ctx_reg = &varnodes["contextreg"];
     //println!("{:#?}", insn_table.decision_tree);
 
@@ -1669,7 +1717,7 @@ fn main() {
         if let Some(sym) = context_syms.get(var.as_str()) {
             let start = (ctx_reg.offset * 8 + (sym.low as u64)) as usize;
             let end = (ctx_reg.offset * 8  + (sym.high as u64) + 1) as usize;
-            println!("{}, {}, {}, {}", var, start, end, val);
+            //println!("{}, {}, {}, {}", var, start, end, val);
             let existing = reg_space[start..end].load_be::<u32>();
             reg_space[start..end].store_be(val | existing);
         }
@@ -1679,83 +1727,17 @@ fn main() {
     let data: [u8; 1] = [0x55];
     let byte = data[0];
     
-    let mut dtree = &insn_table.decision_tree;
-    /*let mut buf = vec![(&insn_table.decision_tree, vec![])];
-    let mut visited = HashSet::new();
-
-    while let Some((dtree, path)) = buf.pop() {
-        if visited.contains(dtree) {
-            continue;
-        }
-        visited.insert(dtree);
-
-        match dtree {
-            DecisionTree::NonLeaf((is_ctx, start, size, children)) => {
-                for (i, child) in children.into_iter().enumerate() {
-                    let mut child_path = path.clone();
-                    child_path.push((is_ctx, start, size, i));
-                    buf.push((&child, child_path));
-                }
-            },
-            DecisionTree::Leaf(pairs) => {
-                for (ct_id, pattern) in pairs {
-                    let ct = &insn_table.constructors[*ct_id as usize];
-
-                    if let Some(pcs) = &ct.print_commands {
-                        if pcs.len() > 0 {
-                            if let PrintCommand::Piece("PUSH") = pcs[0] {
-                                println!("{:?}", path);
-                                println!("{:?} {:?}", pcs, pattern);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        };
-    }*/
-
-    let mut constructor: Option<Constructor> = None;
-
-    loop {
-        match dtree {
-            DecisionTree::NonLeaf((is_context, start, size, children)) => {
-                if !is_context {
-                    let bit_start = 8 - (start + size);
-                    let idx = ((byte >> bit_start) & ((1 << size) - 1)) as usize;
-                    //println!("non-context {}, {}, {}, {}", start, size, children.len(), idx);
-                    dtree = &children[idx.min(children.len() - 1)];
-                }
-                else {
-                    //println!("context {}, {}, {}", start, size, children.len());
-                    let ctx_start = (ctx_reg.offset * 8 + (*start as u64)) as usize;
-                    let ctx_end = ctx_start + (*size as usize);
-                    let idx = reg_space[ctx_start..ctx_end].load_be::<usize>();
-                    //println!("* {}, {}, {}, {}, {}", ctx_start, ctx_end, idx, start, size);
-                    dtree = &children[idx.min(children.len() - 1)];
-                }
-            },
-            DecisionTree::Leaf(pairs) => {
-                let ctx_base = (ctx_reg.offset * 8) as usize;
-                let ctx_end = (ctx_base + 32) as usize;
-                let ctx_word = reg_space[ctx_base..ctx_end].load_be::<u32>();
-
-                for (ct_id, pattern) in pairs {
-                    let ct = &insn_table.constructors[*ct_id as usize];
-                    //println!("{:?}", ct.print_commands);
-                    //println!("{:#?}", pattern);
-
-                    if match_pattern(pattern, (byte as u32) << 24, ctx_word) {
-                        //println!("matched!");
-                        constructor = Some(ct.to_owned());
-                        break;
-                    }
-                }
-
-                break;
-            }
-        };
-    }
+    let mut constructor = find_constructor(byte, insn_table, ctx_reg, &reg_space);
 
     println!("{:#?}", constructor);
+    if let Some(op_idxs) = &constructor.unwrap().operands {
+        for op_idx in op_idxs {
+            let operand = &operands[&op_idx];
+            println!("{:#?}", operand);
+
+            let op_table = &tables[&operand.subsym];
+            let op_ctor = find_constructor(byte, op_table, ctx_reg, &reg_space);
+            println!("{:#?}", op_ctor);
+        }
+    }
 }
