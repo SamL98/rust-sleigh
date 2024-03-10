@@ -1629,22 +1629,23 @@ pub enum MatchedSymbol<'a> {
     Symbol(&'a Symbol<'a>)
 }
 
-fn resolve_constructor<'a>(byte: u8, table: &'a Subtable, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a VarnodeSym, reg_space: &BitVec<u8, Msb0>) -> Option<&'a Constructor<'a>> {
+fn resolve_constructor<'a>(word: u32, table: &'a Subtable, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a VarnodeSym, reg_space: &BitVec<u8, Msb0>) -> Option<&'a Constructor<'a>> {
     let mut dtree = &table.decision_tree;
 
     loop {
         match dtree {
             DecisionTree::NonLeaf((is_context, start, size, children)) => {
                 if !is_context {
-                    //println!("{} {}", start, size);
-                    let bit_start = 8 - (start + size);
-                    let idx = ((byte >> bit_start) & ((1 << size) - 1)) as usize;
+                    let bit_start = 32 - (start + size);
+                    let idx = ((word >> bit_start) & ((1 << size) - 1)) as usize;
+                    println!("{} {} {}", start, size, idx);
                     dtree = &children[idx.min(children.len() - 1)];
                 }
                 else {
                     let ctx_start = (ctx_reg.offset * 8 + (*start as u64)) as usize;
                     let ctx_end = ctx_start + (*size as usize);
                     let idx = reg_space[ctx_start..ctx_end].load_be::<usize>();
+                    println!("ctx {} {} {}", start, size, idx);
                     dtree = &children[idx.min(children.len() - 1)];
                 }
             },
@@ -1656,23 +1657,28 @@ fn resolve_constructor<'a>(byte: u8, table: &'a Subtable, symbols: &'a HashMap<u
                 for (ct_id, pattern) in pairs {
                     let ct = &table.constructors[*ct_id as usize];
 
-                    if match_pattern(pattern, (byte as u32) << 24, ctx_word) {
+                    if match_pattern(pattern, word, ctx_word) {
+                        println!("matched {:?}", ct.print_commands);
                         return Some(ct);
                     }
                 }
 
+                println!("did not matche");
                 return None;
             }
         };
     }
 }
 
-fn resolve_varlist<'a>(byte: u8, varlist: &'a Varlist, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a VarnodeSym, reg_space: &BitVec<u8, Msb0>) -> Option<MatchedSymbol<'a>> {
+fn resolve_varlist<'a>(word: u32, varlist: &'a Varlist, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a VarnodeSym, reg_space: &BitVec<u8, Msb0>) -> Option<MatchedSymbol<'a>> {
     match &varlist.field {
         Field::Token(token) => {
+            let num_bytes = token.end_byte - token.start_byte + 1;
+            let token_word = (word >> (8 * (4 - (token.start_byte + 1)))) & ((1 << (8 * num_bytes)) - 1);
+
             let start = token.start_bit;
             let size = token.end_bit - start + 1;
-            let idx = ((byte >> start) & ((1 << size) - 1)) as usize;
+            let idx = ((token_word >> start) & ((1 << size) - 1)) as usize;
             let var = &symbols[&varlist.vars[idx].unwrap()];
             Some(MatchedSymbol::Symbol(var))
         },
@@ -1680,14 +1686,14 @@ fn resolve_varlist<'a>(byte: u8, varlist: &'a Varlist, symbols: &'a HashMap<u32,
     }
 }
 
-fn resolve_operands<'a>(byte: u8, ct: &'a Constructor, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a VarnodeSym, reg_space: &BitVec<u8, Msb0>) -> Vec<MatchedSymbol<'a>> {
+fn resolve_operands<'a>(word: u32, ct: &'a Constructor, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a VarnodeSym, reg_space: &BitVec<u8, Msb0>) -> Vec<MatchedSymbol<'a>> {
     let mut matched_ops = vec![];
 
     for op_idx in &ct.operands {
         let operand = get_operand(&op_idx, &symbols);
         let op_sym = &symbols[&operand.subsym];
 
-        match resolve_symbol(byte, op_sym, symbols, ctx_reg, reg_space) {
+        match resolve_symbol(word, op_sym, symbols, ctx_reg, reg_space) {
             Some(matched_sym) => matched_ops.push(matched_sym),
             None => ()
         };
@@ -1696,18 +1702,22 @@ fn resolve_operands<'a>(byte: u8, ct: &'a Constructor, symbols: &'a HashMap<u32,
     matched_ops
 }
 
-fn resolve_symbol<'a>(byte: u8, sym: &'a Symbol, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a VarnodeSym, reg_space: &BitVec<u8, Msb0>) -> Option<MatchedSymbol<'a>> {
+fn resolve_symbol<'a>(word: u32, sym: &'a Symbol, symbols: &'a HashMap<u32, Symbol>, ctx_reg: &'a VarnodeSym, reg_space: &BitVec<u8, Msb0>) -> Option<MatchedSymbol<'a>> {
     match &sym.body {
         SymbolBody::Subtable(table) => {
-            match resolve_constructor(byte, table, symbols, ctx_reg, reg_space) {
+            //println!("{:#?}", table);
+            match resolve_constructor(word, table, symbols, ctx_reg, reg_space) {
                 Some(ct) => {
-                    let operands = resolve_operands(byte, ct, symbols, ctx_reg, reg_space);
+                    let operands = resolve_operands(word, ct, symbols, ctx_reg, reg_space);
                     Some(MatchedSymbol::Constructor((ct, operands)))
                 },
                 None => None
             }
         },
-        SymbolBody::Varlist(varlist) => resolve_varlist(byte, varlist, symbols, ctx_reg, reg_space),
+        SymbolBody::Varlist(varlist) => {
+            //println!("{}", varlist.name);
+            resolve_varlist(word, varlist, symbols, ctx_reg, reg_space)
+        },
         _ => todo!()
     }
 }
@@ -1975,7 +1985,7 @@ fn main() {
         //println!("{} {:?}", var, context_syms.get(var.as_str()));
         if let Some(sym) = context_syms.get(var.as_str()) {
             let start = (ctx_reg.offset * 8 + (sym.low as u64)) as usize;
-            let end = (ctx_reg.offset * 8  + (sym.high as u64) + 1) as usize;
+            let end = (ctx_reg.offset * 8 + (sym.high as u64) + 1) as usize;
             //println!("{}, {}, {}, {}", var, start, end, val);
             let existing = reg_space[start..end].load_be::<u32>();
             reg_space[start..end].store_be(val | existing);
@@ -1983,10 +1993,12 @@ fn main() {
     }
 
     //println!("{:#?}", tables["Reg8"][0].decision_tree);
-    let data: [u8; 1] = [0x55];
-    let byte = data[0];
-    let matched_symbol = resolve_symbol(byte, &symbols[&insn_table_id], &symbols, ctx_reg, &reg_space);
-    //println!("{:#?}", matched_symbol);
+    //let data: [u8; 1] = [0x55];
+    //let word = 0x55000000;
+    //let word = 0x554889e5;
+    let word = 0x4889e500;
+    let matched_symbol = resolve_symbol(word, &symbols[&insn_table_id], &symbols, ctx_reg, &reg_space);
+    println!("{:#?}", matched_symbol);
     
     let pc = Address {
         space: "ram".to_owned(),
