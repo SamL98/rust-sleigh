@@ -1,2220 +1,2091 @@
-mod sleigh;
-mod utils;
-mod arch;
-
 use crate::arch::get_language;
+use crate::sleigh::opcode::OpCode;
+use crate::sleigh::types::{Address, PcodeOp, SeqNum, Varnode};
 
-extern crate nom;
 extern crate bitvec;
+extern crate nom;
 
-use nom::character::complete::*;
-use nom::bytes::complete::*;
-use nom::combinator::*;
-use nom::character::*;
-use nom::sequence::*;
+use super::arch::Language;
+
 use nom::branch::*;
+use nom::bytes::complete::*;
+use nom::character::complete::*;
+use nom::character::*;
+use nom::combinator::*;
 use nom::error::*;
 use nom::multi::*;
+use nom::sequence::*;
 use nom::*;
 
 use bitvec::prelude::*;
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
+use std::fs::File;
+use std::hash::{Hash, Hasher};
+use std::io::Write;
 
-type Res<T, U> = IResult<T, U, Error<T>>;
+static SLEIGH_PATH: &'static str =
+    "/Users/samlerner/ghidra_10.3_PUBLIC/Ghidra/Processors/x86/data/languages";
 
-fn read_file(filename: &str) -> String {
-    fs::read_to_string(filename).expect("can't read file")
+pub type Res<T, U> = IResult<T, U, Error<T>>;
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct MaskWord {
+    mask: u32,
+    val: u32,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct PatternBlock {
+    offset: u32,
+    nonzero: u32,
+    masks: Vec<MaskWord>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum DecisionPattern {
+    Context(PatternBlock),
+    Instruction(PatternBlock),
+    Combine((Box<DecisionPattern>, Box<DecisionPattern>)),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum DecisionTree {
+    Leaf(Vec<(u32, DecisionPattern)>),
+    NonLeaf((bool, u32, u32, Vec<DecisionTree>)),
+}
+
+impl Hash for DecisionTree {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            DecisionTree::Leaf(patterns) => {
+                "Leaf".hash(state);
+                patterns.hash(state);
+            }
+            DecisionTree::NonLeaf((b, u1, u2, subtrees)) => {
+                "NonLeaf".hash(state);
+                b.hash(state);
+                u1.hash(state);
+                u2.hash(state);
+                subtrees.hash(state);
+            }
+        }
+    }
+}
+
+impl Hash for MaskWord {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.mask.hash(state);
+        self.val.hash(state);
+    }
+}
+
+impl Hash for PatternBlock {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.offset.hash(state);
+        self.nonzero.hash(state);
+        self.masks.hash(state);
+    }
+}
+
+impl Hash for DecisionPattern {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            DecisionPattern::Context(block) => {
+                "Context".hash(state);
+                block.hash(state);
+            }
+            DecisionPattern::Instruction(block) => {
+                "Instruction".hash(state);
+                block.hash(state);
+            }
+            DecisionPattern::Combine((p1, p2)) => {
+                "Combine".hash(state);
+                p1.hash(state);
+                p2.hash(state);
+            }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Space<'a> {
+    pub name: &'a str,
+    pub index: u32,
+    pub big_endian: bool,
+    pub delay: u32,
+    pub size: u32,
+    pub physical: bool,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Scope {
+    parent: u32,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct SymbolHead<'a> {
+    pub name: &'a str,
+    pub scope: u32,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct VarnodeSym<'a> {
+    pub name: &'a str,
+    pub scope: u32,
+    pub space: &'a str,
+    pub offset: u64,
+    pub size: u64,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Value<'a> {
+    name: &'a str,
+    scope: u32,
+    field: Field,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Varlist<'a> {
+    name: &'a str,
+    scope: u32,
+    field: Field,
+    vars: Vec<Option<u32>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Valuemap<'a> {
+    name: &'a str,
+    scope: u32,
+    field: Field,
+    vars: Vec<u64>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Operand<'a> {
+    pub name: &'a str,
+    scope: u32,
+    subsym: u32,
+    off: u64,
+    base: i64,
+    min_len: u64,
+    idx: u64,
+    is_code: bool,
+    operand_expr: OperandExpr,
+    expr: Option<Expr>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Context<'a> {
+    pub name: &'a str,
+    pub scope: u32,
+    pub varnode: u32,
+    pub low: u32,
+    pub high: u32,
+    pub flow: bool,
+    pub context_field: ContextField,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct UserOp<'a> {
+    name: &'a str,
+    scope: u32,
+    idx: u32,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum SymbolBody<'a> {
+    Scope(Scope),
+    SymHead(SymbolHead<'a>),
+    Subtable(Subtable<'a>),
+    Varnode(VarnodeSym<'a>),
+    Value(Value<'a>),
+    Varlist(Varlist<'a>),
+    Valuemap(Valuemap<'a>),
+    Operand(Operand<'a>),
+    Context(Context<'a>),
+    UserOp(UserOp<'a>),
+    Start(SymbolHead<'a>),
+    End(SymbolHead<'a>),
+    Next2(SymbolHead<'a>),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Symbol<'a> {
+    pub id: u32,
+    pub body: SymbolBody<'a>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Subtable<'a> {
+    pub name: &'a str,
+    pub scope: u32,
+    pub constructors: Vec<Constructor<'a>>,
+    pub decision_tree: DecisionTree,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct ContextField {
+    sign_bit: bool,
+    start_bit: u32,
+    end_bit: u32,
+    start_byte: u32,
+    end_byte: u32,
+    shift: u32,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct TokenField {
+    big_endian: bool,
+    sign_bit: bool,
+    start_bit: u32,
+    end_bit: u32,
+    start_byte: u32,
+    end_byte: u32,
+    shift: u32,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum Field {
+    Context(ContextField),
+    Token(TokenField),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct OperandExpr {
+    idx: u32,
+    table: u32,
+    ct: u32,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum Expr {
+    Const(i64),
+    Operand(OperandExpr),
+    Field(Field),
+    Not(Box<Expr>),
+    Xor((Box<Expr>, Box<Expr>)),
+    Add((Box<Expr>, Box<Expr>)),
+    Lshift((Box<Expr>, Box<Expr>)),
+    Rshift((Box<Expr>, Box<Expr>)),
+    Mult((Box<Expr>, Box<Expr>)),
+    And((Box<Expr>, Box<Expr>)),
+    Or((Box<Expr>, Box<Expr>)),
+    End,
+    Start,
+    Next2,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Constructor<'a> {
+    pub parent: u32,
+    pub first: i32,
+    pub length: u32,
+    pub operands: Vec<u32>,
+    pub print_commands: Option<Vec<PrintCommand<'a>>>,
+    pub context_ops: Vec<ContextOp>,
+    pub template: Option<ConstructorTemplate<'a>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum PrintCommand<'a> {
+    Op(u32),
+    Piece(&'a str),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct ContextOp {
+    i: u32,
+    shift: u32,
+    mask: u32,
+    expr: Expr,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct ConstructorTemplate<'a> {
+    num_labels: u32,
+    statements: Vec<ConsTemplate<'a>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct OpTemplate<'a> {
+    code: &'a str,
+    output: Option<VarnodeTemplate<'a>>,
+    inputs: Vec<VarnodeTemplate<'a>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct HandleTemplate<'a> {
+    space_template: ConstTemplate<'a>,
+    size_template: ConstTemplate<'a>,
+    exported_size_template: ConstTemplate<'a>,
+    offset_template: ConstTemplate<'a>,
+    exported_offset_template: ConstTemplate<'a>,
+    unk_template3: ConstTemplate<'a>,
+    unk_template4: ConstTemplate<'a>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum ConsTemplate<'a> {
+    Op(OpTemplate<'a>),
+    Handle(HandleTemplate<'a>),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct ConcreteVarnodeTemplate<'a> {
+    space: &'a str,
+    offset: u64,
+    size: u32,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct VarnodeTemplate<'a> {
+    space_template: ConstTemplate<'a>,
+    offset_template: ConstTemplate<'a>,
+    size_template: ConstTemplate<'a>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum ConstTemplate<'a> {
+    SpaceId(&'a str),
+    Val(u64),
+    Handle(u32),
+    Relative(u32),
+    Start,
+    Next,
+    CurSpace,
+    CurSpaceSize,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Program<'a> {
-    stmts: Vec<Stmt<'a>>
+    pub version: u32,
+    pub bigendian: bool,
+    pub align: u32,
+    pub uniqbase: u64,
+    pub default_space: &'a str,
+    pub spaces: Vec<Space<'a>>,
+    pub symbols: Vec<Symbol<'a>>,
 }
 
-fn comment_without_newline(input: &str) -> Res<&str, Stmt> {
-    preceded(
-        space0,
-        preceded(
-            char('#'),
-            take_until("\n")))(input)
-    .map(|(next, _)| {
-        (next, Stmt::COMMENT)
-    })
-}
-
-fn comment(input: &str) -> Res<&str, Stmt> {
-    terminated(
-        comment_without_newline,
-        line_ending)(input)
-    .map(|(next, _)| {
-        (next, Stmt::COMMENT)
-    })
-}
-
-fn line_end_comment_without_newline(input: &str) -> Res<&str, Stmt> {
-    preceded(space0, comment_without_newline)(input)
-}
-
-fn line_end_comment(input: &str) -> Res<&str, Option<Stmt>> {
-    preceded(space0, opt(comment))(input)
-}
-
-fn is_newline_char(chr: char) -> bool {
-    let mut c = [0; 1];
-    let _ = chr.encode_utf8(&mut c);
-    is_newline(c[0])
-}
-
-
-fn program(input: &str) -> Res<&str, Program> {
-    preceded(
-        multispace0,
-        many0(
-            terminated(
-                terminated(
-                    alt((comment, stmt)),
-                    line_end_comment),
-                take_while(is_newline_char))))(input)
-    .map(|(next, res)| {
-        (next, Program { stmts: res })
-    })
-}
-
-fn stmt(input: &str) -> Res<&str, Stmt> {
-    alt((define, attach, sleigh_macro, constructor))(input)
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum Stmt<'a> {
-    Define(DefineStmt<'a>),
-    Attach(AttachStmt<'a>),
-    Constructor(ConstructorStmt<'a>),
-    Macro(MacroStmt<'a>),
-    COMMENT
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum Endianness {
-    BIG,
-    LITTLE
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum SpaceType {
-    RAM,
-    ROM,
-    REGISTER
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum SpaceAttribute {
-    TYPE(SpaceType),
-    SIZE(u64),
-    DEFAULT,
-    WOrDSIZE(u64)
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct SpaceDefinition<'a> {
-    name: &'a str,
-    attrs: Vec<SpaceAttribute>
-}
-
-fn rom_type(input: &str) -> Res<&str, SpaceType> {
-    tag("rom_space")(input)
-    .map(|(next, _)| {
-        (next, SpaceType::ROM)
-    })
-}
-
-fn ram_type(input: &str) -> Res<&str, SpaceType> {
-    tag("ram_space")(input)
-    .map(|(next, _)| {
-        (next, SpaceType::RAM)
-    })
-}
-
-fn register_type(input: &str) -> Res<&str, SpaceType> {
-    tag("register_space")(input)
-    .map(|(next, _)| {
-        (next, SpaceType::REGISTER)
-    })
-}
-
-fn space_type(input: &str) -> Res<&str, SpaceType> {
-    alt((rom_type, ram_type, register_type))(input)
-}
-
-fn space_default_attr(input: &str) -> Res<&str, SpaceAttribute> {
-    tag("default")(input)
-    .map(|(next, _)| {
-        (next, SpaceAttribute::DEFAULT)
-    })
-}
-
-fn space_type_attr(input: &str) -> Res<&str, SpaceAttribute> {
-    preceded(
-        tag("type="),
-        space_type)(input)
-    .map(|(next, res)| {
-        (next, SpaceAttribute::TYPE(res))
-    })
-}
-
-fn space_size_attr(input: &str) -> Res<&str, SpaceAttribute> {
-    preceded(
-        tag("size="),
-        digit1)(input)
-    .map(|(next, res)| {
-        (next, SpaceAttribute::SIZE(res.parse::<u64>().unwrap()))
-    })
-}
-
-fn space_wordsize_attr(input: &str) -> Res<&str, SpaceAttribute> {
-    preceded(
-        tag("wordsize="),
-        digit1)(input)
-    .map(|(next, res)| {
-        (next, SpaceAttribute::WOrDSIZE(res.parse::<u64>().unwrap()))
-    })
-}
-
-fn space_attrs(input: &str) -> Res<&str, Vec<SpaceAttribute>> {
-    separated_list0(
-        space1,
-        alt((space_default_attr, space_size_attr, space_type_attr, space_wordsize_attr)))(input)
-}
-
-fn space_define(input: &str) -> Res<&str, DefineStmt> {
-    terminated(
-        preceded(terminated(tag("space"), space1),
-            tuple((
-                terminated(identifier, space1),
-                space_attrs))),
-        terminated(tag(";"), line_ending))(input)
-    .map(|(next, res)| {
-        (next, DefineStmt::Space(SpaceDefinition { name: res.0, attrs: res.1 }))
-    })
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum SpaceName<'a> {
-    Name(&'a str),
-    NONE
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct SpaceNamesDefinition<'a> {
-    name: &'a str,
-    offset: u64,
-    size: u64,
-    names: Vec<SpaceName<'a>>
-}
-
-fn name_space_name(input: &str) -> Res<&str, SpaceName> {
-    identifier(input)
-    .map(|(next, res)| {
-        (next, SpaceName::Name(res))
-    })
-}
-
-fn none_space_name(input: &str) -> Res<&str, SpaceName> {
-    tag("_")(input)
-    .map(|(next, _)| {
-        (next, SpaceName::NONE)
-    })
-}
-
-fn space_name(input: &str) -> Res<&str, SpaceName> {
-    alt((none_space_name, name_space_name))(input)
-}
-
-fn many_space_name(input: &str) -> Res<&str, Vec<SpaceName>> {
-    terminated(
-        terminated(
-            preceded(
-                terminated(char('['), multispace0),
-                separated_list1(multispace1, space_name)
-            ),
-            multispace0
-        ),
-        char(']')
+fn source_files(input: &str) -> Res<&str, &str> {
+    delimited(
+        tag("<sourcefiles>"),
+        take_until("</sourcefiles>"),
+        tag("</sourcefiles>"),
     )(input)
 }
 
-fn single_space_name(input: &str) -> Res<&str, Vec<SpaceName>> {
-    space_name(input)
+fn space(input: &str) -> Res<&str, Space> {
+    delimited(
+        alt((tag("<space_other"), tag("<space_unique"), tag("<space"))),
+        take_until("/>"),
+        tag("/>"),
+    )(input)
     .map(|(next, res)| {
-        (next, vec![res])
+        let (_, attrs) = attrs(res).finish().unwrap();
+        //println!("{} {:?}", res, attrs);
+        let space = Space {
+            name: attrs[0].1,
+            index: u32dec(attrs[1].1),
+            big_endian: to_bool(attrs[2].1),
+            delay: u32dec(attrs[3].1),
+            size: u32dec(attrs[4].1),
+            physical: to_bool(attrs[5].1),
+        };
+        (next, space)
     })
 }
 
-fn space_name_list(input: &str) -> Res<&str, Vec<SpaceName>> {
-    alt((single_space_name, many_space_name))(input)
-}
-
-fn dec_num(input: &str) -> Res<&str, u64> {
-    digit1(input)
+fn spaces(input: &str) -> Res<&str, (&str, Vec<Space>)> {
+    tuple((
+        terminated(
+            delimited(tag("<spaces "), take_until(">"), tag(">")),
+            line_ending,
+        ),
+        terminated(
+            separated_list1(line_ending, space),
+            preceded(line_ending, tag("</spaces>")),
+        ),
+    ))(input)
     .map(|(next, res)| {
-        (next, res.parse::<u64>().unwrap())
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        (next, (attrs[0].1, res.1))
     })
 }
 
-fn hex_num(input: &str) -> Res<&str, u64> {
-    preceded(tag("0x"), hex_digit1)(input)
-    .map(|(next, res)| {
-        (next, u64::from_str_radix(res, 16).unwrap())
+fn to_bool(s: &str) -> bool {
+    s.parse::<bool>().unwrap()
+}
+
+fn u32hex(s: &str) -> u32 {
+    u32::from_str_radix(&s[2..], 16).unwrap()
+}
+
+fn u64hex(s: &str) -> u64 {
+    u64::from_str_radix(&s[2..], 16).unwrap()
+}
+
+fn u64dec(s: &str) -> u64 {
+    u64::from_str_radix(&s, 10).unwrap()
+}
+
+fn u32dec(s: &str) -> u32 {
+    u32::from_str_radix(&s, 10).unwrap()
+}
+
+fn i32dec(s: &str) -> i32 {
+    i32::from_str_radix(&s, 10).unwrap()
+}
+
+fn i64dec(s: &str) -> i64 {
+    i64::from_str_radix(&s, 10).unwrap()
+}
+
+fn scope(input: &str) -> Res<&str, Symbol> {
+    delimited(tag("<scope "), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        //println!("{} {:?}", res, attrs);
+        let id = u32hex(attrs[1].1);
+        let scope = Scope {
+            parent: u32hex(&attrs[1].1),
+        };
+        (
+            next,
+            Symbol {
+                id: id,
+                body: SymbolBody::Scope(scope),
+            },
+        )
     })
 }
 
-fn is_bin_digit(chr: char) -> bool {
-    /*let mut c = [0; 1];
-    let _ = chr.encode_utf8(&mut c);
-    is_newline(c[0])*/
-    chr == '0' || chr == '1'
-}
-
-fn bin_num(input: &str) -> Res<&str, u64> {
-    preceded(tag("0b"), take_while(is_bin_digit))(input)
+fn sym_head(input: &str) -> Res<&str, Symbol> {
+    delimited(
+        preceded(
+            tag("<"),
+            alt((
+                terminated(
+                    alt((
+                        tag("subtable"),
+                        tag("start"),
+                        tag("end"),
+                        tag("next2"),
+                        tag("varnode"),
+                        tag("valuemap"),
+                        tag("varlist"),
+                        tag("value"),
+                        tag("context"),
+                        tag("operand"),
+                    )),
+                    tag("_sym_head "),
+                ),
+                tag("userop_head "),
+            )),
+        ),
+        take_until("/>"),
+        tag("/>"),
+    )(input)
     .map(|(next, res)| {
-        (next, u64::from_str_radix(res, 2).unwrap())
+        let (_, attrs) = attrs(res).finish().unwrap();
+        //println!("{} {:?}", res, attrs);
+        let id = u32hex(attrs[1].1);
+        let sym_head = SymbolHead {
+            name: attrs[0].1,
+            scope: u32hex(attrs[2].1),
+        };
+        (
+            next,
+            Symbol {
+                id: id,
+                body: SymbolBody::SymHead(sym_head),
+            },
+        )
     })
 }
 
-fn num(input: &str) -> Res<&str, u64> {
-    alt((hex_num, bin_num, dec_num))(input)
+fn operand(input: &str) -> Res<&str, u32> {
+    delimited(tag("<oper"), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        //println!("{} {:?}", res, attrs);
+        (next, u32hex(attrs[0].1))
+    })
+}
+
+fn operands(input: &str) -> Res<&str, Vec<u32>> {
+    separated_list1(line_ending, operand)(input)
+}
+
+fn opprint(input: &str) -> Res<&str, PrintCommand> {
+    delimited(tag("<opprint"), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        (next, PrintCommand::Op(u32dec(attrs[0].1)))
+    })
+}
+
+fn print_piece(input: &str) -> Res<&str, PrintCommand> {
+    delimited(tag("<print"), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        (next, PrintCommand::Piece(attrs[0].1))
+    })
+}
+
+fn print_command(input: &str) -> Res<&str, PrintCommand> {
+    alt((opprint, print_piece))(input)
+}
+
+fn print_commands(input: &str) -> Res<&str, Vec<PrintCommand>> {
+    separated_list1(line_ending, print_command)(input)
+}
+
+fn const_expr(input: &str) -> Res<&str, Expr> {
+    //println!("const {}", &input[0..20]);
+    delimited(tag("<intb"), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
+        //println!("foobar {:?}", res);
+        let (_, attrs) = attrs(res).finish().unwrap();
+        //println!("{} {:?}", res, attrs);
+        (next, Expr::Const(i64dec(attrs[0].1)))
+    })
+}
+
+fn operand_expr(input: &str) -> Res<&str, Expr> {
+    delimited(tag("<operand_exp"), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        //println!("{} {:?}", res, attrs);
+        let operand_expr = OperandExpr {
+            idx: u32dec(attrs[0].1),
+            table: u32hex(attrs[1].1),
+            ct: u32hex(attrs[2].1),
+        };
+        (next, Expr::Operand(operand_expr))
+    })
+}
+
+fn contextfield(input: &str) -> Res<&str, Field> {
+    delimited(tag("<contextfield"), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        let context_field = ContextField {
+            sign_bit: to_bool(attrs[0].1),
+            start_bit: u32dec(attrs[1].1),
+            end_bit: u32dec(attrs[2].1),
+            start_byte: u32dec(attrs[3].1),
+            end_byte: u32dec(attrs[4].1),
+            shift: u32dec(attrs[5].1),
+        };
+        (next, Field::Context(context_field))
+    })
+}
+
+fn field_expr(input: &str) -> Res<&str, Expr> {
+    //println!("* field {}", &input[0..20]);
+    field(input).map(|(next, res)| (next, Expr::Field(res)))
+}
+
+fn start_expr(input: &str) -> Res<&str, Expr> {
+    tag("<start_exp/>")(input).map(|(next, res)| (next, (Expr::Start)))
+}
+
+fn end_expr(input: &str) -> Res<&str, Expr> {
+    tag("<end_exp/>")(input).map(|(next, res)| (next, (Expr::End)))
+}
+
+fn next2_expr(input: &str) -> Res<&str, Expr> {
+    tag("<next2_exp/>")(input).map(|(next, res)| (next, (Expr::Next2)))
+}
+
+fn unary_expr(input: &str) -> Res<&str, Expr> {
+    //println!("* unary {}", &input[0..20]);
+    let expr_types = alt((tag("not_exp"), tag("dummy_exp")));
+
+    let (input, (expr_type, hs_expr, _)) = tuple((
+        terminated(delimited(char('<'), expr_types, char('>')), line_ending),
+        expr,
+        preceded(line_ending, delimited(tag("</"), identifier, char('>'))),
+    ))(input)?;
+
+    let hs = Box::new(hs_expr);
+
+    let expr = match expr_type {
+        "not_exp" => Expr::Not(hs),
+        _ => todo!(),
+    };
+
+    Ok((input, expr))
+}
+
+fn binary_expr(input: &str) -> Res<&str, Expr> {
+    //println!("* binary {}", &input[0..20]);
+    let expr_types = alt((
+        tag("plus_exp"),
+        tag("and_exp"),
+        tag("xor_exp"),
+        tag("or_exp"),
+        tag("lshift_exp"),
+        tag("rshift_exp"),
+        tag("mult_exp"),
+    ));
+
+    let (input, (expr_type, (lhs_expr, rhs_expr), _)) = tuple((
+        terminated(delimited(char('<'), expr_types, char('>')), line_ending),
+        separated_pair(expr, opt(line_ending), expr),
+        preceded(line_ending, delimited(tag("</"), identifier, char('>'))),
+    ))(input)?;
+
+    let lhs = Box::new(lhs_expr);
+    let rhs = Box::new(rhs_expr);
+
+    let expr = match expr_type {
+        "plus_exp" => Expr::Add((lhs, rhs)),
+        "and_exp" => Expr::And((lhs, rhs)),
+        "or_exp" => Expr::Or((lhs, rhs)),
+        "xor_exp" => Expr::Xor((lhs, rhs)),
+        "lshift_exp" => Expr::Lshift((lhs, rhs)),
+        "rshift_exp" => Expr::Rshift((lhs, rhs)),
+        "mult_exp" => Expr::Mult((lhs, rhs)),
+        _ => todo!(),
+    };
+
+    Ok((input, expr))
+}
+
+fn expr(input: &str) -> Res<&str, Expr> {
+    //println!("* context expr {}", &input[0..20]);
+    alt((
+        start_expr,
+        end_expr,
+        next2_expr,
+        const_expr,
+        operand_expr,
+        field_expr,
+        unary_expr,
+        binary_expr,
+    ))(input)
+}
+
+fn context_op(input: &str) -> Res<&str, ContextOp> {
+    tuple((
+        terminated(
+            delimited(tag("<context_op"), take_until(">"), tag(">")),
+            line_ending,
+        ),
+        terminated(expr, terminated(line_ending, tag("</context_op>"))),
+    ))(input)
     .map(|(next, res)| {
+        //println!("context {:?}", res.0);
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        //println!("{} {:?}", res.0, attrs);
+        let context_op = ContextOp {
+            i: u32dec(attrs[0].1),
+            shift: u32dec(attrs[1].1),
+            mask: u32hex(attrs[2].1),
+            expr: res.1,
+        };
+        (next, context_op)
+    })
+}
+
+fn context_ops(input: &str) -> Res<&str, Vec<ContextOp>> {
+    separated_list1(line_ending, context_op)(input)
+}
+
+fn const_template(input: &str) -> Res<&str, ConstTemplate> {
+    //println!("const {}", &input[0..20]);
+    delimited(tag("<const_tpl"), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        //println!("{} {:?}", res, attrs);
+
+        let const_template = match attrs[0].1 {
+            "spaceid" => ConstTemplate::SpaceId(attrs[1].1),
+            "real" => ConstTemplate::Val(u64hex(attrs[1].1)),
+            "handle" => ConstTemplate::Handle(u32dec(attrs[1].1)),
+            "relative" => ConstTemplate::Relative(u32hex(attrs[1].1)),
+            "start" => ConstTemplate::Start,
+            "next" => ConstTemplate::Next,
+            "curspace" => ConstTemplate::CurSpace,
+            "curspace_size" => ConstTemplate::CurSpaceSize,
+            _ => todo!(),
+        };
+
+        (next, const_template)
+    })
+}
+
+fn nonnull_varnode_template(input: &str) -> Res<&str, Option<VarnodeTemplate>> {
+    //println!("vnode {}", &input[0..20]);
+    delimited(
+        tag("<varnode_tpl>"),
+        tuple((const_template, const_template, const_template)),
+        tag("</varnode_tpl>"),
+    )(input)
+    .map(|(next, res)| {
+        //println!("varnode {:?}", res.1);
+        let varnode_template = VarnodeTemplate {
+            space_template: res.0,
+            offset_template: res.1,
+            size_template: res.2,
+        };
+        (next, Some(varnode_template))
+    })
+}
+
+fn null_varnode_template(input: &str) -> Res<&str, Option<VarnodeTemplate>> {
+    tag("<null/>")(input).map(|(next, res)| (next, None))
+}
+
+fn varnode_template(input: &str) -> Res<&str, Option<VarnodeTemplate>> {
+    alt((null_varnode_template, nonnull_varnode_template))(input)
+}
+
+fn op_template(input: &str) -> Res<&str, ConsTemplate> {
+    //println!("op {}", &input[0..20]);
+    preceded(
+        opt(tag("<null/>")),
+        tuple((
+            delimited(tag("<op_tpl"), take_until(">"), tag(">")),
+            terminated(varnode_template, line_ending),
+            terminated(
+                separated_list0(line_ending, varnode_template),
+                terminated(line_ending, tag("</op_tpl>")),
+            ),
+        )),
+    )(input)
+    .map(|(next, res)| {
+        //println!("op {:?}", res.1);
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        let op_template = OpTemplate {
+            code: attrs[0].1,
+            output: res.1,
+            inputs: res.2.into_iter().filter_map(|x| x).collect(),
+        };
+        // println!("{} {}", op_template.code, op_template.inputs.len());
+        (next, ConsTemplate::Op(op_template))
+    })
+}
+
+fn handle_template(input: &str) -> Res<&str, ConsTemplate> {
+    preceded(
+        opt(tag("<null/>")),
+        delimited(
+            tag("<handle_tpl>"),
+            tuple((
+                const_template,
+                const_template,
+                const_template,
+                const_template,
+                const_template,
+                const_template,
+                const_template,
+            )),
+            tag("</handle_tpl>"),
+        ),
+    )(input)
+    .map(|(next, res)| {
+        //println!("op {:?}", res.1);
+        let handle_template = HandleTemplate {
+            space_template: res.0,
+            size_template: res.1,
+            exported_size_template: res.2,
+            offset_template: res.3,
+            exported_offset_template: res.4,
+            unk_template3: res.5,
+            unk_template4: res.6,
+        };
+        (next, ConsTemplate::Handle(handle_template))
+    })
+}
+
+fn null_ops(input: &str) -> Res<&str, Vec<ConsTemplate>> {
+    tag("<null/>")(input).map(|(next, res)| (next, vec![]))
+}
+
+fn constructor_template(input: &str) -> Res<&str, ConstructorTemplate> {
+    tuple((
+        terminated(
+            delimited(tag("<construct_tpl"), take_until(">"), tag(">")),
+            line_ending,
+        ),
+        terminated(
+            alt((
+                terminated(
+                    separated_list0(line_ending, alt((op_template, handle_template))),
+                    line_ending,
+                ),
+                null_ops,
+            )),
+            tag("</construct_tpl>"),
+        ),
+    ))(input)
+    .map(|(next, res)| {
+        //println!("construtor_tpl {:?}", res);
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+
+        let num_labels = match attrs.len() {
+            0 => 0,
+            1 => u32dec(attrs[0].1),
+            _ => todo!(),
+        };
+
+        let constructor_template = ConstructorTemplate {
+            num_labels: num_labels,
+            statements: res.1,
+        };
+
+        (next, constructor_template)
+    })
+}
+
+fn constructor(input: &str) -> Res<&str, Constructor> {
+    tuple((
+        delimited(
+            tag("<constructor "),
+            take_until(">"),
+            terminated(tag(">"), line_ending),
+        ),
+        terminated(
+            tuple((
+                opt(terminated(operands, line_ending)),
+                opt(terminated(print_commands, line_ending)),
+                opt(terminated(context_ops, line_ending)),
+                opt(terminated(constructor_template, line_ending)),
+            )),
+            tag("</constructor>"),
+        ),
+    ))(input)
+    .map(|(next, res)| {
+        //println!("constructor {:?}", res.1);
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        //println!("{:?}", attrs);
+        let constructor = Constructor {
+            parent: u32hex(attrs[0].1),
+            first: i32dec(attrs[1].1),
+            length: u32dec(attrs[2].1),
+            operands: res.1 .0.unwrap_or_default(),
+            print_commands: res.1 .1,
+            context_ops: res.1 .2.unwrap_or_default(),
+            template: res.1 .3,
+        };
+        (next, constructor)
+    })
+}
+
+fn mask_word(input: &str) -> Res<&str, MaskWord> {
+    delimited(tag("<mask_word "), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
+        //println!("mask word {:?}", res);
+        let (_, attrs) = attrs(res).finish().unwrap();
+        let mask_word = MaskWord {
+            mask: u32hex(attrs[0].1),
+            val: u32hex(attrs[1].1),
+        };
+        (next, mask_word)
+    })
+}
+
+fn pattern_block(input: &str) -> Res<&str, PatternBlock> {
+    tuple((
+        terminated(
+            delimited(tag("<pat_block "), take_until(">"), tag(">")),
+            line_ending,
+        ),
+        alt((
+            terminated(
+                separated_list1(line_ending, preceded(space0, mask_word)),
+                line_ending,
+            ),
+            separated_list0(line_ending, mask_word),
+        )),
+        tag("</pat_block>"),
+    ))(input)
+    .map(|(next, res)| {
+        //println!("pattern block {:?}", res);
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        let pattern_block = PatternBlock {
+            offset: u32dec(attrs[0].1),
+            nonzero: u32dec(attrs[1].1),
+            masks: res.1,
+        };
+        (next, pattern_block)
+    })
+}
+
+fn combine_pattern(input: &str) -> Res<&str, DecisionPattern> {
+    delimited(
+        terminated(tag("<combine_pat>"), line_ending),
+        separated_pair(decision_pattern, line_ending, decision_pattern),
+        preceded(line_ending, tag("</combine_pat>")),
+    )(input)
+    .map(|(next, res)| {
+        //println!("combine pattern {:?}", res);
+        (
+            next,
+            DecisionPattern::Combine((Box::new(res.0), Box::new(res.1))),
+        )
+    })
+}
+
+fn context_pattern(input: &str) -> Res<&str, DecisionPattern> {
+    delimited(
+        terminated(tag("<context_pat>"), line_ending),
+        pattern_block,
+        preceded(line_ending, tag("</context_pat>")),
+    )(input)
+    .map(|(next, res)| {
+        //println!("context pattern {:?}", res);
+        (next, DecisionPattern::Context(res))
+    })
+}
+
+fn instruction_pattern(input: &str) -> Res<&str, DecisionPattern> {
+    delimited(
+        terminated(tag("<instruct_pat>"), line_ending),
+        pattern_block,
+        preceded(line_ending, tag("</instruct_pat>")),
+    )(input)
+    .map(|(next, res)| {
+        //println!("instruct pattern {:?}", res);
+        (next, DecisionPattern::Instruction(res))
+    })
+}
+
+fn decision_pattern(input: &str) -> Res<&str, DecisionPattern> {
+    alt((context_pattern, instruction_pattern, combine_pattern))(input)
+}
+
+fn decision_pair(input: &str) -> Res<&str, (u32, DecisionPattern)> {
+    tuple((
+        terminated(
+            delimited(tag("<pair "), take_until(">"), tag(">")),
+            line_ending,
+        ),
+        terminated(terminated(decision_pattern, line_ending), tag("</pair>")),
+    ))(input)
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        let id = u32dec(attrs[0].1);
+        (next, (id, res.1))
+    })
+}
+
+fn decision_pairs(input: &str) -> Res<&str, DecisionTree> {
+    separated_list1(line_ending, decision_pair)(input).map(|(next, res)| {
+        //println!("decision pairs {:?}", res);
+        (next, DecisionTree::Leaf(res))
+    })
+}
+
+fn decision_body(input: &str) -> Res<&str, DecisionTree> {
+    alt((decision_pairs, decision_tree))(input)
+}
+
+fn decision_tree(input: &str) -> Res<&str, DecisionTree> {
+    //println!("decision tree {}", &input[0..20]);
+    tuple((
+        delimited(
+            tag("<decision"),
+            take_until(">"),
+            terminated(tag(">"), line_ending),
+        ),
+        terminated(
+            alt((
+                terminated(separated_list1(line_ending, decision_body), line_ending),
+                separated_list0(line_ending, decision_body),
+            )),
+            tag("</decision>"),
+        ),
+    ))(input)
+    .map(|(next, res)| {
+        //println!("decision body {:?}", res);
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        //println!("{} {:?}", res.0, attrs);
+        let is_context = to_bool(attrs[1].1);
+        let start = u32dec(attrs[2].1);
+        let size = u32dec(attrs[3].1);
+        (
+            next,
+            DecisionTree::NonLeaf((is_context, start, size, res.1)),
+        )
+    })
+}
+
+fn subtable_sym(input: &str) -> Res<&str, Symbol> {
+    //println!("subtable_sym {}", &input[0..50]);
+    tuple((
+        delimited(
+            tag("<subtable_sym "),
+            take_until(">"),
+            terminated(tag(">"), line_ending),
+        ),
+        terminated(
+            tuple((
+                terminated(separated_list1(line_ending, constructor), line_ending),
+                decision_tree,
+            )),
+            preceded(line_ending, tag("</subtable_sym>")),
+        ),
+    ))(input)
+    .map(|(next, res)| {
+        //println!("{:?}", res.1.0.len());
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        //println!("{} {:?}", res.0, attrs);
+        let id = u32hex(attrs[1].1);
+        let subtable = Subtable {
+            name: attrs[0].1,
+            scope: u32hex(attrs[2].1),
+            constructors: res.1 .0,
+            decision_tree: res.1 .1,
+        };
+        (
+            next,
+            Symbol {
+                id: id,
+                body: SymbolBody::Subtable(subtable),
+            },
+        )
+    })
+}
+
+fn start_sym(input: &str) -> Res<&str, Symbol> {
+    delimited(tag("<start_sym "), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        let id = u32hex(attrs[1].1);
+        let sym_head = SymbolHead {
+            name: attrs[0].1,
+            scope: u32hex(attrs[2].1),
+        };
+        (
+            next,
+            Symbol {
+                id: id,
+                body: SymbolBody::Start(sym_head),
+            },
+        )
+    })
+}
+
+fn end_sym(input: &str) -> Res<&str, Symbol> {
+    delimited(tag("<end_sym "), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        let id = u32hex(attrs[1].1);
+        let sym_head = SymbolHead {
+            name: attrs[0].1,
+            scope: u32hex(attrs[2].1),
+        };
+        (
+            next,
+            Symbol {
+                id: id,
+                body: SymbolBody::End(sym_head),
+            },
+        )
+    })
+}
+
+fn next2_sym(input: &str) -> Res<&str, Symbol> {
+    delimited(tag("<next2_sym "), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        let id = u32hex(attrs[1].1);
+        let sym_head = SymbolHead {
+            name: attrs[0].1,
+            scope: u32hex(attrs[2].1),
+        };
+        (
+            next,
+            Symbol {
+                id: id,
+                body: SymbolBody::Next2(sym_head),
+            },
+        )
+    })
+}
+
+fn varnode_sym(input: &str) -> Res<&str, Symbol> {
+    terminated(
+        delimited(
+            tag("<varnode_sym "),
+            take_until(">"),
+            terminated(tag(">"), line_ending),
+        ),
+        tag("</varnode_sym>"),
+    )(input)
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        //println!("{} {:?}", res, attrs);
+        let id = u32hex(attrs[1].1);
+        let varnode = VarnodeSym {
+            name: attrs[0].1,
+            scope: u32hex(attrs[2].1),
+            space: attrs[3].1,
+            offset: u64hex(attrs[4].1),
+            size: u64dec(attrs[5].1),
+        };
+        (
+            next,
+            Symbol {
+                id: id,
+                body: SymbolBody::Varnode(varnode),
+            },
+        )
+    })
+}
+
+fn tokenfield(input: &str) -> Res<&str, Field> {
+    delimited(tag("<tokenfield"), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        let token_field = TokenField {
+            big_endian: to_bool(attrs[0].1),
+            sign_bit: to_bool(attrs[1].1),
+            start_bit: u32dec(attrs[2].1),
+            end_bit: u32dec(attrs[3].1),
+            start_byte: u32dec(attrs[4].1),
+            end_byte: u32dec(attrs[5].1),
+            shift: u32dec(attrs[6].1),
+        };
+        (next, Field::Token(token_field))
+    })
+}
+
+fn field(input: &str) -> Res<&str, Field> {
+    alt((contextfield, tokenfield))(input)
+}
+
+fn valuetab(input: &str) -> Res<&str, u64> {
+    //println!("valuetab {}", &input[0..20]);
+    delimited(tag("<valuetab"), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        let val = u64dec(attrs[0].1);
+        (next, val)
+    })
+}
+
+fn valuemap_sym(input: &str) -> Res<&str, Symbol> {
+    tuple((
+        delimited(
+            tag("<valuemap_sym "),
+            take_until(">"),
+            terminated(tag(">"), line_ending),
+        ),
+        terminated(
+            separated_pair(
+                field,
+                line_ending,
+                terminated(separated_list0(line_ending, valuetab), line_ending),
+            ),
+            tag("</valuemap_sym>"),
+        ),
+    ))(input)
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        let id = u32hex(attrs[1].1);
+        let valuemap = Valuemap {
+            name: attrs[0].1,
+            scope: u32hex(attrs[2].1),
+            field: res.1 .0,
+            vars: res.1 .1,
+        };
+        (
+            next,
+            Symbol {
+                id: id,
+                body: SymbolBody::Valuemap(valuemap),
+            },
+        )
+    })
+}
+
+fn nonnull_var(input: &str) -> Res<&str, Option<u32>> {
+    delimited(tag("<var"), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        let id = u32hex(attrs[0].1);
+        (next, Some(id))
+    })
+}
+
+fn null_var(input: &str) -> Res<&str, Option<u32>> {
+    tag("<null/>")(input).map(|(next, res)| (next, None))
+}
+
+fn var(input: &str) -> Res<&str, Option<u32>> {
+    //println!("var {}", &input[0..20]);
+    alt((nonnull_var, null_var))(input)
+}
+
+fn varlist_sym(input: &str) -> Res<&str, Symbol> {
+    //println!("varlist {}", &input[0..50]);
+    tuple((
+        delimited(
+            tag("<varlist_sym "),
+            take_until(">"),
+            terminated(tag(">"), line_ending),
+        ),
+        terminated(
+            separated_pair(
+                field,
+                line_ending,
+                terminated(separated_list0(line_ending, var), line_ending),
+            ),
+            tag("</varlist_sym>"),
+        ),
+    ))(input)
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        let id = u32hex(attrs[1].1);
+        let varlist = Varlist {
+            name: attrs[0].1,
+            scope: u32hex(attrs[2].1),
+            field: res.1 .0,
+            vars: res.1 .1,
+        };
+        (
+            next,
+            Symbol {
+                id: id,
+                body: SymbolBody::Varlist(varlist),
+            },
+        )
+    })
+}
+
+fn value_sym(input: &str) -> Res<&str, Symbol> {
+    tuple((
+        delimited(
+            tag("<value_sym "),
+            take_until(">"),
+            terminated(tag(">"), line_ending),
+        ),
+        terminated(tokenfield, preceded(line_ending, tag("</value_sym>"))),
+    ))(input)
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        let id = u32hex(attrs[1].1);
+        let value = Value {
+            name: attrs[0].1,
+            scope: u32hex(attrs[2].1),
+            field: res.1,
+        };
+        (
+            next,
+            Symbol {
+                id: id,
+                body: SymbolBody::Value(value),
+            },
+        )
+    })
+}
+
+fn context_sym(input: &str) -> Res<&str, Symbol> {
+    tuple((
+        delimited(
+            tag("<context_sym "),
+            take_until(">"),
+            terminated(tag(">"), line_ending),
+        ),
+        terminated(contextfield, preceded(line_ending, tag("</context_sym>"))),
+    ))(input)
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+
+        let context_field = match res.1 {
+            Field::Context(ctx_field) => ctx_field,
+            _ => panic!(),
+        };
+
+        let id = u32hex(attrs[1].1);
+
+        let context = Context {
+            name: attrs[0].1,
+            scope: u32hex(attrs[2].1),
+            varnode: u32hex(attrs[3].1),
+            low: u32dec(attrs[4].1),
+            high: u32dec(attrs[5].1),
+            flow: to_bool(attrs[6].1),
+            context_field: context_field,
+        };
+        (
+            next,
+            Symbol {
+                id: id,
+                body: SymbolBody::Context(context),
+            },
+        )
+    })
+}
+
+fn operand_sym(input: &str) -> Res<&str, Symbol> {
+    tuple((
+        delimited(
+            tag("<operand_sym "),
+            take_until(">"),
+            terminated(tag(">"), line_ending),
+        ),
+        terminated(
+            tuple((operand_expr, opt(preceded(line_ending, expr)))),
+            preceded(line_ending, tag("</operand_sym>")),
+        ),
+    ))(input)
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        //println!("{} {:?}", res.0, attrs);
+
+        let operand_expr = match res.1 .0 {
+            Expr::Operand(op_expr) => op_expr,
+            _ => panic!(),
+        };
+
+        let kvs: HashMap<&str, &str> = attrs.into_iter().collect();
+        let id = u32hex(kvs["id"]);
+
+        let operand = Operand {
+            name: kvs["name"],
+            scope: u32hex(kvs["scope"]),
+            subsym: kvs.get("subsym").map(|s| u32hex(s)).unwrap_or(0),
+            off: kvs.get("off").map(|s| u64dec(s)).unwrap_or(0),
+            base: kvs.get("base").map(|s| i64dec(s)).unwrap_or(0),
+            min_len: kvs.get("minlen").map(|s| u64dec(s)).unwrap_or(0),
+            idx: kvs.get("idx").map(|s| u64dec(s)).unwrap_or(0),
+            is_code: kvs.get("code").map(|s| to_bool(s)).unwrap_or(false),
+            operand_expr: operand_expr,
+            expr: res.1 .1,
+        };
+        (
+            next,
+            Symbol {
+                id: id,
+                body: SymbolBody::Operand(operand),
+            },
+        )
+    })
+}
+
+fn userop(input: &str) -> Res<&str, Symbol> {
+    delimited(tag("<userop "), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+        let id = u32hex(attrs[1].1);
+
+        let userop = UserOp {
+            name: attrs[0].1,
+            scope: u32hex(attrs[2].1),
+            idx: u32dec(attrs[3].1),
+        };
+
+        (
+            next,
+            Symbol {
+                id: id,
+                body: SymbolBody::UserOp(userop),
+            },
+        )
+    })
+}
+
+fn sym(input: &str) -> Res<&str, Symbol> {
+    //println!("** {}", &input[0..20]);
+    alt((
+        subtable_sym,
+        varnode_sym,
+        start_sym,
+        end_sym,
+        next2_sym,
+        valuemap_sym,
+        varlist_sym,
+        value_sym,
+        context_sym,
+        operand_sym,
+        userop,
+    ))(input)
+}
+
+fn symbol(input: &str) -> Res<&str, Symbol> {
+    alt((scope, sym_head, sym))(input)
+}
+
+fn symbol_table(input: &str) -> Res<&str, Vec<Symbol>> {
+    tuple((
+        terminated(
+            delimited(tag("<symbol_table "), take_until(">"), tag(">")),
+            line_ending,
+        ),
+        terminated(
+            separated_list1(line_ending, symbol),
+            preceded(line_ending, tag("</symbol_table>")),
+        ),
+    ))(input)
+    .map(|(next, res)| {
+        //println!("{:?}", res.1.len());
+        (next, res.1)
+    })
+}
+
+fn attrs(input: &str) -> Res<&str, Vec<(&str, &str)>> {
+    //println!("{:?}", &input);
+    preceded(
+        space0,
+        separated_list0(char(' '), separated_pair(identifier, char('='), string)),
+    )(input)
+    .map(|(next, res)| {
+        //println!("{:?}", res);
         (next, res)
     })
 }
 
-fn space_names_define(input: &str) -> Res<&str, DefineStmt> {
-    terminated(
-        tuple((
-            terminated(identifier, space1),
-            terminated(
-                preceded(
-                    tag("offset="),
-                    num
-                ),
-                space1),
-            terminated(
-                preceded(
-                    tag("size="),
-                    digit1
-                ),
-                space1),
-            space_name_list)),
-        tag(";")
-    )(input)
-    .map(|(next, res)| {
-        let size = res.2.parse::<u64>().unwrap();
-        (next, DefineStmt::Names(SpaceNamesDefinition { name: res.0, offset: res.1, size: size, names: res.3 }))
-    })
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct BitRange {
-    start: u64,
-    len: u64
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct BitRangeDefinition<'a> {
-    name: &'a str,
-    reg: &'a str,
-    range: BitRange
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum FieldAttribute {
-    SIGNED, HEX, DEC, NOFLOW
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct TokenField<'a> {
-    name: &'a str,
-    range: BitRange,
-    attrs: Vec<FieldAttribute>
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct ContextDefinition<'a> {
-    register: &'a str,
-    fields: Vec<TokenField<'a>>
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Token<'a> {
-    name: &'a str,
-    bit_size: u64,
-    fields: Vec<TokenField<'a>>
-}
-
-fn signed_attr(input: &str) -> Res<&str, FieldAttribute> {
-    tag("signed")(input)
-    .map(|(next, _)| {
-        (next, FieldAttribute::SIGNED)
-    })
-}
-
-fn hex_attr(input: &str) -> Res<&str, FieldAttribute> {
-    tag("hex")(input)
-    .map(|(next, _)| {
-        (next, FieldAttribute::HEX)
-    })
-}
-
-fn dec_attr(input: &str) -> Res<&str, FieldAttribute> {
-    tag("dec")(input)
-    .map(|(next, _)| {
-        (next, FieldAttribute::DEC)
-    })
-}
-
-fn noflow_attr(input: &str) -> Res<&str, FieldAttribute> {
-    tag("noflow")(input)
-    .map(|(next, _)| {
-        (next, FieldAttribute::NOFLOW)
-    })
-}
-
-fn token_attr(input: &str) -> Res<&str, FieldAttribute> {
-    alt((signed_attr, hex_attr, dec_attr, noflow_attr))(input)
-}
-
-fn token_field(input: &str) -> Res<&str, TokenField> {
-    terminated(
-        tuple((
-            terminated(identifier, terminated(delimited(space0, char('='), space0), char('('))),
-            terminated(digit1, char(',')),
-            terminated(digit1, char(')')),
-            opt(preceded(
-                space1,
-                separated_list1(space1, token_attr)
-            ))
-        )),
-        opt(comment_without_newline)
-    )(input)
-    .map(|(next, res)| {
-        let bit_start = res.1.parse::<u64>().unwrap();
-        let bit_end = res.2.parse::<u64>().unwrap();
-        let field = TokenField {
-                        name: res.0, 
-                        range: BitRange {
-                            start: bit_start,
-                            len: (bit_end - bit_start) + 1,
-                        },
-                        attrs: res.3.unwrap_or_else(|| Vec::new())
-                    };
-        (next, field)
-    })
-}
-
-fn context_define(input: &str) -> Res<&str, DefineStmt> {
-    terminated(
-        preceded(
-            terminated(tag("context"), space1),
-            separated_pair(
-                identifier,
-                multispace1,
-                separated_list1(multispace1, preceded(space0, token_field))
-            )
-        ),
-        preceded(multispace0, tag(";"))
-    )(input)
-    .map(|(next, res)| {
-        (next, DefineStmt::Context(ContextDefinition { register: res.0, fields: res.1 }))
-    })
-}
-
-fn token_define(input: &str) -> Res<&str, DefineStmt> {
-    terminated(
-        preceded(
-            terminated(tag("token"), space1),
-            separated_pair(
-                tuple((
-                    terminated(identifier, space1),
-                    delimited(char('('), digit1, char(')'))
-                )),
-                multispace1,
-                separated_list1(multispace1, preceded(space0, token_field))
-            )
-        ),
-        preceded(multispace0, tag(";"))
-    )(input)
-    .map(|(next, res)| {
-        let bit_size = res.0.1.parse::<u64>().unwrap();
-        (next, DefineStmt::Token(Token { name: res.0.0, bit_size: bit_size, fields: res.1 }))
-    })
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum DefineStmt<'a> {
-    Endianness(Endianness),
-    Alignment(u64),
-    Space(SpaceDefinition<'a>),
-    Names(SpaceNamesDefinition<'a>),
-    BitRange(Vec<BitRangeDefinition<'a>>),
-    PcodeOp(&'a str),
-    Context(ContextDefinition<'a>),
-    Token(Token<'a>),
-}
-
-fn pcodeop_define(input: &str) -> Res<&str, DefineStmt> {
-    terminated(
-        preceded(
-            tag("pcodeop "),
-            identifier
-        ),
-        terminated(preceded(space0, tag(";")), opt(comment_without_newline))
-    )(input)
-    .map(|(next, res)| {
-        (next, DefineStmt::PcodeOp(res))
-    })
-}
-
-fn bitrange_definition(input: &str) -> Res<&str, BitRangeDefinition> {
+pub fn program(input: &str) -> Res<&str, Program> {
     tuple((
-        terminated(identifier, tag("=")),
-        terminated(identifier, tag("[")),
-        terminated(digit1, tag(",")),
-        terminated(digit1, tag("]"))
+        terminated(
+            delimited(tag("<sleigh "), take_until(">"), tag(">")),
+            line_ending,
+        ),
+        terminated(source_files, line_ending),
+        terminated(spaces, line_ending),
+        terminated(symbol_table, line_ending),
     ))(input)
     .map(|(next, res)| {
-        let bit_start = res.2.parse::<u64>().unwrap();
-        let num_bits = res.3.parse::<u64>().unwrap();
-        (next, BitRangeDefinition {
-                name: res.0,
-                reg: res.1,
-                range: BitRange {
-                    start: bit_start, 
-                    len: num_bits
-                }
-            })
-    })
-}
-
-fn bitrange_define(input: &str) -> Res<&str, DefineStmt> {
-    terminated(
-        preceded(
-            tag("define bitrange "),
-            separated_list1(
-                multispace1,
-                bitrange_definition
-            )
-        ),
-        terminated(tag(";"), line_ending)
-    )(input)
-    .map(|(next, res)| {
-        (next, DefineStmt::BitRange(res))
-    })
-}
-
-fn big_endian(input: &str) -> Res<&str, Endianness> {
-    tag("big")(input)
-    .map(|(next, _)| {
-        (next, Endianness::BIG)
-    })
-}
-
-fn little_endian(input: &str) -> Res<&str, Endianness> {
-    tag("little")(input)
-    .map(|(next, _)| {
-        (next, Endianness::LITTLE)
-    })
-}
-
-fn endianness(input: &str) -> Res<&str, Endianness> {
-    alt((big_endian, little_endian))(input)
-}
-
-fn endianness_define(input: &str) -> Res<&str, DefineStmt> {
-    terminated(
-        preceded(tag("endian="), endianness),
-        terminated(tag(";"), line_ending))(input)
-    .map(|(next, res)| {
-        (next, DefineStmt::Endianness(res))
-    })
-}
-
-fn alignment_define(input: &str) -> Res<&str, DefineStmt> {
-    terminated(
-        terminated(
-            tag("alignment="),
-            digit1),
-        terminated(tag(";"), line_ending))(input)
-    .map(|(next, res)| {
-        (next, DefineStmt::Alignment(res.parse::<u64>().unwrap()))
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        let prog = Program {
+            version: u32::from_str_radix(attrs[0].1, 10).unwrap(),
+            bigendian: attrs[1].1.parse::<bool>().unwrap(),
+            align: u32::from_str_radix(attrs[2].1, 10).unwrap(),
+            uniqbase: u64::from_str_radix(&attrs[3].1[2..], 16).unwrap(),
+            default_space: res.2 .0,
+            spaces: res.2 .1,
+            symbols: res.3,
+        };
+        (next, prog)
     })
 }
 
 fn identifier(input: &str) -> Res<&str, &str> {
-    recognize(
-        pair(
-            alt((alpha1, tag("_"), tag("."))),
-            many0_count(alt((alphanumeric1, tag("_"), tag("."))))))(input)
-}
-
-fn define(input: &str) -> Res<&str, Stmt> {
-    preceded(
-        terminated(tag("define"), space1),
-        alt((
-            endianness_define,
-            alignment_define,
-            space_define,
-            space_names_define,
-            bitrange_define,
-            pcodeop_define,
-            context_define,
-            token_define)))(input)
-    .map(|(next, res)| {
-        //println!("{:?}", Stmt::Define(res.clone()));
-        (next, Stmt::Define(res))
-    })
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct VariableAttachStmt<'a> {
-    fields: Vec<SpaceName<'a>>,
-    registers: Vec<SpaceName<'a>>
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct ValueAttachStmt<'a> {
-    fields: Vec<SpaceName<'a>>,
-    values: Vec<u64>
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum AttachStmt<'a> {
-    Variable(VariableAttachStmt<'a>),
-    Value(ValueAttachStmt<'a>),
-}
-
-fn attach_variables(input: &str) -> Res<&str, AttachStmt> {
-    delimited(
-        terminated(tag("variables"), space1),
-        separated_pair(space_name_list, multispace1, space_name_list),
-        char(';')
-    )(input)
-    .map(|(next, res)| {
-        (next, AttachStmt::Variable(VariableAttachStmt { fields: res.0, registers: res.1 }))
-    })
-}
-
-fn num_list(input: &str) -> Res<&str, Vec<u64>> {
-    delimited(
-        terminated(char('['), space0),
-        separated_list1(space1, num),
-        preceded(space0, char(']'))
-    )(input)
-}
-
-fn attach_values(input: &str) -> Res<&str, AttachStmt> {
-    delimited(
-        terminated(tag("values"), space1),
-        separated_pair(space_name_list, multispace1, num_list),
-        char(';')
-    )(input)
-    .map(|(next, res)| {
-        (next, AttachStmt::Value(ValueAttachStmt { fields: res.0, values: res.1 }))
-    })
-}
-
-fn attach(input: &str) -> Res<&str, Stmt> {
-    preceded(
-        terminated(tag("attach"), space1),
-        alt((attach_variables, attach_values))
-    )(input)
-    .map(|(next, res)| {
-        //println!("{:?}", Stmt::Attach(res.clone()));
-        (next, Stmt::Attach(res))
-    })
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum DisplayPart<'a> {
-    Literal(char),
-    QuotedLiteral(&'a str),
-    Caret(Box<DisplayPart<'a>>),
-    Ident(&'a str),
-    Empty,
-    Space,
-}
-
-fn ident_display_part(input: &str) -> Res<&str, DisplayPart> {
-    identifier(input)
-    .map(|(next, res)| {
-        (next, DisplayPart::Ident(res))
-    })
-}
-
-fn is_not_ident_char(chr: char) -> bool {
-    let mut c = [0; 1];
-    let _ = chr.encode_utf8(&mut c);
-    is_alphanumeric(c[0])
-}
-
-fn is_space_char(chr: char) -> bool {
-    let mut c = [0; 1];
-    let _ = chr.encode_utf8(&mut c);
-    is_space(c[0])
-}
-
-fn space_display_part(input: &str) -> Res<&str, DisplayPart> {
-    space1(input)
-    .map(|(next, _)| {
-        (next, DisplayPart::Space)
-    })
-}
-
-fn literal_display_part(input: &str) -> Res<&str, DisplayPart> {
-    anychar(input)
-    .map(|(next, res)| {
-        (next, DisplayPart::Literal(res))
-    })
-}
-
-fn quoted_literal_display_part(input: &str) -> Res<&str, DisplayPart> {
-    delimited(
-        char('"'),
-        take_until("\""),
-        char('"')
-    )(input)
-    .map(|(next, res)| {
-        (next, DisplayPart::QuotedLiteral(res))
-    })
-}
-
-fn caret_literal_display_part(input: &str) -> Res<&str, DisplayPart> {
-    preceded(
-        char('^'),
-        display_part
-    )(input)
-    .map(|(next, res)| {
-        //println!("caret {:?}", res);
-        (next, DisplayPart::Caret(Box::new(res)))
-    })
-}
-
-fn display_part(input: &str) -> Res<&str, DisplayPart> {
-    alt((
-        caret_literal_display_part,
-        ident_display_part,
-        space_display_part,
-        quoted_literal_display_part,
-        literal_display_part
+    recognize(pair(
+        alt((alpha1, tag("_"), tag("."))),
+        many0_count(alt((alphanumeric1, tag("_"), tag(".")))),
     ))(input)
 }
 
-fn display_section(input: &str) -> Res<&str, Vec<DisplayPart>> {
-    //println!("{}", &input[0..20]);
-    take_until("is")(input)
-    .and_then(|(next, res)| {
-        if res.len() == 0 {
-            Ok((next, vec![DisplayPart::Empty]))
-        }
-        else {
-            //println!("{}", res.trim_end());
-            many1(display_part)(res.trim_end())
-            .map(|(_, res)| {
-                //println!("{:?}", res);
-                (next, res)
-            })
-        }
-    })
+fn identifier_ws(input: &str) -> Res<&str, &str> {
+    terminated(identifier, space0)(input)
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum PatternConstraint<'a> {
-    Eq((&'a str, u64)),
-    Neq((&'a str, u64)),
-    Less((&'a str, u64)),
+fn string(input: &str) -> Res<&str, &str> {
+    delimited(char('"'), take_until("\""), char('"'))(input)
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum PatternExpr<'a> {
-    Constraint(PatternConstraint<'a>),
-    And((Box<PatternExpr<'a>>, Box<PatternExpr<'a>>)),
-    Or((Box<PatternExpr<'a>>, Box<PatternExpr<'a>>)),
-    Concat((Box<PatternExpr<'a>>, Box<PatternExpr<'a>>)),
-    Extend(Box<PatternExpr<'a>>),
-    Constructor(&'a str),
-    Empty
+pub fn read_file(filename: &str) -> String {
+    fs::read_to_string(format!("{}/{}", SLEIGH_PATH, filename)).expect("can't read file")
 }
 
-fn eq_constraint(input: &str) -> Res<&str, PatternConstraint> {
-    separated_pair(
-        identifier,
-        delimited(space0, char('='), space0),
-        num
-    )(input)
-    .map(|(next, res)| {
-        (next, PatternConstraint::Eq(res))
-    })
-}
+fn match_ctx_pattern_block(block: &PatternBlock, words: &Vec<u32>) -> bool {
+    let mut word_idx = (block.offset / 4) as usize;
+    let mut byte_idx = block.offset % 4;
 
-fn neq_constraint(input: &str) -> Res<&str, PatternConstraint> {
-    separated_pair(
-        identifier,
-        delimited(space0, tag("!="), space0),
-        num
-    )(input)
-    .map(|(next, res)| {
-        (next, PatternConstraint::Neq(res))
-    })
-}
+    for (i, mask_word) in block.masks.iter().enumerate() {
+        let cw = words[word_idx];
+        let nw = if word_idx < words.len() - 1 { words[word_idx+1] } else { 0 };
+        let word = (cw & (((1_u64 << (32 - (byte_idx * 8))) - 1) as u32)).overflowing_shl(byte_idx * 8).0 | 
+                   nw.overflowing_shr(32 - (byte_idx * 8)).0;
 
-fn less_constraint(input: &str) -> Res<&str, PatternConstraint> {
-    separated_pair(
-        identifier,
-        delimited(space0, tag("<"), space0),
-        num
-    )(input)
-    .map(|(next, res)| {
-        (next, PatternConstraint::Less(res))
-    })
-}
+        word_idx += 1;
 
-fn constraint_pattern(input: &str) -> Res<&str, Box<PatternExpr>> {
-    alt((eq_constraint, neq_constraint, less_constraint))(input)
-    .map(|(next, res)| {
-        (next, Box::new(PatternExpr::Constraint(res)))
-    })
-}
-
-fn constructor_pattern(input: &str) -> Res<&str, Box<PatternExpr>> {
-    identifier(input)
-    .map(|(next, res)| {
-        (next, Box::new(PatternExpr::Constructor(res)))
-    })
-}
-
-fn _pattern_expr(input: &str) -> Res<&str, Box<PatternExpr>> {
-    let (rest, expr) = alt((
-        constraint_pattern,
-        constructor_pattern,
-        delimited(
-            terminated(char('('), space0),
-            pattern_expr,
-            preceded(space0, char(')'))
-        )
-    ))(input)?;
-
-    let rest_rest = rest.trim_start();
-    if rest_rest.len() >= 3 && &rest_rest[0..3] == "..." {
-        //let extend_expr = Box::new(PatternExpr::Extend(expr));
-        //return Ok((&rest_rest[3..rest_rest.len()], extend_expr));
-        return Ok((&rest_rest[3..rest_rest.len()], expr));
-    }
-
-    Ok((rest, expr))
-}
-
-fn pattern_expr(input: &str) -> Res<&str, Box<PatternExpr>> {
-    //println!("{}", &input[0..20]);
-    let (input, first_expr) = _pattern_expr(input)?;
-    let (input, ops) = many0(
-        pair(
-            delimited(
-                multispace0,
-                alt((
-                    tag("&"), tag("|"), tag(";"),
-                )),
-                multispace0
-            ),
-            _pattern_expr
-        )
-    )(input)?;
-    let (input, _) = take_while(is_space_char)(input)?;
-
-    let mut expr = first_expr;
-
-    for (op, operand) in ops {
-        expr = match op {
-            "&" => Box::new(PatternExpr::And((expr, operand))),
-            "|" => Box::new(PatternExpr::Or((expr, operand))),
-            ";" => Box::new(PatternExpr::Concat((expr, operand))),
-            _ => unreachable!("Unimplemented pattern opcode")
+        // let word = words[i];
+        // println!("ctx {:x} vs {:x}, {:x} ({:x})", word & mask_word.mask, mask_word.val, mask_word.mask, word);
+        if (word & mask_word.mask) != mask_word.val {
+            return false;
         }
     }
-
-    /*if input.len() >= 3 && &input[0..3] == "..." {
-        expr = Box::new(PatternExpr::Extend(expr));
-        return Ok((&input[3..input.len()], expr));
-    }*/
-
-    //println!("{:?}", expr);
-    Ok((input, expr))
+    true
 }
 
-fn pattern_section(input: &str) -> Res<&str, Box<PatternExpr>> {
-    preceded(
-        terminated(tag("is"), space1),
-        pattern_expr
-    )(input)
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum DisassemblyExpr<'a> {
-    Add((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
-    Sub((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
-    Mult((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
-    Div((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
-    ShiftLeft((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
-    ShiftRight((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
-    BitAnd((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
-    BitOr((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
-    BitXor((Box<DisassemblyExpr<'a>>, Box<DisassemblyExpr<'a>>)),
-    BitNot(Box<DisassemblyExpr<'a>>),
-    Ident(&'a str),
-    NUM(u64)
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct DisassemblyAction<'a> {
-    lvalue: &'a str,
-    rvalue: Box<DisassemblyExpr<'a>>
-}
-
-fn bit_not_disas_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
-    preceded(char('~'), disassembly_expr)(input)
-    .map(|(next, res)| {
-        (next, Box::new(DisassemblyExpr::BitNot(res)))
-    })
-}
-
-fn constructor_disas_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
-    identifier(input)
-    .map(|(next, res)| {
-        (next, Box::new(DisassemblyExpr::Ident(res)))
-    })
-}
-
-fn num_disas_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
-    num(input)
-    .map(|(next, res)| {
-        (next, Box::new(DisassemblyExpr::NUM(res)))
-    })
-}
-
-fn _disassembly_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
-    alt((
-        constructor_disas_expr,
-        num_disas_expr,
-        bit_not_disas_expr,
-        delimited(
-            char('('),
-            disassembly_expr,
-            char(')')
-        )
-    ))(input)
-}
-
-fn disassembly_expr(input: &str) -> Res<&str, Box<DisassemblyExpr>> {
-    let (input, first_expr) = _disassembly_expr(input)?;
-    let (input, ops) = many0(
-        pair(
-            delimited(
-                space0,
-                alt((tag("&"), tag("|"), tag("^"),
-                     tag("+"), tag("-"), tag("*"), tag("/"),
-                     tag(">>"), tag("<<"),
-                     tag("$and"), tag("$or")
-                )),
-                space0
-            ),
-            _disassembly_expr
-        )
-    )(input)?;
-
-    let mut expr = first_expr;
-
-    for (op, operand) in ops {
-        expr = match op {
-            "&" => Box::new(DisassemblyExpr::BitAnd((expr, operand))),
-            "|" => Box::new(DisassemblyExpr::BitOr((expr, operand))),
-            "^" => Box::new(DisassemblyExpr::BitXor((expr, operand))),
-            "+" => Box::new(DisassemblyExpr::Add((expr, operand))),
-            "-" => Box::new(DisassemblyExpr::Sub((expr, operand))),
-            "*" => Box::new(DisassemblyExpr::Mult((expr, operand))),
-            "/" => Box::new(DisassemblyExpr::Div((expr, operand))),
-            "<<" => Box::new(DisassemblyExpr::ShiftLeft((expr, operand))),
-            ">>" => Box::new(DisassemblyExpr::ShiftRight((expr, operand))),
-            "$and" => Box::new(DisassemblyExpr::BitAnd((expr, operand))),
-            "$or" => Box::new(DisassemblyExpr::BitOr((expr, operand))),
-            _ => unreachable!("Unimplemented disassembly action opcode")
+fn match_insn_pattern_block(block: &PatternBlock, words: &Vec<u8>) -> bool {
+    for (i, mask_word) in block.masks.iter().enumerate() {
+        let word = get_word(words, (block.offset as usize) + i * 4);
+        // println!("insn {:x} vs {:x}, {:x}", word & mask_word.mask, mask_word.val, mask_word.mask);
+        if (word & mask_word.mask) != mask_word.val {
+            return false;
         }
     }
-
-    println!("{:?}", expr);
-    Ok((input, expr))
+    true
 }
 
-fn disassembly_action(input: &str) -> Res<&str, DisassemblyAction> {
-    separated_pair(
-        identifier,
-        delimited(space0, char('='), space0),
-        terminated(disassembly_expr, char(';'))
-    )(input)
-    .map(|(next, res)| {
-        //println!("{:?}", res);
-        (next, DisassemblyAction { lvalue: res.0, rvalue: res.1 })
-    })
-}
-
-fn disassembly_actions(input: &str) -> Res<&str, &str> {
-    terminated(
-        preceded(
-            char('['),
-            take_until("]")
-        ),
-        char(']')
-    )(input)
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum SemanticExprGotoDest<'a> {
-    Ident(&'a str),
-    Label(&'a str)
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum SemanticExprCallDest<'a> {
-    Ident(&'a str),
-    Indirect(&'a str)
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct SemanticExprVariable<'a> {
-    name: &'a str,
-    size: Option<u64>
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct SemanticExprRef<'a> {
-    space: Option<&'a str>,
-    size: u64,
-    ptr: Box<SemanticExprValue<'a>>
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum SemanticExprLvalue<'a> {
-    Var(SemanticExprVariable<'a>),
-    Ref(Box<SemanticExprRef<'a>>)
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct SemanticExprNum {
-    value: u64,
-    size: Option<u64>
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum SemanticExprValue<'a> {
-    Add((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    Sub((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    Mult((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    Div((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SDiv((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    Rem((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SRem((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    ShiftLeft((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    ShiftRight((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SignedShiftRight((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    And((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    Or((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    Xor((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    Less((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SLess((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    LessEqual((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SLessEqual((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    Greater((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SGreater((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    GreaterEqual((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SGreaterEqual((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    FLess((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    FLessEqual((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    FGreater((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    FGreaterEqual((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    Eq((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    Neq((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    FEq((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    FNeq((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    BoolAnd((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    BoolOr((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    BoolXor((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    BoolNot(Box<SemanticExprValue<'a>>),
-    PopCount(Box<SemanticExprValue<'a>>),
-    ZEXT(Box<SemanticExprValue<'a>>),
-    SEXT(Box<SemanticExprValue<'a>>),
-    TwosComp(Box<SemanticExprValue<'a>>),
-    NEGATE(Box<SemanticExprValue<'a>>),
-    FNEGATE(Box<SemanticExprValue<'a>>),
-    ISNAN(Box<SemanticExprValue<'a>>),
-    INT2FLOAT(Box<SemanticExprValue<'a>>),
-    FLOAT2FLOAT(Box<SemanticExprValue<'a>>),
-    TRUNC(Box<SemanticExprValue<'a>>),
-    CEIL(Box<SemanticExprValue<'a>>),
-    ROUND(Box<SemanticExprValue<'a>>),
-    FLOOr(Box<SemanticExprValue<'a>>),
-    Carry((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SCarry((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    Borrow((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    SBorrow((Box<SemanticExprValue<'a>>, Box<SemanticExprValue<'a>>)),
-    UserDefined((&'a str, Vec<Box<SemanticExprValue<'a>>>)),
-    Variable(SemanticExprVariable<'a>),
-    Ref(Box<SemanticExprRef<'a>>),
-    AddrOf((Option<u64>, Box<SemanticExprValue<'a>>)),
-    Ident(&'a str),
-    NUM(SemanticExprNum),
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub enum SemanticExpr<'a> {
-    Export(Box<SemanticExprValue<'a>>),
-    Build(&'a str),
-    LocalAssign((SemanticExprLvalue<'a>, Option<Box<SemanticExprValue<'a>>>),),
-    Assign((SemanticExprLvalue<'a>, Box<SemanticExprValue<'a>>),),
-    IfGoto((Box<SemanticExprValue<'a>>, SemanticExprGotoDest<'a>)),
-    Goto(SemanticExprGotoDest<'a>),
-    Label(&'a str),
-    PcodeOpCall((&'a str, Vec<Box<SemanticExprValue<'a>>>)),
-    Call(SemanticExprCallDest<'a>)
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct SemanticAction<'a> {
-    expr: Box<SemanticExpr<'a>>,
-}
-
-fn ident_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    semantic_expr_variable(input)
-}
-
-fn num_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    tuple((
-        num,
-        opt(preceded(
-            char(':'),
-            num
-        ))
-    ))(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::NUM(SemanticExprNum { value: res.0, size: res.1 })))
-    })
-}
-
-fn zext_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    preceded(
-        tag("zext"),
-        delimited(
-            terminated(char('('), space0),
-            semantic_expr_value,
-            preceded(space0, char(')'))
-        )
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::ZEXT(res)))
-    })
-}
-
-fn sext_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    preceded(
-        tag("sext"),
-        delimited(
-            terminated(char('('), space0),
-            semantic_expr_value,
-            preceded(space0, char(')'))
-        )
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::SEXT(res)))
-    })
-}
-
-fn popcount_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    preceded(
-        tag("popcount"),
-        delimited(terminated(char('('), space0), semantic_expr_value, preceded(space0, char(')')))
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::PopCount(res)))
-    })
-}
-
-fn twos_comp_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    preceded(
-        tag("-"),
-        delimited(terminated(char('('), space0), semantic_expr_value, preceded(space0, char(')')))
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::TwosComp(res)))
-    })
-}
-
-fn negate_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    preceded(
-        tag("~"),
-        delimited(terminated(char('('), space0), semantic_expr_value, preceded(space0, char(')')))
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::NEGATE(res)))
-    })
-}
-
-fn fnegate_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    preceded(
-        tag("f-"),
-        delimited(terminated(char('('), space0), semantic_expr_value, preceded(space0, char(')')))
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::FNEGATE(res)))
-    })
-}
-
-fn nan_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    preceded(
-        tag("nan"),
-        delimited(terminated(char('('), space0), semantic_expr_value, preceded(space0, char(')')))
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::ISNAN(res)))
-    })
-}
-
-fn int2float_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    preceded(
-        tag("int2float"),
-        delimited(terminated(char('('), space0), semantic_expr_value, preceded(space0, char(')')))
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::INT2FLOAT(res)))
-    })
-}
-
-fn float2float_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    preceded(
-        tag("float2float"),
-        delimited(terminated(char('('), space0), semantic_expr_value, preceded(space0, char(')')))
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::FLOAT2FLOAT(res)))
-    })
-}
-
-fn trunc_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    preceded(
-        tag("trunc"),
-        delimited(terminated(char('('), space0), semantic_expr_value, preceded(space0, char(')')))
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::TRUNC(res)))
-    })
-}
-
-fn ceil_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    preceded(
-        tag("ceil"),
-        delimited(terminated(char('('), space0), semantic_expr_value, preceded(space0, char(')')))
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::CEIL(res)))
-    })
-}
-
-fn floor_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    preceded(
-        tag("floor"),
-        delimited(terminated(char('('), space0), semantic_expr_value, preceded(space0, char(')')))
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::FLOOr(res)))
-    })
-}
-
-fn round_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    preceded(
-        tag("round"),
-        delimited(terminated(char('('), space0), semantic_expr_value, preceded(space0, char(')')))
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::ROUND(res)))
-    })
-}
-
-fn carry_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    preceded(
-        tag("carry"),
-        delimited(
-            terminated(char('('), space0),
-            separated_pair(
-                semantic_expr_value,
-                terminated(char(','), space0),
-                semantic_expr_value,
-            ),
-            preceded(space0, char(')'))
-        )
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::Carry(res)))
-    })
-}
-
-fn scarry_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    preceded(
-        tag("scarry"),
-        delimited(
-            terminated(char('('), space0),
-            separated_pair(
-                semantic_expr_value,
-                terminated(char(','), space0),
-                semantic_expr_value,
-            ),
-            preceded(space0, char(')'))
-        )
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::SCarry(res)))
-    })
-}
-
-fn borrow_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    preceded(
-        tag("borrow"),
-        delimited(
-            terminated(char('('), space0),
-            separated_pair(
-                semantic_expr_value,
-                terminated(char(','), space0),
-                semantic_expr_value,
-            ),
-            preceded(space0, char(')'))
-        )
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::Borrow(res)))
-    })
-}
-
-fn sborrow_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    preceded(
-        tag("sborrow"),
-        delimited(
-            terminated(char('('), space0),
-            separated_pair(
-                semantic_expr_value,
-                terminated(char(','), space0),
-                semantic_expr_value,
-            ),
-            preceded(space0, char(')'))
-        )
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::SBorrow(res)))
-    })
-}
-fn bool_not_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    preceded(
-        char('!'),
-        alt((
-            delimited(
-                char('('),
-                semantic_expr_value,
-                char(')')
-            ),
-            semantic_expr_value
-        ))
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::BoolNot(res)))
-    })
-}
-
-fn no_param_semantic_expr_value(input: &str) -> Res<&str, Vec<Box<SemanticExprValue>>> {
-    Ok((input, vec![]))
-}
-
-fn _user_defined_semantic_expr_value(input: &str) -> Res<&str, (&str, Vec<Box<SemanticExprValue>>)> {
-    tuple((
-        identifier,
-        delimited(
-            terminated(char('('), space0),
-            separated_list0(terminated(char(','), space0), semantic_expr_value),
-            preceded(space0, char(')'))
-        )
-    ))(input)
-}
-
-fn user_defined_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    //println!("hello? {}", &input[0..20]);
-    _user_defined_semantic_expr_value(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::UserDefined(res)))
-    })
-}
-
-fn _ref_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprRef>> {
-    tuple((
-        preceded(
-            char('*'),
-            opt(delimited(
-                char('['),
-                identifier,
-                char(']')
-            ))
-        ),
-        preceded(
-            char(':'),
-            num
-        ),
-        preceded(
-            space1,
-            semantic_expr_value
-        )
-    ))(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprRef { space: res.0, size: res.1, ptr: res.2 }))
-    })
-}
-
-fn addrof_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    preceded(
-        char('&'),
-        tuple((
-            opt(preceded(char(':'), num)),
-            preceded(space0, semantic_expr_value)
-        ))
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::AddrOf(res)))
-    })
-}
-
-fn ref_semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    _ref_semantic_expr_value(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::Ref(res)))
-    })
-}
-
-fn ref_semantic_expr_value_lvalue(input: &str) -> Res<&str, SemanticExprLvalue> {
-    _ref_semantic_expr_value(input)
-    .map(|(next, res)| {
-        (next, SemanticExprLvalue::Ref(res))
-    })
-}
-
-fn _semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    alt((
-        alt((bool_not_semantic_expr_value,
-        twos_comp_semantic_expr_value,
-        negate_semantic_expr_value,
-        fnegate_semantic_expr_value)),
-        sext_semantic_expr_value,
-        zext_semantic_expr_value,
-        popcount_semantic_expr_value,
-        alt((nan_semantic_expr_value,
-        int2float_semantic_expr_value,
-        float2float_semantic_expr_value)),
-        alt((trunc_semantic_expr_value,
-        ceil_semantic_expr_value,
-        floor_semantic_expr_value,
-        round_semantic_expr_value,
-        carry_semantic_expr_value,
-        scarry_semantic_expr_value,
-        borrow_semantic_expr_value,
-        sborrow_semantic_expr_value)),
-        user_defined_semantic_expr_value,
-        ident_semantic_expr_value,
-        num_semantic_expr_value,
-        ref_semantic_expr_value,
-        addrof_semantic_expr_value,
-        delimited(
-            terminated(char('('), multispace0),
-            semantic_expr_value,
-            preceded(multispace0, char(')'))
-        )
-    ))(input)
-    .map(|(next, res)| {
-        //println!("{:?} {}", res, &next[0..20]);
-        (next, res)
-    })
-}
-
-fn semantic_expr_value(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    let (input, first_expr) = _semantic_expr_value(input)?;
-    let (input, ops) = many0(
-        pair(
-            delimited(
-                multispace0,
-                alt((
-                    tag("+"), tag("-"), tag("*"),
-                    alt((tag("/"), tag("s/"), tag("%"), tag("s%"))),
-                    alt((tag("<<"), tag(">>"), tag("s>>"))),
-                    tag("=="), tag("!="),
-                    alt((tag("&&"), tag("||"), tag("^^"))),
-                    alt((tag("&"), tag("|"), tag("^"))),
-                    alt((tag("<"), tag("s<"), tag(">"), tag("s>"))),
-                    alt((tag("<="), tag("s<="), tag("s>"), tag("s>="))),
-                    alt((tag("f<"), tag("f>"), tag("f<="), tag("f>="))),
-                    tag("f=="), tag("f!="),
-                    tag("f*"), tag("f/"), tag("f%")
-                )),
-                multispace0
-            ),
-            _semantic_expr_value
-        )
-    )(input)?;
-
-    let mut expr = first_expr;
-
-    for (op, operand) in ops {
-        expr = match op {
-            "+" => Box::new(SemanticExprValue::Add((expr, operand))),
-            "-" => Box::new(SemanticExprValue::Sub((expr, operand))),
-            "*" => Box::new(SemanticExprValue::Mult((expr, operand))),
-            "/" => Box::new(SemanticExprValue::Div((expr, operand))),
-            "s/" => Box::new(SemanticExprValue::SDiv((expr, operand))),
-            "%" => Box::new(SemanticExprValue::Rem((expr, operand))),
-            "s%" => Box::new(SemanticExprValue::SRem((expr, operand))),
-            "<<" => Box::new(SemanticExprValue::ShiftLeft((expr, operand))),
-            ">>" => Box::new(SemanticExprValue::ShiftRight((expr, operand))),
-            "s>>" => Box::new(SemanticExprValue::SignedShiftRight((expr, operand))),
-            "&" => Box::new(SemanticExprValue::And((expr, operand))),
-            "|" => Box::new(SemanticExprValue::Or((expr, operand))),
-            "^" => Box::new(SemanticExprValue::Xor((expr, operand))),
-            "<" => Box::new(SemanticExprValue::Less((expr, operand))),
-            "s<" => Box::new(SemanticExprValue::SLess((expr, operand))),
-            "<=" => Box::new(SemanticExprValue::LessEqual((expr, operand))),
-            "s<=" => Box::new(SemanticExprValue::SLessEqual((expr, operand))),
-            ">" => Box::new(SemanticExprValue::Greater((expr, operand))),
-            "s>" => Box::new(SemanticExprValue::SGreater((expr, operand))),
-            ">=" => Box::new(SemanticExprValue::GreaterEqual((expr, operand))),
-            "s>=" => Box::new(SemanticExprValue::SGreaterEqual((expr, operand))),
-            "f<" => Box::new(SemanticExprValue::FLess((expr, operand))),
-            "f<=" => Box::new(SemanticExprValue::FLessEqual((expr, operand))),
-            "f>" => Box::new(SemanticExprValue::FGreater((expr, operand))),
-            "f>=" => Box::new(SemanticExprValue::FGreaterEqual((expr, operand))),
-            "f==" => Box::new(SemanticExprValue::FEq((expr, operand))),
-            "f!=" => Box::new(SemanticExprValue::FNeq((expr, operand))),
-            "==" => Box::new(SemanticExprValue::Eq((expr, operand))),
-            "!=" => Box::new(SemanticExprValue::Neq((expr, operand))),
-            "&&" => Box::new(SemanticExprValue::BoolAnd((expr, operand))),
-            "||" => Box::new(SemanticExprValue::BoolOr((expr, operand))),
-            "^^" => Box::new(SemanticExprValue::BoolXor((expr, operand))),
-            _ => unreachable!()
+fn match_pattern(pattern: &DecisionPattern, insn_words: &Vec<u8>, ctx_words: &Vec<u32>) -> bool {
+    // TODO: Maybe use offset for ctx?
+    match pattern {
+        DecisionPattern::Context(pat_blk) => match_ctx_pattern_block(pat_blk, ctx_words),
+        DecisionPattern::Instruction(pat_blk) => match_insn_pattern_block(pat_blk, insn_words),
+        DecisionPattern::Combine((pat1, pat2)) => {
+            match_pattern(&*pat1, insn_words, ctx_words) && match_pattern(&*pat2, insn_words, ctx_words)
         }
     }
-
-    println!("{:?}", expr);
-    Ok((input, expr))
 }
 
-fn export_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
-    preceded(terminated(tag("export"), space1), semantic_expr_value)(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExpr::Export(res)))
-    })
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum MatchedSymbol<'a> {
+    Constructor((&'a Constructor<'a>, Vec<MatchedSymbol<'a>>)),
+    Symbol(&'a Symbol<'a>),
+    Literal(i64),
 }
 
-fn ident_semantic_expr_dest(input: &str) -> Res<&str, SemanticExprGotoDest> {
-    identifier(input)
-    .map(|(next, res)| {
-        (next, SemanticExprGotoDest::Ident(res))
-    })
+pub fn read_ctx(
+    ctx_reg: &VarnodeSym,
+    reg_space: &BitVec<u8, Msb0>,
+) -> Vec<u32> {
+    let mut words = vec![];
+    let mut size_left = ctx_reg.size * 8;
+
+    while size_left > 0 {
+        let start = (ctx_reg.offset * 8 + (words.len() as u64) * 32) as usize;
+        let end = (start + 32) as usize;
+        words.push(reg_space[start..end].load_be::<u32>());
+        size_left -= size_left.min(32);
+    }
+
+    words
 }
 
-fn goto_label_semantic_expr(input: &str) -> Res<&str, SemanticExprGotoDest> {
-    delimited(
-        char('<'),
-        identifier,
-        char('>'),
-    )(input)
-    .map(|(next, res)| {
-        (next, SemanticExprGotoDest::Label(res))
-    })
+fn write_ctx(
+    ctx: &Vec<u32>,
+    ctx_reg: &VarnodeSym,
+    reg_space: &mut BitVec<u8, Msb0>,
+) {
+    for (i, word) in ctx.iter().enumerate() {
+        let start = (ctx_reg.offset * 8 + (i as u64) * 32) as usize;
+        let end = (start + 32) as usize;
+        reg_space[start..end].store_be(*word);
+    }
 }
 
-fn goto_dest_semantic_expr(input: &str) -> Res<&str, SemanticExprGotoDest> {
-    alt((goto_label_semantic_expr, ident_semantic_expr_dest))(input)
+fn get_word(words: &Vec<u8>, start: usize) -> u32 {
+    let mut word: u32 = 0;
+
+    if words.len() > start {
+        word |= ((words[start] as u32) << 24);
+    }
+
+    if words.len() > start +1 {
+        word |= ((words[start+1] as u32) << 16);
+    }
+
+    if words.len() > start + 2 {
+        word |= ((words[start+2] as u32) << 8);
+    }
+
+    if words.len() > start + 3 {
+        word |= words[start+3] as u32;
+    }
+
+    word
 }
 
-fn label_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
-    delimited(
-        char('<'),
-        identifier,
-        char('>'),
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExpr::Label(res)))
-    })
-}
+fn resolve_constructor<'a>(
+    words: &Vec<u8>,
+    table: &'a Subtable,
+    symbols: &'a HashMap<u32, Symbol>,
+    ctx: &mut Vec<u32>,
+) -> Option<(&'a Constructor<'a>, usize)> {
+    let mut dtree = &table.decision_tree;
+    let mut bits_consumed = 0;
 
-fn ifgoto_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
-    //println!("{}", &input[0..50]);
-    tuple((
-        delimited(
-            terminated(tag("if"), space1),
-            delimited(
-                terminated(char('('), space0),
-                semantic_expr_value,
-                preceded(space0, char(')'))
-            ),
-            space1
-        ),
-        preceded(
-            terminated(tag("goto"), space1),
-            goto_dest_semantic_expr
-        )
-    ))(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExpr::IfGoto(res)))
-    })
-}
+    loop {
+        match dtree {
+            DecisionTree::NonLeaf((is_context, start, size, children)) => {
+                if *size == 0 && children.len() == 1 {
+                    dtree = &children[0];
+                    continue;
+                }
 
-fn goto_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
-    //println!("goto hello? {}", &input[0..20]);
-    preceded(
-        terminated(tag("goto"), space1),
-        goto_dest_semantic_expr
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExpr::Goto(res)))
-    })
-}
+                let bit_start = 32 - (start + size);
 
-fn build_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
-    //println!("build hello? {}", &input[0..20]);
-    preceded(terminated(tag("build"), space1), identifier)(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExpr::Build(res)))
-    })
-}
-
-fn _semantic_expr_variable(input: &str) -> Res<&str, SemanticExprVariable> {
-    tuple((
-        identifier,
-        opt(preceded(char(':'), num))
-    ))(input)
-    .map(|(next, res)| {
-        (next, SemanticExprVariable { name: res.0, size: res.1 })
-    })
-}
-
-fn semantic_expr_variable(input: &str) -> Res<&str, Box<SemanticExprValue>> {
-    _semantic_expr_variable(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExprValue::Variable(res)))
-    })
-}
-
-fn semantic_expr_variable_lvalue(input: &str) -> Res<&str, SemanticExprLvalue> {
-    _semantic_expr_variable(input)
-    .map(|(next, res)| {
-        (next, SemanticExprLvalue::Var(res))
-    })
-}
-
-fn semantic_expr_lvalue(input: &str) -> Res<&str, SemanticExprLvalue> {
-    alt((semantic_expr_variable_lvalue, ref_semantic_expr_value_lvalue))(input)
-}
-
-fn local_assign_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
-    //println!("local hello? {}", &input[0..20]);
-    preceded(
-        terminated(tag("local"), space1),
-        tuple((
-            semantic_expr_lvalue,
-            opt(preceded(
-                delimited(space0, char('='), space0),
-                semantic_expr_value
-            ))
-        ))
-    )(input)
-    .map(|(next, res)| {
-        (next, Box::new(SemanticExpr::LocalAssign(res)))
-    })
-}
-
-fn assign_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
-    //println!("assign hello? {}", &input[0..20]);
-    separated_pair(
-        semantic_expr_lvalue,
-        delimited(space0, char('='), space0),
-        semantic_expr_value
-    )(input)
-    .map(|(next, res)| {
-        //println!("{:?}", res);
-        (next, Box::new(SemanticExpr::Assign(res)))
-    })
-}
-
-fn pcodeop_call_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
-    //println!("call hello? {}", &input[0..20]);
-    _user_defined_semantic_expr_value(input)
-    .map(|(next, res)| {
-        //println!("{:?}", res);
-        (next, Box::new(SemanticExpr::PcodeOpCall(res)))
-    })
-}
-
-fn call_dest_identifier(input: &str) -> Res<&str, SemanticExprCallDest> {
-    identifier(input)
-    .map(|(next, res)| {
-        (next, SemanticExprCallDest::Ident(res))
-    })
-}
-
-fn call_dest_indirect(input: &str) -> Res<&str, SemanticExprCallDest> {
-    delimited(
-        char('['),
-        identifier,
-        char(']'),
-    )(input)
-    .map(|(next, res)| {
-        (next, SemanticExprCallDest::Indirect(res))
-    })
-}
-
-fn call_dest_semantic_expr_value(input: &str) -> Res<&str, SemanticExprCallDest> {
-    alt((call_dest_identifier, call_dest_indirect))(input)
-}
-
-fn call_semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
-    //println!("call hello? {}", &input[0..20]);
-    //_user_defined_semantic_expr_value(input)
-    preceded(
-        terminated(tag("call"), space1),
-        call_dest_semantic_expr_value
-    )(input)
-    .map(|(next, res)| {
-        //println!("{:?}", res);
-        (next, Box::new(SemanticExpr::Call(res)))
-    })
-}
-
-fn semantic_expr(input: &str) -> Res<&str, Box<SemanticExpr>> {
-    alt((
-        ifgoto_semantic_expr,
-        goto_semantic_expr,
-        export_semantic_expr,
-        build_semantic_expr,
-        local_assign_semantic_expr,
-        assign_semantic_expr,
-        call_semantic_expr,
-        pcodeop_call_semantic_expr
-    ))(input)
-    .map(|(next, res)| {
-        println!("{:?}", res);
-        (next, res)
-    })
-}
-
-fn semantic_action(input: &str) -> Res<&str, SemanticAction> {
-    alt((
-        label_semantic_expr,
-        terminated(semantic_expr, preceded(space0, char(';')))
-    ))(input)
-    .and_then(|(next, res)| {
-        let action = SemanticAction { expr: res };
-        for c in next.chars().skip_while(|&c| c.is_whitespace()) {
-            if c == '#' {
-                return line_end_comment_without_newline(next)
-                        .map(|(next, _)| {
-                            (next, action)
-                        })
+                if !is_context {
+                    // println!("-- {} {} {}", bit_start, start, size);
+                    let word = get_word(words, 0);
+                    let idx = ((word >> bit_start) & ((1 << size) - 1)) as usize;
+                    // println!("{} {} {}", start, size, idx);
+                    dtree = &children[idx.min(children.len() - 1)];
+                    bits_consumed = bits_consumed.max(start + size);
+                } else {
+                    // let ctx_start = (ctx_reg.offset * 8 + (*start as u64)) as usize;
+                    // let ctx_end = ctx_start + (*size as usize);
+                    // let idx = reg_space[ctx_start..ctx_end].load_be::<usize>();
+                    let ctx_word = ctx[(*start as usize) / 32];
+                    let idx = (ctx_word.overflowing_shr(bit_start).0 & ((1 << size) - 1)) as usize;
+                    // println!("~~~ ctx {} {} {}", start, size, idx);
+                    dtree = &children[idx.min(children.len() - 1)];
+                }
             }
-            break;
-        }
-        Ok((next, action))
-    })
-    /*.map(|(next, res)| {
-        //println!("{:?}", res);
-        (next, SemanticAction { expr: res })
-    })*/
-}
+            DecisionTree::Leaf(pairs) => {
+                // let ctx_base = (ctx_reg.offset * 8) as usize;
+                // let ctx_end = ctx_base + (32 as usize);
+                // // let ctx_words = reg_space[ctx_base..ctx_end].load_be::<u32>();
+                // let ctx_words = read_ctx(ctx_reg, reg_space);
+                // println!("--> ctx: {:?} {:?}", ctx_words, pairs);
 
-fn single_semantic_action(input: &str) -> Res<&str, Vec<SemanticAction>> {
-    semantic_action(input)
-    .map(|(next, res)| {
-        (next, vec![res])
-    })
-}
+                for (ct_id, pattern) in pairs {
+                    let ct = &table.constructors[*ct_id as usize];
+                    // println!("{:?}", ct.print_commands);
 
-fn semantic_actions(input: &str) -> Res<&str, &str> {
-    //println!("HERE {}", &input[0..50]);
-    terminated(
-        preceded(
-            char('{'),
-            take_until("}")
-        ),
-        char('}')
-    )(input)
-    .and_then(|(next, res)| {
-        for c in next.chars().skip_while(|&c| c.is_whitespace()) {
-            if c == '#' {
-                return line_end_comment_without_newline(next)
-                        .map(|(next, _)| {
-                            (next, res)
-                        })
+                    if match_pattern(pattern, &words, &ctx) {
+                        // println!("matched {:?}", ct.print_commands);
+                        return Some((ct, bits_consumed as usize));
+                        // return Some(ct);
+                    }
+                }
+
+                println!("did not match");
+                return None;
             }
-            break;
-        }
-        Ok((next, res))
-    })
-    /*.map(|(next, res)| {
-        println!("{:?}", res);
-        (next, res)
-    })*/
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct ConstructorStmt<'a> {
-    table: &'a str,
-    display: Vec<DisplayPart<'a>>,
-    pattern: Box<PatternExpr<'a>>,
-    actions: Option<&'a str>,
-    semantics: &'a str
-}
-
-fn is_not_colon(chr: char) -> bool {
-    chr != ':'
-}
-
-fn table_header(input: &str) -> Res<&str, &str> {
-    terminated(
-        take_while(is_not_colon),
-        char(':')
-    )(input)
-    .map(|(next, res)| {
-        //println!("table \"{}\"", res);
-        if res.len() == 0 {
-            (next, "instruction")
-        }
-        else {
-            (next, res)
-        }
-    })
-}
-
-fn constructor(input: &str) -> Res<&str, Stmt> {
-    tuple((
-        terminated(table_header, space0),
-        display_section,
-        terminated(pattern_section, multispace0),
-        opt(terminated(disassembly_actions, multispace0)),
-        terminated(semantic_actions, space0),
-    ))(input)
-    .map(|(next, res)| {
-        let constructor = ConstructorStmt {
-            table: res.0,
-            display: res.1,
-            pattern: res.2,
-            actions: res.3,
-            semantics: res.4
         };
-        //println!("{:#?}", Stmt::Constructor(constructor.clone()));
-        (next, Stmt::Constructor(constructor))
-    })
+    }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct MacroStmt<'a> {
-    name: &'a str,
-    params: Vec<&'a str>,
-    body: &'a str
+fn resolve_varlist<'a>(
+    words: &Vec<u8>,
+    varlist: &'a Varlist,
+    symbols: &'a HashMap<u32, Symbol>,
+    ctx: &mut Vec<u32>,
+) -> Option<(MatchedSymbol<'a>, usize)> {
+    match &varlist.field {
+        Field::Token(token) => {
+            // println!("{:?}", token);
+            let num_bytes = (token.end_byte - token.start_byte + 1) as usize;
+            let sb = token.start_byte as usize;
+            let mut token_word: u32 = 0;
+
+            for i in 0..num_bytes {
+                token_word <<= 8;
+                token_word |= words[sb + i] as u32;
+            }
+
+            let start = token.start_bit;
+            let size = token.end_bit - start + 1;
+            let idx = ((token_word >> start) & ((1 << size) - 1)) as usize;
+            let var = &symbols[&varlist.vars[idx].unwrap()];
+
+            // Not super sure if this size calculation is right but it seems to work.
+            Some(((MatchedSymbol::Symbol(var)), (token.end_byte * 8 + (8 - token.end_bit - 1) + size) as usize))
+        }
+        _ => todo!(),
+    }
 }
 
-fn sleigh_macro(input: &str) -> Res<&str, Stmt> {
-    tuple((
-        preceded(terminated(preceded(space0, tag("macro")), space1), identifier),
-        terminated(
-            delimited(
-                terminated(preceded(multispace0, char('(')), multispace0),
-                separated_list0(terminated(char(','), space0), identifier),
-                preceded(multispace0, char(')'))
-            ),
-            space0
-        ),
-        semantic_actions
-    ))(input)
-    .map(|(next, res)| {
-        let mac = MacroStmt {
-            name: res.0,
-            params: res.1,
-            body: res.2,
-        };
-        //println!("{:#?}", Stmt::Macro(mac.clone()));
-        (next, Stmt::Macro(mac))
-    })
-}
+fn resolve_operands<'a>(
+    words: &Vec<u8>,
+    ct: &'a Constructor,
+    symbols: &'a HashMap<u32, Symbol>,
+    ctx: &mut Vec<u32>,
+) -> (Vec<MatchedSymbol<'a>>, usize) {
+    let mut matched_ops = vec![];
+    let mut bit_end: usize = 0;
+    // println!("{:?}\n", ct);
 
-type DecisionTreeInner<'a> = (
-    &'a mut Vec<Vec<u8>>,
-    &'a mut Vec<&'a str>,
-    &'a mut Vec<Vec<Vec<u8>>>
-);
+    for op_idx in &ct.operands {
+        let operand = get_operand(&op_idx, &symbols);
+        // println!("{} {:?}\n", op_idx, operand);
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct DecisionTree<'a> {
-    context_masks: Vec<Vec<u8>>,
-    token_names: Vec<&'a str>,
-    token_masks: Vec<Vec<Vec<u8>>>
-}
+        match &operand.expr {
+            Some(Expr::Field(Field::Token(expr))) => {
+                // TODO: Handle end_byte.
+                let size = expr.end_bit - expr.start_bit + 1;
+                let bit_start = 8 - (expr.start_bit + size);
+                // let val = ((words[expr.start_byte as usize] >> bit_start) & ((1 << size) - 1)) as i64;
+                let val = (words[expr.start_byte as usize] >> expr.start_bit) & ((1 << size) - 1);
+                // println!("{}", val);
+                matched_ops.push(MatchedSymbol::Literal(val as i64));
+                bit_end = bit_end.max((expr.end_byte * 8 + size) as usize);
+            },
+            None => {
+                let op_sym = &symbols[&operand.subsym];
+                let new_words = words[(operand.off as usize)..].to_vec(); // TODO: Remove this clone.
 
-#[repr(u8)]
-#[derive(PartialEq, Eq, Hash, Copy, Clone, Debug)]
-pub enum TernaryBit {
-    DontCare = 1,
-    Zero,
-    One,
-    Always
-}
+                // Before recursively resolving a symbol, we first need to modify the context.
+                for op in &ct.context_ops {
+                    let existing = ctx[op.i as usize];
+                    let mask = op.mask;
+                    // println!("{:?}", op);
 
-impl<'a> TernaryBit {
-    pub fn from(value: u8) -> Self {
-        match value {
-            0 => TernaryBit::Zero,
-            1 => TernaryBit::One,
-            _ => panic!()
+                    match &op.expr {
+                        Expr::Const(val) => {
+                            // let v = 0xffffffff_u32.overflowing_shr(op.shift).0;
+                            let v = ((*val as u32) << op.shift);
+                            ctx[op.i as usize] = (existing & !mask) | (v & mask);
+                            // ctx[op.i as usize] = existing | (v & mask);
+                        },
+                        Expr::Operand(op_expr) if (op_expr.idx as usize) < matched_ops.len() => {
+                            if let MatchedSymbol::Literal(val) = &matched_ops[op_expr.idx as usize] {
+                                // println!("{}", val);
+                                // let v = 0xffffffff_u32.overflowing_shr(op.shift).0;
+                                let v = ((*val as u32) << op.shift);
+                                ctx[op.i as usize] = (existing & !mask) | (v & mask);
+                                // ctx[op.i as usize] = existing | (v & mask);
+                            }
+                        },
+                        _ => todo!("{:?}", op.expr),
+                    };
+
+                    // println!("ctx: {:x}", ctx[op.i as usize]);
+                }
+
+                // write_ctx(&ctx, ctx_reg, reg_space);
+
+                match resolve_symbol(&new_words, op_sym, symbols, ctx) {
+                    Some((matched_sym, sub_bit_end)) => {
+                        matched_ops.push(matched_sym);
+                        // println!("sub-constructor took {} bits, started at bit {}", sub_bit_end, operand.off * 8);
+                        bit_end = bit_end.max((operand.off * 8) as usize + sub_bit_end);
+                    },
+                    None => (),
+                };
+            },
+            _ => todo!()
         }
     }
 
-    pub fn or(&self, other: u8) -> Self {
-        match TernaryBit::from(other) {
-            TernaryBit::Zero => {
-                match self {
-                    TernaryBit::Zero => TernaryBit::Zero,
-                    TernaryBit::One => TernaryBit::One,
-                    TernaryBit::Always => TernaryBit::Always,
-                    _ => TernaryBit::Zero
-                }
-            },
-            TernaryBit::One => {
-                match self {
-                    TernaryBit::Zero => TernaryBit::One,
-                    TernaryBit::One => TernaryBit::One,
-                    TernaryBit::Always => TernaryBit::Always,
-                    _ => TernaryBit::Zero
-                }
-            },
-            TernaryBit::Always => {
-                TernaryBit::Always
-            },
-            _ => *self
-        }
-    }
+    (matched_ops, bit_end)
+}
 
-    pub fn and(&self, other: &TernaryBit) -> Self {
-        match other {
-            TernaryBit::DontCare => *other,
-            TernaryBit::Zero => TernaryBit::Zero,
-            TernaryBit::One => {
-                match self {
-                    TernaryBit::Zero => TernaryBit::Zero,
-                    TernaryBit::One => TernaryBit::One,
-                    TernaryBit::Always => TernaryBit::Always,
-                    _ => TernaryBit::DontCare
+pub fn resolve_symbol<'a>(
+    words: &Vec<u8>,
+    sym: &'a Symbol,
+    symbols: &'a HashMap<u32, Symbol>,
+    ctx: &mut Vec<u32>,
+) -> Option<(MatchedSymbol<'a>, usize)> {
+    // println!("{}", sym.id);
+    match &sym.body {
+        SymbolBody::Subtable(table) => {
+            //println!("{:#?}", table);
+            match resolve_constructor(words, table, symbols, ctx) {
+                Some((ct, bit_end)) => {
+                    // println!("constructor took {} bits", bit_end);
+                    let (operands, ops_bit_end) = resolve_operands(words, ct, symbols, ctx);
+                    // println!("operands took {} bits", ops_bit_end);
+                    Some((MatchedSymbol::Constructor((ct, operands)), bit_end.max(ops_bit_end)))
                 }
-            },
-            TernaryBit::Always => {
-                match self {
-                    TernaryBit::Zero => TernaryBit::Zero,
-                    TernaryBit::One => TernaryBit::Always,
-                    TernaryBit::Always => TernaryBit::Always,
-                    _ => TernaryBit::DontCare
-                }
-            },
+                None => None,
+            }
         }
+        SymbolBody::Varlist(varlist) => {
+            //println!("{}", varlist.name);
+            resolve_varlist(words, varlist, symbols, ctx)
+        }
+        _ => todo!(),
+    }
+}
+
+fn get_table<'a>(id: u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Subtable<'a> {
+    let sym = &symbols[&id];
+    match &sym.body {
+        SymbolBody::Subtable(subtable) => subtable,
+        _ => panic!(),
+    }
+}
+
+fn get_operand<'a>(id: &u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Operand<'a> {
+    let sym = &symbols[id];
+    match &sym.body {
+        SymbolBody::Operand(operand) => operand,
+        _ => panic!(),
     }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum BitPattern<'a> {
-    Context(Vec<TernaryBit>),
-    Token((&'a str, Vec<TernaryBit>)),
-    Concat((Box<BitPattern<'a>>, Box<BitPattern<'a>>)),
+pub enum VarnodeValue<'a> {
+    String(&'a str),
+    Int(u64),
+    Op(&'a Varnode),
 }
 
-fn _eval_eq_constraint<'a>(val: u64, size: usize, start: usize, totalSize: usize) -> Vec<TernaryBit> {
-    let mut mask: Vec<TernaryBit> = Vec::with_capacity(totalSize);
-    for _ in 0..totalSize {
-        mask.push(TernaryBit::DontCare);
-    }
-    for i in 0..size {
-        let bit = ((val >> i) & 1) as u8;
-        mask[start + i] = mask[start + i].or(bit);
-    }
-    return mask;
-}
-
-fn _eval_token<'a>(val: u64, size: usize, start: usize, totalSize: usize) -> Vec<TernaryBit> {
-    let mut mask: Vec<TernaryBit> = Vec::with_capacity(totalSize);
-    for _ in 0..totalSize {
-        mask.push(TernaryBit::DontCare);
-    }
-    for i in 0..size {
-        let bit = ((val >> i) & 1) as u8;
-        mask[start + i] = mask[start + i].or(bit);
-    }
-    return mask;
-}
-
-fn _eval_field<'a>(size: usize, start: usize, totalSize: usize) -> Vec<TernaryBit> {
-    let mut mask: Vec<TernaryBit> = Vec::with_capacity(totalSize);
-    for _ in 0..totalSize {
-        mask.push(TernaryBit::DontCare);
-    }
-    for i in 0..size {
-        mask[start + i] = TernaryBit::Always;
-    }
-    return mask;
-}
-
-fn eval_eq_constraint<'a>
-(
-    field_name: &'a str,
-    val: u64,
-    tokens: &'a HashMap<&'a str, (&'a Token<'a>, &'a TokenField)>,
-    ctx_reg: &BitRange,
-    ctx_fields: &HashMap<&'a str, &BitRange>
-) -> Vec<(Option<BitPattern<'a>>, BitPattern<'a>)>
-{
-    if let Some(ctx_field) = ctx_fields.get(field_name) {
-        println!("{}, {:?}", field_name, ctx_field);
-        let mask = _eval_eq_constraint(val, ctx_field.len as usize, ctx_field.start as usize, ctx_reg.len as usize);
-        return vec![(BitPattern::Context(mask)), vec![]);
-    }
-    else if let Some((token, token_field)) = tokens.get(field_name) {
-        let mask = _eval_eq_constraint(val, token_field.range.len as usize, token_field.range.start as usize, token.bit_size as usize);
-        return (None, vec![BitPattern::Token((token.name, mask))]);
-    }
-    else {
-        panic!("Pattern op is neither a context field nor a token field");
+fn build_value<'a>(const_tpl: &'a ConstTemplate, operands: &'a Vec<Varnode>) -> VarnodeValue<'a> {
+    match const_tpl {
+        ConstTemplate::SpaceId(space) => VarnodeValue::String(space),
+        ConstTemplate::Val(val) => VarnodeValue::Int(*val),
+        ConstTemplate::Handle(idx) => VarnodeValue::Op(&operands[*idx as usize]),
+        ConstTemplate::Relative(idx) => todo!(),
+        ConstTemplate::Start => todo!(),
+        ConstTemplate::Next => todo!(),
+        ConstTemplate::CurSpace => todo!(),
+        ConstTemplate::CurSpaceSize => todo!(),
     }
 }
 
-fn eval_constraint<'a>
-(
-    constraint: &PatternConstraint<'a>,
-    tokens: &'a HashMap<&'a str, (&'a Token<'a>, &TokenField)>,
-    ctx_reg: &BitRange,
-    ctx_fields: &HashMap<&'a str, &BitRange>
-) -> Vec<BitPattern<'a>>
-{
-    match constraint {
-        PatternConstraint::Eq((field_name, val)) => eval_eq_constraint(field_name, *val, &tokens, &ctx_reg, &ctx_fields),
+fn build_handle<'a>(
+    handle_tpl: &'a HandleTemplate,
+    operands: &'a Vec<Varnode>,
+    spaces: &'a HashMap<&'a str, u64>,
+    varnode_map: &'a HashMap<(u64, u64), &'a str>,
+) -> Varnode {
+    let space = match build_value(&handle_tpl.space_template, operands) {
+        VarnodeValue::String(name) => name,
+        VarnodeValue::Op(op) => op.space.as_str(),
+        _ => panic!(),
+    };
+
+    let offset = match build_value(&handle_tpl.offset_template, operands) {
+        VarnodeValue::Int(off) => off,
+        VarnodeValue::Op(op) => op.offset,
+        VarnodeValue::String(name) => spaces[name],
+        _ => panic!(),
+    };
+
+    let size = match build_value(&handle_tpl.size_template, operands) {
+        VarnodeValue::Int(sz) => sz,
+        VarnodeValue::Op(op) => op.size,
+        _ => panic!(),
+    };
+
+    let name = match space {
+        "register" => varnode_map.get(&(offset, size)).map(|x| x.to_string()),
+        _ => None,
+    };
+
+    Varnode {
+        name: name,
+        space: space.to_owned(),
+        offset: offset,
+        size: size,
+    }
+}
+
+fn build_varnode<'a>(
+    vnode_tpl: &'a VarnodeTemplate,
+    operands: &'a Vec<Varnode>,
+    spaces: &'a HashMap<&'a str, u64>,
+    varnode_map: &'a HashMap<(u64, u64), &'a str>,
+) -> Varnode {
+    //println!("varnode {:?}", vnode_tpl);
+    let space = match build_value(&vnode_tpl.space_template, operands) {
+        VarnodeValue::String(name) => name,
+        VarnodeValue::Op(op) => op.space.as_str(),
+        _ => panic!(),
+    };
+
+    let offset = match build_value(&vnode_tpl.offset_template, operands) {
+        VarnodeValue::Int(off) => off,
+        VarnodeValue::Op(op) => op.offset,
+        VarnodeValue::String(name) => spaces[name],
+        _ => panic!(),
+    };
+
+    let size = match build_value(&vnode_tpl.size_template, operands) {
+        VarnodeValue::Int(sz) => sz,
+        VarnodeValue::Op(op) => op.size,
+        _ => panic!(),
+    };
+
+    let name = match space {
+        "register" => varnode_map.get(&(offset, size)).map(|x| x.to_string()),
+        _ => None,
+    };
+
+    Varnode {
+        name: name,
+        space: space.to_owned(),
+        offset: offset,
+        size: size,
+    }
+}
+
+fn build_pcodeop<'a>(
+    seq: SeqNum,
+    op_tpl: &'a OpTemplate,
+    operands: &'a Vec<Varnode>,
+    spaces: &'a HashMap<&'a str, u64>,
+    varnode_map: &'a HashMap<(u64, u64), &'a str>,
+) -> PcodeOp {
+    //println!("pcop {:?}", op_tpl);
+    PcodeOp {
+        seq: seq,
+        opcode: OpCode::from_str(op_tpl.code),
+        inputs: op_tpl
+            .inputs
+            .iter()
+            .map(|tpl| build_varnode(&tpl, operands, spaces, varnode_map))
+            .collect(),
+        output: op_tpl
+            .output
+            .as_ref()
+            .map(|tpl| build_varnode(&tpl, operands, spaces, varnode_map)),
+    }
+}
+
+pub fn build_sym<'a>(
+    matched_sym: &'a MatchedSymbol,
+    pc: &Address,
+    spaces: &'a HashMap<&'a str, u64>,
+    varnode_map: &'a HashMap<(u64, u64), &'a str>,
+) -> (Vec<PcodeOp>, Vec<Varnode>) {
+    let mut built_pcodeops = vec![];
+    let mut built_varnodes = vec![];
+
+    //println!("sym {:?}", matched_sym);
+
+    match &matched_sym {
+        MatchedSymbol::Constructor((ct, operands)) => {
+            let template = ct.template.as_ref().unwrap();
+            let mut built_ops = vec![];
+
+            for operand in operands {
+                let (op_ops, op_vnodes) = build_sym(operand, pc, spaces, varnode_map);
+                built_ops.push(op_ops);
+                built_varnodes.extend(op_vnodes);
+            }
+
+            for stmt in &template.statements {
+                match stmt {
+                    ConsTemplate::Op(op_template) => {
+                        if op_template.code == "BUILD" {
+                            match op_template.inputs[0].offset_template {
+                                ConstTemplate::Val(op_idx) => {
+                                    let op_pcops = built_ops[op_idx as usize].clone();
+                                    built_pcodeops.extend(op_pcops);
+                                }
+                                _ => panic!(),
+                            };
+                        } else {
+                            let seq = SeqNum {
+                                pc: pc.to_owned(),
+                                uniq: built_pcodeops.len() as u32,
+                                order: 0,
+                            };
+                            let pcodeop = build_pcodeop(
+                                seq,
+                                &op_template,
+                                &built_varnodes,
+                                spaces,
+                                varnode_map,
+                            );
+                            built_pcodeops.push(pcodeop)
+                        }
+                    }
+                    ConsTemplate::Handle(handle_template) => {
+                        let built_vnode =
+                            build_handle(&handle_template, &built_varnodes, spaces, varnode_map);
+                        built_varnodes.push(built_vnode);
+                    }
+                }
+            }
+        }
+        MatchedSymbol::Symbol(sym) => match &sym.body {
+            SymbolBody::Varnode(vnode) => {
+                let name = match vnode.space {
+                    "register" => varnode_map.get(&(vnode.offset, vnode.size)),
+                    _ => None,
+                };
+
+                let varnode = Varnode {
+                    name: name.map(|x| x.to_string()),
+                    space: vnode.space.to_owned(),
+                    offset: vnode.offset,
+                    size: vnode.size,
+                };
+                built_varnodes.push(varnode);
+            }
+            _ => panic!(),
+        },
+        MatchedSymbol::Literal(val) => {
+            let varnode = Varnode {
+                name: None,
+                space: "const".to_owned(),
+                offset: *val as u64,
+                size: 1, // TODO
+            };
+
+            built_varnodes.push(varnode);
+        }
+    }
+
+    //println!("built {:?} and {:?}", built_pcodeops, built_varnodes);
+    (built_pcodeops, built_varnodes)
+}
+
+fn build_cmd_text(cmd: &PrintCommand, operands: &Vec<MatchedSymbol>) -> String {
+    match cmd {
+        PrintCommand::Op(op_idx) => build_text(&operands[*op_idx as usize]),
+        PrintCommand::Piece(piece) => piece.to_string(),
+    }
+}
+
+pub fn build_text(matched_sym: &MatchedSymbol) -> String {
+    match &matched_sym {
+        MatchedSymbol::Constructor((ct, operands)) => match &ct.print_commands {
+            Some(cmds) => cmds
+                .iter()
+                .map(|c| build_cmd_text(&c, &operands))
+                .collect::<Vec<String>>()
+                .join(""),
+            None => "".to_owned(),
+        },
+        MatchedSymbol::Symbol(sym) => match &sym.body {
+            SymbolBody::Varnode(vnode) => vnode.name.to_owned(),
+            _ => panic!(),
+        },
         _ => todo!()
     }
 }
 
-fn _eval_and(lhs: &Vec<TernaryBit>, rhs: &Vec<TernaryBit>) -> Vec<TernaryBit> {
-    let mut res: Vec<TernaryBit> = Vec::with_capacity(lhs.len());
-    for _ in 0..lhs.len() {
-        res.push(TernaryBit::DontCare);
-    }
-    for (i, (bit1, bit2)) in lhs.iter().zip(rhs.iter()).enumerate() {
-        res[i] = bit1.and(bit2);
-    }
-    return res;
+pub struct SleighLanguage<'a> {
+    pub language: Language,
+    pub program: Program<'a>,
+    pub symbols: HashMap<u32, Symbol<'a>>,
+    pub spaces: HashMap<&'a str, u64>,
+    pub varnodes: HashMap<&'a str, VarnodeSym<'a>>,
+    pub varnode_map: HashMap<(u64, u64), &'a str>,
+    pub context_syms: HashMap<&'a str, Context<'a>>,
+    pub reg_space_size: usize,
+    pub insn_table_id: u32,
+    pub context_reg: VarnodeSym<'a>,
 }
 
-fn eval_and<'a>(lhs: &BitPattern<'a>, rhs: &BitPattern<'a>) -> BitPattern<'a> {
-    if let (BitPattern::Context(mask1), BitPattern::Context(mask2)) = (lhs, rhs) {
-        BitPattern::Context(_eval_and(mask1, mask2))
-    }
-    else if let (BitPattern::Token((tok1, mask1)), BitPattern::Token((tok2, mask2))) = (lhs, rhs) {
-        if tok1 != tok2 {
-            panic!("Tokens should match");
+impl<'a> SleighLanguage<'a> {
+    pub fn create(arch_family: &str, lang_id: &str, sla_contents: &'a str) -> SleighLanguage<'a> {
+        let lang = get_language(arch_family, lang_id).unwrap();
+        let (_, sla) = program(sla_contents).finish().unwrap();
+
+        let mut symbols: HashMap<u32, Symbol> = HashMap::new();
+        let mut spaces: HashMap<&str, u64> = HashMap::new();
+        let mut varnodes: HashMap<&str, VarnodeSym> = HashMap::new();
+        let mut varnode_map: HashMap<(u64, u64), &str> = HashMap::new();
+        let mut context_syms: HashMap<&str, Context> = HashMap::new();
+        let mut reg_space_size: usize = 0;
+        let mut insn_table_id = 0;
+
+        for space in &sla.spaces {
+            spaces.insert(space.name, spaces.len() as u64);
         }
-        BitPattern::Token((tok2, _eval_and(mask1, mask2)))
-    }
-    else {
-        panic!("Don't know how to combine bit patterns {:?} and {:?}", lhs, rhs);
-    }
-    /*else if let (BitPattern::Context(mask1), BitPattern::Token((tok2, mask2))) = (lhs, rhs) {
-        BitPattern::Concat((
-            Box::new(BitPattern::Context(mask1.clone())),
-            Box::new(BitPattern::Token((tok2, mask2.clone())))
-        ))
-    }
-    else if let (BitPattern::Token((tok1, mask1)), BitPattern::Context(mask2)) = (lhs, rhs) {
-        BitPattern::Concat((
-            Box::new(BitPattern::Token((tok1, mask1.clone()))),
-            Box::new(BitPattern::Context(mask2.clone()))
-        ))
-    }*/
-}
 
-fn eval_pattern<'a>
-(
-    pattern: &PatternExpr<'a>,
-    constructors: &'a HashMap<&'a str, Vec<PatternExpr<'a>>>,
-    tokens: &'a HashMap<&'a str, (&'a Token<'a>, &TokenField)>,
-    ctx_reg: &BitRange,
-    ctx_fields: &HashMap<&'a str, &BitRange>
-) -> Vec<(Option<BitPattern<'a>>, BitPattern<'a>)>
-{
-    println!("{:#?}", pattern);
-    let pats = match pattern {
-        PatternExpr::Constraint(constraint) => {
-            eval_constraint(&constraint, &tokens, &ctx_reg, &ctx_fields)
-        },
-        PatternExpr::And((lhs_pat, rhs_pat)) => {
-            let l_pats = eval_pattern(lhs_pat, constructors, &tokens, &ctx_reg, &ctx_fields);
-            let r_pats = eval_pattern(rhs_pat, constructors, &tokens, &ctx_reg, &ctx_fields);
-            let mut pats: Vec<BitPattern> = Vec::with_capacity(lhs_pats.len() * rhs_pats.len());
-
-            for (l_ctx, l_pat) in &l_pats {
-                for (r_ctx, r_pat) in &r_pats {
-                    let ctx = eval_and(&l_ctx, &r_ctx);
-                    let pat = eval_and(&lhs, &rhs)
-                    let _ = &pats.push((ctx, pat));
+        for sym in &sla.symbols {
+            match &sym.body {
+                SymbolBody::Subtable(subtable) => {
+                    if subtable.name == "instruction" {
+                        insn_table_id = sym.id;
+                    }
                 }
-            }
+                SymbolBody::Varnode(varnode) => {
+                    varnodes.insert(varnode.name, varnode.clone());
 
-            pats
-        },
-        PatternExpr::Concat((lhs_pat, rhs_pat)) => {
-            let l_pats = eval_pattern(lhs_pat, constructors, &tokens, &ctx_reg, &ctx_fields);
-            let r_pats = eval_pattern(rhs_pat, constructors, &tokens, &ctx_reg, &ctx_fields);
-            let mut pats: Vec<BitPattern> = Vec::with_capacity(lhs_pats.len() + rhs_pats.len());
-
-            for (l_ctx, l_pat) in &l_pats {
-                for (r_ctx, r_pat) in &r_pats {
-                    let ctx = eval_and(&l_ctx, &r_ctx);
-                    let pat = BitPattern::Concat((Box::new(lhs.clone()), Box::new(rhs.clone())))
-                    let _ = &pats.push((ctx, pat));
+                    if varnode.space == "register" {
+                        reg_space_size =
+                            reg_space_size.max((varnode.offset + varnode.size) as usize);
+                        varnode_map.insert((varnode.offset, varnode.size), varnode.name);
+                    }
                 }
-            }
-
-            pats
-        },
-        PatternExpr::Constructor(child_table_name) => {
-            if let Some((token, token_field)) = tokens.get(child_table_name) {
-                let bits = _eval_field(token_field.range.len as usize, token_field.range.start as usize, token.bit_size as usize);
-                vec![(None, BitPattern::Token((token.name, bits)))]
-            }
-            else {
-                eval_table(child_table_name, constructors, tokens, ctx_reg, ctx_fields)
-            }
-        },
-        _ => todo!()
-    };
-    
-    println!("Created pattern {:?} with context {:?}", pats, ctx);
-    return pats;
-}
-
-fn eval_table<'a>(
-    table_name: &'a str,
-    constructors: &'a HashMap<&'a str, Vec<PatternExpr>>,
-    tokens: &'a HashMap<&'a str, (&'a Token<'a>, &TokenField)>,
-    ctx_reg: &BitRange,
-    ctx_fields: &HashMap<&'a str, &BitRange>
-) -> Vec<(Option<BitPattern<'a>>, BitPattern<'a>)>
-{
-    let mut all_pats = vec![];
-
-    if let Some(patterns) = constructors.get(table_name) {
-        for pattern in patterns {
-            let pats = eval_pattern(pattern, constructors, tokens, ctx_reg, ctx_fields);
-            all_pats.extend(pats);
-        }
-    }
-
-    return all_pats;
-}
-
-fn main() {
-    let lang = get_language("x86", "x86:LE:64:default").unwrap();
-
-    let contents = read_file("output.txt");
-    let sleigh = match program(&contents) {
-        Ok((_, prog)) => prog,
-        _ => panic!()
-    };
-
-    let mut token_fields: HashMap<&str, (&Token, &TokenField)> = HashMap::new();
-    for stmt in &sleigh.stmts {
-        if let Stmt::Define(DefineStmt::Token(token)) = stmt {
-            for field in &token.fields {
-                token_fields.insert(field.name, (token, field));
-            }
-        }
-    }
-
-    // Create a bit vector for the entire register space.
-    let mut reg_space_size: usize = 0;
-    let mut registers = HashMap::new();
-    let mut ctx_fields = HashMap::new();
-    let mut ctx_reg_name: Option<&str> = None;
-
-    for stmt in &sleigh.stmts {
-        if let Stmt::Define(DefineStmt::Names(defns)) = stmt {
-            if defns.name != "register" {
-                continue;
-            }
-
-            let mut off = defns.offset;
-
-            for name in &defns.names {
-                if let SpaceName::Name(reg_name) = name {
-                    //println!("{}", reg_name);
-                    registers.insert(reg_name, BitRange { start: off * 8, len: defns.size * 8 });
+                SymbolBody::Context(ctx) => {
+                    context_syms.insert(ctx.name, ctx.clone());
                 }
-
-                off += defns.size;
+                _ => (),
             }
 
-            reg_space_size = reg_space_size.max(off as usize);
+            symbols.insert(sym.id, sym.clone());
         }
-        else if let Stmt::Define(DefineStmt::Context(ctx_defn)) = stmt {
-            ctx_reg_name = Some(ctx_defn.register);
 
-            for field in &ctx_defn.fields {
-                ctx_fields.insert(field.name, &field.range);
-            }
-        }
-    }
-    let ctx_base = &registers[&ctx_reg_name.unwrap()];
+        let ctx_reg = varnodes["contextreg"].clone();
 
-    // TODO: Figure out how to properly initialize the BitVec.
-    let mut reg_space: BitVec<u8, Lsb0> = BitVec::with_capacity(reg_space_size * 8);
-    for _ in 0..(reg_space_size * 8) {
-        reg_space.push(false);
-    }
-
-    for (var, val) in lang.pspec.defaults {
-        if let Some(range) = ctx_fields.get(&*var) {
-            let start = (ctx_base.start + range.start) as usize;
-            let end = start + (range.len as usize);
-            reg_space[start .. end].store_le(val);
+        SleighLanguage {
+            language: lang,
+            program: sla,
+            symbols: symbols,
+            spaces: spaces,
+            varnodes: varnodes,
+            varnode_map: varnode_map,
+            context_syms: context_syms,
+            reg_space_size: reg_space_size,
+            insn_table_id: insn_table_id,
+            context_reg: ctx_reg,
         }
     }
-    //println!("{:?}", reg_space);
-
-    let mut constructors: HashMap<&str, Vec<PatternExpr>> = HashMap::new();
-    let mut tables: HashMap<&str, Vec<BitPattern>> = HashMap::new();
-
-    for stmt in &sleigh.stmts {
-        if let Stmt::Constructor(constructor) = stmt {
-            let table_name = constructor.table;
-            constructors.entry(table_name).or_insert(vec![]).push(*constructor.pattern.clone());
-        }
-    }
-
-    for (table_name, _) in constructors.iter() {
-        if tables.get(table_name) == None {
-            println!("Processing {}", table_name);
-            let pats = eval_table(table_name, &constructors, &token_fields, &ctx_base, &ctx_fields);
-            tables.insert(table_name, pats);
-        }
-    }
-    
-    let data: [u8; 1] = [0x55];
 }

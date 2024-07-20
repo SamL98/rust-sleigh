@@ -10,3 +10,9 @@ nom = "6.0"
 bitvec = "1"
 glob = "0.3.1"
 elementtree = "1.2.3"
+lazy_static = "1.4.0"
+gpgpu = "0.2.0"
+termios = "0.3.3"
+
+[lib]
+crate-type = ["cdylib"]
