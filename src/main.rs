@@ -23,7 +23,8 @@ use nom::*;
 use bitvec::prelude::*;
 
 use termios::{Termios, TCSANOW, ECHO, ICANON, tcsetattr};
-use std::io::{self, Read};
+use std::io::{self, Read, Seek};
+use std::fs;
 
 use std::collections::{HashMap, HashSet};
 use gpgpu::{Framework, GpuBuffer, GpuBufferUsage, DescriptorSet, Kernel, BufOps, Shader};
@@ -173,8 +174,17 @@ fn main() {
     // let word = 0x4889e500;
     // let buf = vec![0x55];
     // let buf = vec![0x41, 0x54];
-    let buf = vec![0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56];
+    // let buf = vec![0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56];
     // let buf = vec![0x48, 0x89, 0xe5];
+
+    let binary_path = "/Users/samlerner/Projects/cracks/scitools/understand_x64";
+    let mut target_file = fs::File::open(binary_path).expect(format!("Could not open
+             {}", binary_path).as_str());
+
+    let mut raw_bytes: Vec<u8> = Vec::new();
+    let _ = target_file.read_to_end(&mut raw_bytes);
+    let buf = &raw_bytes[0xe070..0x1cd72e5];
+        
     let mut bits_consumed = 0;
 
     let mut ctx = read_ctx(&lang.context_reg, &reg_space);

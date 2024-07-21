@@ -1664,6 +1664,70 @@ fn resolve_varlist<'a>(
     }
 }
 
+fn resolve_valuemap<'a>(
+    words: &Vec<u8>,
+    valuemap: &'a Valuemap,
+    symbols: &'a HashMap<u32, Symbol>,
+    ctx: &mut Vec<u32>,
+) -> Option<(MatchedSymbol<'a>, usize)> {
+    match &valuemap.field {
+        Field::Token(token) => {
+            // println!("{:?}", token);
+            let num_bytes = (token.end_byte - token.start_byte + 1) as usize;
+            let sb = token.start_byte as usize;
+            let mut token_word: u32 = 0;
+
+            for i in 0..num_bytes {
+                token_word <<= 8;
+                token_word |= words[sb + i] as u32;
+            }
+
+            let start = token.start_bit;
+            let size = token.end_bit - start + 1;
+            let idx = ((token_word >> start) & ((1 << size) - 1)) as usize;
+            let val = valuemap.vars[idx] as i64;
+
+            // Not super sure if this size calculation is right but it seems to work.
+            Some(((MatchedSymbol::Literal(val)), (token.end_byte * 8 + (8 - token.end_bit - 1) + size) as usize))
+        }
+        _ => todo!(),
+    }
+}
+
+fn evaluate_expr(
+    expr: &Expr,
+    ctx: &Vec<u32>,
+    operands: &Vec<MatchedSymbol<'_>>,
+) -> i64 {
+    match expr {
+        Expr::Const(val) => *val,
+        Expr::Operand(op_expr) if (op_expr.idx as usize) < operands.len() => {
+            if let MatchedSymbol::Literal(val) = &operands[op_expr.idx as usize] {
+                *val
+            } else {
+                panic!();
+            }
+        },
+        Expr::Xor((lhs, rhs)) => {
+            let lhs_val = evaluate_expr(&**lhs, ctx, operands);
+            let rhs_val = evaluate_expr(&**rhs, ctx, operands);
+            lhs_val ^ rhs_val
+        },
+        Expr::Field(Field::Context(ctx_field)) => {
+            // FIXME: Use BitVec for context. Use end_byte.
+            // println!("{:?}", ctx_field);
+            let idx = (ctx_field.start_bit / 32) as usize;
+            // let ctx_word = (ctx[idx] >> (32 - (ctx_field.start_byte * 8 + 8))) & 0xff;
+            let ctx_word = ctx[idx];
+            let size = ctx_field.end_bit - ctx_field.start_bit + 1;
+            // println!("{} {}", ctx_field.start_bit, size);
+            let bit_start = 32 - (ctx_field.start_bit + size);
+            ((ctx_word >> bit_start) & ((1 << size) - 1)) as i64
+        },
+        _ => todo!("{:?}", expr),
+    }
+}
+
 fn resolve_operands<'a>(
     words: &Vec<u8>,
     ct: &'a Constructor,
@@ -1689,6 +1753,16 @@ fn resolve_operands<'a>(
                 matched_ops.push(MatchedSymbol::Literal(val as i64));
                 bit_end = bit_end.max((expr.end_byte * 8 + size) as usize);
             },
+            Some(Expr::Field(Field::Context(expr))) => {
+                // TODO: Handle end_byte.
+                let size = expr.end_bit - expr.start_bit + 1;
+                let bit_start = 32 - (expr.start_bit + size);
+                // let val = ((words[expr.start_byte as usize] >> bit_start) & ((1 << size) - 1)) as i64;
+                let val = (ctx[(expr.start_bit / 32) as usize] >> bit_start) & ((1 << size) - 1);
+                // println!("{}", val);
+                matched_ops.push(MatchedSymbol::Literal(val as i64));
+                bit_end = bit_end.max((expr.end_byte * 8 + size) as usize);
+            },
             None => {
                 let op_sym = &symbols[&operand.subsym];
                 let new_words = words[(operand.off as usize)..].to_vec(); // TODO: Remove this clone.
@@ -1699,24 +1773,9 @@ fn resolve_operands<'a>(
                     let mask = op.mask;
                     // println!("{:?}", op);
 
-                    match &op.expr {
-                        Expr::Const(val) => {
-                            // let v = 0xffffffff_u32.overflowing_shr(op.shift).0;
-                            let v = ((*val as u32) << op.shift);
-                            ctx[op.i as usize] = (existing & !mask) | (v & mask);
-                            // ctx[op.i as usize] = existing | (v & mask);
-                        },
-                        Expr::Operand(op_expr) if (op_expr.idx as usize) < matched_ops.len() => {
-                            if let MatchedSymbol::Literal(val) = &matched_ops[op_expr.idx as usize] {
-                                // println!("{}", val);
-                                // let v = 0xffffffff_u32.overflowing_shr(op.shift).0;
-                                let v = ((*val as u32) << op.shift);
-                                ctx[op.i as usize] = (existing & !mask) | (v & mask);
-                                // ctx[op.i as usize] = existing | (v & mask);
-                            }
-                        },
-                        _ => todo!("{:?}", op.expr),
-                    };
+                    let val = evaluate_expr(&op.expr, ctx, &matched_ops);
+                    let v = ((val as u32) << op.shift);
+                    ctx[op.i as usize] = (existing & !mask) | (v & mask);
 
                     // println!("ctx: {:x}", ctx[op.i as usize]);
                 }
@@ -1732,7 +1791,7 @@ fn resolve_operands<'a>(
                     None => (),
                 };
             },
-            _ => todo!()
+            _ => todo!("{:?}", operand.expr)
         }
     }
 
@@ -1758,12 +1817,17 @@ pub fn resolve_symbol<'a>(
                 }
                 None => None,
             }
-        }
+        },
         SymbolBody::Varlist(varlist) => {
-            //println!("{}", varlist.name);
             resolve_varlist(words, varlist, symbols, ctx)
-        }
-        _ => todo!(),
+        },
+        SymbolBody::Valuemap(valuemap) => {
+            resolve_valuemap(words, valuemap, symbols, ctx)
+        },
+        SymbolBody::Varnode(vnode) => {
+            Some((MatchedSymbol::Symbol(sym), 0))
+        },
+        _ => todo!("{:?}", sym.body),
     }
 }
 
@@ -2014,6 +2078,7 @@ pub fn build_text(matched_sym: &MatchedSymbol) -> String {
             SymbolBody::Varnode(vnode) => vnode.name.to_owned(),
             _ => panic!(),
         },
+        MatchedSymbol::Literal(val) => format!("0x{:x}", val),
         _ => todo!()
     }
 }
