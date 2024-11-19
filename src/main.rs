@@ -27,8 +27,6 @@ use std::io::{self, Read, Seek};
 use std::fs;
 
 use std::collections::{HashMap, HashSet};
-use gpgpu::{Framework, GpuBuffer, GpuBufferUsage, DescriptorSet, Kernel, BufOps, Shader};
-use gpgpu;
 
 fn _explore_dtree(
     dtree: &DecisionTree,
@@ -82,36 +80,6 @@ fn explore_dtree(
 }
 
 fn main() {
-    //let fw = Framework::default();
-
-    //// Original CPU data
-    //let cpu_data = (0..10000).into_iter().collect::<Vec<u32>>();
-
-    //// GPU buffer creation
-    //let buf_a = GpuBuffer::from_slice(&fw, &cpu_data);       // Input
-    //let buf_b = GpuBuffer::from_slice(&fw, &cpu_data);       // Input
-    //let buf_c = GpuBuffer::<u32>::with_capacity(&fw, cpu_data.len() as u64);  // Output
-
-    //// Shader load from SPIR-V binary file
-    //let shader = Shader::from_wgsl_file(&fw, "src/foo.wgsl").unwrap();    
-
-    //// Descriptor set and program creation
-    //let desc = DescriptorSet::default()
-    //    .bind_buffer(&buf_a, GpuBufferUsage::ReadOnly)
-    //    .bind_buffer(&buf_b, GpuBufferUsage::ReadOnly)
-    //    .bind_buffer(&buf_c, GpuBufferUsage::ReadWrite);
-    //let program = gpgpu::Program::new(&shader, "main").add_descriptor_set(desc); // Entry point
-
-    //// Kernel creation and enqueuing
-    //Kernel::new(&fw, program).enqueue(cpu_data.len() as u32, 1, 1); // Enqueuing, not very optimus
-
-    //let output = buf_c.read_vec_blocking().unwrap();                        // Read back C from GPU
-    //for (a, b) in cpu_data.into_iter().zip(output) {
-    //    assert_eq!(a.pow(2), b);
-    //}
-    //println!("all good");
-	//return;
-
     let contents = read_file("x86-64.sla");
     let lang = SleighLanguage::create("x86", "x86:LE:64:default", &contents);
     // let insn_table = get_table(insn_table_id, &symbols);
@@ -134,38 +102,6 @@ fn main() {
         }
     }
 
-    // let termios = Termios::from_fd(0).unwrap();
-    // let mut new_termios = termios.clone();
-    // new_termios.c_lflag &= !(ICANON | ECHO);
-    // tcsetattr(0, TCSANOW, &mut new_termios).unwrap();
-
-    // if let SymbolBody::Subtable(table) = &lang.symbols[&lang.insn_table_id].body {
-    //     let mut open_idxs = HashSet::new();
-    //     let mut selected_line = 0;
-
-    //     'outer: loop {
-    //         println!("\x1b[2J\x1b[H");
-    //         explore_dtree(&table.decision_tree, selected_line, &open_idxs, table);
-
-    //         let mut buf = [0; 1];
-    //         io::stdin().read_exact(&mut buf).unwrap();
-            
-    //         match (buf[0] as char) {
-    //             'q' => break 'outer,
-    //             'j' => selected_line += 1,
-    //             'k' => selected_line -= 1,
-    //             '\n' => {
-    //                 if open_idxs.contains(&selected_line) {
-    //                     open_idxs.remove(&selected_line);
-    //                 } else {
-    //                     open_idxs.insert(selected_line);
-    //                 }
-    //             }
-    //             _ => {}
-    //         }
-    //     }
-    // }
-
     //println!("{:#?}", tables["Reg8"][0].decision_tree);
     //let data: [u8; 1] = [0x55];
     // let word = 0x55000000;
@@ -177,13 +113,13 @@ fn main() {
     // let buf = vec![0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56];
     // let buf = vec![0x48, 0x89, 0xe5];
 
-    let binary_path = "/Users/samlerner/Projects/cracks/scitools/understand_x64";
+    let binary_path = "/Users/sam/scratch/rust-sleigh/test";
     let mut target_file = fs::File::open(binary_path).expect(format!("Could not open
              {}", binary_path).as_str());
 
     let mut raw_bytes: Vec<u8> = Vec::new();
     let _ = target_file.read_to_end(&mut raw_bytes);
-    let buf = &raw_bytes[0xe070..0x1cd72e5];
+    let buf = &raw_bytes[0x3f20..0x3f95];
         
     let mut bits_consumed = 0;
 
@@ -202,7 +138,7 @@ fn main() {
 
         bits_consumed += num_bits;
 
-        println!("{} {}", num_bits, bits_consumed);
+        // println!("{} {}", num_bits, bits_consumed);
         // println!("{:#?}", matched_symbol);
 
         let pc = Address {

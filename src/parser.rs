@@ -27,7 +27,7 @@ use std::hash::{Hash, Hasher};
 use std::io::Write;
 
 static SLEIGH_PATH: &'static str =
-    "/Users/samlerner/ghidra_10.3_PUBLIC/Ghidra/Processors/x86/data/languages";
+    "/Users/sam/ghidra_10.3_PUBLIC/Ghidra/Processors/x86/data/languages";
 
 pub type Res<T, U> = IResult<T, U, Error<T>>;
 
@@ -323,8 +323,8 @@ pub struct HandleTemplate<'a> {
     exported_size_template: ConstTemplate<'a>,
     offset_template: ConstTemplate<'a>,
     exported_offset_template: ConstTemplate<'a>,
-    unk_template3: ConstTemplate<'a>,
-    unk_template4: ConstTemplate<'a>,
+    indirect_space_template: ConstTemplate<'a>,
+    indirect_offset_template: ConstTemplate<'a>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -789,8 +789,8 @@ fn handle_template(input: &str) -> Res<&str, ConsTemplate> {
             exported_size_template: res.2,
             offset_template: res.3,
             exported_offset_template: res.4,
-            unk_template3: res.5,
-            unk_template4: res.6,
+            indirect_space_template: res.5,
+            indirect_offset_template: res.6,
         };
         (next, ConsTemplate::Handle(handle_template))
     })
@@ -1748,7 +1748,7 @@ fn resolve_operands<'a>(
                 let size = expr.end_bit - expr.start_bit + 1;
                 let bit_start = 8 - (expr.start_bit + size);
                 // let val = ((words[expr.start_byte as usize] >> bit_start) & ((1 << size) - 1)) as i64;
-                let val = (words[expr.start_byte as usize] >> expr.start_bit) & ((1 << size) - 1);
+                let val = (words[expr.start_byte as usize] >> expr.start_bit) & (((1_u16 << size) - 1) as u8);
                 // println!("{}", val);
                 matched_ops.push(MatchedSymbol::Literal(val as i64));
                 bit_end = bit_end.max((expr.end_byte * 8 + size) as usize);
@@ -1807,7 +1807,7 @@ pub fn resolve_symbol<'a>(
     // println!("{}", sym.id);
     match &sym.body {
         SymbolBody::Subtable(table) => {
-            //println!("{:#?}", table);
+            // println!("{:#?}", table);
             match resolve_constructor(words, table, symbols, ctx) {
                 Some((ct, bit_end)) => {
                     // println!("constructor took {} bits", bit_end);
@@ -1854,11 +1854,36 @@ pub enum VarnodeValue<'a> {
     Op(&'a Varnode),
 }
 
-fn build_value<'a>(const_tpl: &'a ConstTemplate, operands: &'a Vec<Varnode>) -> VarnodeValue<'a> {
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum Handle {
+    Varnode(Varnode),
+    Indirect((Varnode, Varnode)),
+}
+
+fn build_value<'a>(
+    const_tpl: &'a ConstTemplate,
+    operands: &'a Vec<Varnode>,
+    handles: &'a Vec<Handle>,
+) -> VarnodeValue<'a> {
     match const_tpl {
         ConstTemplate::SpaceId(space) => VarnodeValue::String(space),
         ConstTemplate::Val(val) => VarnodeValue::Int(*val),
-        ConstTemplate::Handle(idx) => VarnodeValue::Op(&operands[*idx as usize]),
+        ConstTemplate::Handle(idx) => {
+            let ix = *idx as usize;
+            println!("{} {:?} {:?}", ix, operands, handles);
+
+            if ix >= handles.len() {
+                VarnodeValue::Op(&operands[ix])
+            } else {
+                match &handles[ix] {
+                    Handle::Varnode(vn) => VarnodeValue::Op(vn),
+                    Handle::Indirect((space_vn, ptr_vn)) if space_vn.space == "const" => {
+                        VarnodeValue::Op(space_vn)
+                    }
+                    Handle::Indirect((space_vn, ptr_vn)) => panic!("{} {}", space_vn, ptr_vn),
+                }
+            }
+        },
         ConstTemplate::Relative(idx) => todo!(),
         ConstTemplate::Start => todo!(),
         ConstTemplate::Next => todo!(),
@@ -1872,60 +1897,64 @@ fn build_handle<'a>(
     operands: &'a Vec<Varnode>,
     spaces: &'a HashMap<&'a str, u64>,
     varnode_map: &'a HashMap<(u64, u64), &'a str>,
-) -> Varnode {
-    let space = match build_value(&handle_tpl.space_template, operands) {
-        VarnodeValue::String(name) => name,
-        VarnodeValue::Op(op) => op.space.as_str(),
-        _ => panic!(),
+) -> Handle {
+    let varnode_tmpl = VarnodeTemplate {
+        space_template: handle_tpl.space_template.clone(),
+        offset_template: handle_tpl.offset_template.clone(),
+        size_template: handle_tpl.size_template.clone(),
     };
 
-    let offset = match build_value(&handle_tpl.offset_template, operands) {
-        VarnodeValue::Int(off) => off,
-        VarnodeValue::Op(op) => op.offset,
-        VarnodeValue::String(name) => spaces[name],
-        _ => panic!(),
-    };
+    let varnode = build_varnode(
+        &varnode_tmpl,
+        operands,
+        &vec![],
+        spaces,
+        varnode_map
+    );
 
-    let size = match build_value(&handle_tpl.size_template, operands) {
-        VarnodeValue::Int(sz) => sz,
-        VarnodeValue::Op(op) => op.size,
-        _ => panic!(),
-    };
+    if matches!(handle_tpl.indirect_space_template, ConstTemplate::SpaceId(_)) {
+        let pointer_tmpl = VarnodeTemplate {
+            space_template: handle_tpl.indirect_space_template.clone(),
+            offset_template: handle_tpl.indirect_offset_template.clone(),
+            size_template: handle_tpl.size_template.clone(),
+        };
 
-    let name = match space {
-        "register" => varnode_map.get(&(offset, size)).map(|x| x.to_string()),
-        _ => None,
-    };
+        let pointer = build_varnode(
+            &pointer_tmpl,
+            operands,
+            &vec![],
+            spaces,
+            varnode_map
+        );
 
-    Varnode {
-        name: name,
-        space: space.to_owned(),
-        offset: offset,
-        size: size,
+        Handle::Indirect((varnode, pointer))
+    } else {
+        Handle::Varnode(varnode)
     }
 }
 
 fn build_varnode<'a>(
     vnode_tpl: &'a VarnodeTemplate,
     operands: &'a Vec<Varnode>,
+    handles: &'a Vec<Handle>,
     spaces: &'a HashMap<&'a str, u64>,
     varnode_map: &'a HashMap<(u64, u64), &'a str>,
 ) -> Varnode {
-    //println!("varnode {:?}", vnode_tpl);
-    let space = match build_value(&vnode_tpl.space_template, operands) {
+    // println!("varnode {:?}", vnode_tpl);
+    let space = match build_value(&vnode_tpl.space_template, operands, handles) {
         VarnodeValue::String(name) => name,
         VarnodeValue::Op(op) => op.space.as_str(),
         _ => panic!(),
     };
 
-    let offset = match build_value(&vnode_tpl.offset_template, operands) {
+    let offset = match build_value(&vnode_tpl.offset_template, operands, handles) {
         VarnodeValue::Int(off) => off,
         VarnodeValue::Op(op) => op.offset,
         VarnodeValue::String(name) => spaces[name],
         _ => panic!(),
     };
 
-    let size = match build_value(&vnode_tpl.size_template, operands) {
+    let size = match build_value(&vnode_tpl.size_template, operands, handles) {
         VarnodeValue::Int(sz) => sz,
         VarnodeValue::Op(op) => op.size,
         _ => panic!(),
@@ -1948,22 +1977,23 @@ fn build_pcodeop<'a>(
     seq: SeqNum,
     op_tpl: &'a OpTemplate,
     operands: &'a Vec<Varnode>,
+    handles: &'a Vec<Handle>,
     spaces: &'a HashMap<&'a str, u64>,
     varnode_map: &'a HashMap<(u64, u64), &'a str>,
 ) -> PcodeOp {
-    //println!("pcop {:?}", op_tpl);
+    // println!("pcop {:?}", op_tpl);
     PcodeOp {
         seq: seq,
         opcode: OpCode::from_str(op_tpl.code),
         inputs: op_tpl
             .inputs
             .iter()
-            .map(|tpl| build_varnode(&tpl, operands, spaces, varnode_map))
+            .map(|tpl| build_varnode(&tpl, operands, handles, spaces, varnode_map))
             .collect(),
         output: op_tpl
             .output
             .as_ref()
-            .map(|tpl| build_varnode(&tpl, operands, spaces, varnode_map)),
+            .map(|tpl| build_varnode(&tpl, operands, handles, spaces, varnode_map)),
     }
 }
 
@@ -1972,89 +2002,97 @@ pub fn build_sym<'a>(
     pc: &Address,
     spaces: &'a HashMap<&'a str, u64>,
     varnode_map: &'a HashMap<(u64, u64), &'a str>,
-) -> (Vec<PcodeOp>, Vec<Varnode>) {
+) -> (Vec<PcodeOp>, Option<Handle>) {
     let mut built_pcodeops = vec![];
     let mut built_varnodes = vec![];
+    let mut built_handles = vec![];
+    let mut handle = None;
 
-    //println!("sym {:?}", matched_sym);
+    // println!("sym {:#?}", matched_sym);
 
-    match &matched_sym {
-        MatchedSymbol::Constructor((ct, operands)) => {
-            let template = ct.template.as_ref().unwrap();
-            let mut built_ops = vec![];
+    if let MatchedSymbol::Constructor((ct, operands)) = &matched_sym {
+        for op in operands {
+            if let MatchedSymbol::Symbol(sym) = op {
+                if let SymbolBody::Varnode(vnode) = &sym.body {
+                    let name = match vnode.space {
+                        "register" => varnode_map.get(&(vnode.offset, vnode.size)),
+                        _ => None,
+                    };
 
-            for operand in operands {
-                let (op_ops, op_vnodes) = build_sym(operand, pc, spaces, varnode_map);
-                built_ops.push(op_ops);
-                built_varnodes.extend(op_vnodes);
+                    let varnode = Varnode {
+                        name: name.map(|x| x.to_string()),
+                        space: vnode.space.to_owned(),
+                        offset: vnode.offset,
+                        size: vnode.size,
+                    };
+
+                    built_varnodes.push(varnode);
+                }
             }
+            else if let MatchedSymbol::Literal(val) = op {
+                let varnode = Varnode {
+                    name: None,
+                    space: "const".to_owned(),
+                    offset: *val as u64,
+                    size: 1, // TODO
+                };
 
-            for stmt in &template.statements {
-                match stmt {
-                    ConsTemplate::Op(op_template) => {
-                        if op_template.code == "BUILD" {
-                            match op_template.inputs[0].offset_template {
-                                ConstTemplate::Val(op_idx) => {
-                                    let op_pcops = built_ops[op_idx as usize].clone();
-                                    built_pcodeops.extend(op_pcops);
-                                }
-                                _ => panic!(),
-                            };
-                        } else {
-                            let seq = SeqNum {
-                                pc: pc.to_owned(),
-                                uniq: built_pcodeops.len() as u32,
-                                order: 0,
-                            };
-                            let pcodeop = build_pcodeop(
-                                seq,
-                                &op_template,
-                                &built_varnodes,
-                                spaces,
-                                varnode_map,
-                            );
-                            built_pcodeops.push(pcodeop)
+                built_varnodes.push(varnode);
+            }
+        }
+
+        let template = ct.template.as_ref().unwrap();
+
+        for stmt in &template.statements {
+            println!("{:?}", stmt);
+
+            if let ConsTemplate::Op(op_template) = stmt {
+                if op_template.code == "BUILD" {
+                    if let ConstTemplate::Val(op_idx) = op_template.inputs[0].offset_template {
+                        let idx = op_idx as usize;
+                        let (op_ops, op_handle) = build_sym(&operands[idx], pc, spaces, varnode_map);
+                        built_pcodeops.extend(op_ops);
+
+                        if let Some(handle) = op_handle {
+                            built_handles.push(handle);
                         }
-                    }
-                    ConsTemplate::Handle(handle_template) => {
-                        let built_vnode =
-                            build_handle(&handle_template, &built_varnodes, spaces, varnode_map);
-                        built_varnodes.push(built_vnode);
-                    }
+                    };
+                } else {
+                    let seq = SeqNum {
+                        pc: pc.to_owned(),
+                        uniq: built_pcodeops.len() as u32,
+                        order: 0,
+                    };
+                    let pcodeop = build_pcodeop(
+                        seq,
+                        &op_template,
+                        &built_varnodes,
+                        &built_handles,
+                        spaces,
+                        varnode_map,
+                    );
+                    built_pcodeops.push(pcodeop)
                 }
             }
         }
-        MatchedSymbol::Symbol(sym) => match &sym.body {
-            SymbolBody::Varnode(vnode) => {
-                let name = match vnode.space {
-                    "register" => varnode_map.get(&(vnode.offset, vnode.size)),
-                    _ => None,
-                };
 
-                let varnode = Varnode {
-                    name: name.map(|x| x.to_string()),
-                    space: vnode.space.to_owned(),
-                    offset: vnode.offset,
-                    size: vnode.size,
-                };
-                built_varnodes.push(varnode);
+        // Handle the handles after all the operands have been built.
+        for stmt in &template.statements {
+            println!("{:?}", stmt);
+
+            if let ConsTemplate::Handle(handle_template) = stmt {
+                handle = Some(build_handle(
+                        &handle_template,
+                        &built_varnodes,
+                        spaces,
+                        varnode_map
+                ));
             }
-            _ => panic!(),
-        },
-        MatchedSymbol::Literal(val) => {
-            let varnode = Varnode {
-                name: None,
-                space: "const".to_owned(),
-                offset: *val as u64,
-                size: 1, // TODO
-            };
-
-            built_varnodes.push(varnode);
         }
     }
 
-    //println!("built {:?} and {:?}", built_pcodeops, built_varnodes);
-    (built_pcodeops, built_varnodes)
+    // println!("built {:?} and {:?}", built_pcodeops, handle);
+    (built_pcodeops, handle)
 }
 
 fn build_cmd_text(cmd: &PrintCommand, operands: &Vec<MatchedSymbol>) -> String {

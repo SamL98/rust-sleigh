@@ -2,3 +2,5 @@
 *.rkt
 *.lock
 .*.swp
+test*
+foo
