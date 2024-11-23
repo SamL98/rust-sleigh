@@ -16,6 +16,7 @@ impl Varnode{
                 "unique" => format!("U{:x}:{}", self.offset, self.size),
                 "const" => format!("{:x}:{}", self.offset, self.size),
                 "ram" => format!("[ram]{:x}:{}", self.offset, self.size),
+                "DUMMY" => "DUMMY".to_string(),
                 _ => panic!()
             }
         }
