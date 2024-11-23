@@ -147,6 +147,9 @@ fn main() {
             offset: 0x1337,
         };
 
+        let asm = build_text(&matched_symbol);
+        println!("{}", asm);
+
         let (pcodeops, _) = build_sym(
             &matched_symbol,
             &pc,
@@ -154,9 +157,6 @@ fn main() {
             &lang.varnode_map,
             (false, 0),
         );
-        println!("{:#?}", pcodeops);
-
-        let asm = build_text(&matched_symbol);
-        println!("{}", asm);
+        println!("{:#?}\n", pcodeops);
     }
 }

@@ -1582,7 +1582,7 @@ fn match_pattern(pattern: &DecisionPattern, insn_words: &Vec<u8>, ctx_words: &Ve
 pub enum MatchedSymbol<'a> {
     Constructor((&'a Constructor<'a>, Vec<MatchedSymbol<'a>>)),
     Symbol(&'a Symbol<'a>),
-    Literal(i64),
+    Literal((i64, usize)),
 }
 
 pub fn read_ctx(
@@ -1751,7 +1751,7 @@ fn resolve_valuemap<'a>(
             let val = valuemap.vars[idx] as i64;
 
             // Not super sure if this size calculation is right but it seems to work.
-            Some(((MatchedSymbol::Literal(val)), (token.end_byte * 8 + (8 - token.end_bit - 1) + size) as usize))
+            Some(((MatchedSymbol::Literal((val, size as usize))), (token.end_byte * 8 + (8 - token.end_bit - 1) + size) as usize))
         }
         _ => todo!(),
     }
@@ -1765,7 +1765,7 @@ fn evaluate_expr(
     match expr {
         Expr::Const(val) => *val,
         Expr::Operand(op_expr) if (op_expr.idx as usize) < operands.len() => {
-            if let MatchedSymbol::Literal(val) = &operands[op_expr.idx as usize] {
+            if let MatchedSymbol::Literal((val, _)) = &operands[op_expr.idx as usize] {
                 *val
             } else {
                 panic!();
@@ -1809,21 +1809,26 @@ fn resolve_operands<'a>(
             Some(Expr::Field(Field::Token(expr))) => {
                 // TODO: Handle end_byte.
                 let size = expr.end_bit - expr.start_bit + 1;
-                let bit_start = 8 - (expr.start_bit + size);
-                // let val = ((words[expr.start_byte as usize] >> bit_start) & ((1 << size) - 1)) as i64;
-                let val = (words[expr.start_byte as usize] >> expr.start_bit) & (((1_u16 << size) - 1) as u8);
-                // println!("{}", val);
-                matched_ops.push(MatchedSymbol::Literal(val as i64));
+                let bit_start = 32 - (expr.start_bit + size);
+                let mut word: u32 = 0;
+
+                for i in 0..4 {
+                    word |= (words[bit_end / 8 + expr.start_byte as usize + i] as u32) << (i * 8);
+                }
+
+                let val = (word >> expr.start_bit) & (((1_u64 << size) - 1) as u32);
+                // println!("{:x} {:x} {:x} {:?}", words[expr.start_byte as usize], word, val, expr);
+                let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
+                matched_ops.push(MatchedSymbol::Literal((val as i64, num_bytes)));
                 bit_end = bit_end.max((expr.end_byte * 8 + size) as usize);
             },
             Some(Expr::Field(Field::Context(expr))) => {
                 // TODO: Handle end_byte.
                 let size = expr.end_bit - expr.start_bit + 1;
                 let bit_start = 32 - (expr.start_bit + size);
-                // let val = ((words[expr.start_byte as usize] >> bit_start) & ((1 << size) - 1)) as i64;
                 let val = (ctx[(expr.start_bit / 32) as usize] >> bit_start) & ((1 << size) - 1);
-                // println!("{}", val);
-                matched_ops.push(MatchedSymbol::Literal(val as i64));
+                let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
+                matched_ops.push(MatchedSymbol::Literal((val as i64, num_bytes)));
                 bit_end = bit_end.max((expr.end_byte * 8 + size) as usize);
             },
             None => {
@@ -2124,12 +2129,12 @@ pub fn build_sym<'a>(
                     op_handle = Some(varnode);
                 }
             }
-            else if let MatchedSymbol::Literal(val) = op {
+            else if let MatchedSymbol::Literal((val, size)) = op {
                 let varnode = Varnode {
                     name: None,
                     space: "const".to_owned(),
                     offset: *val as u64,
-                    size: 1, // TODO
+                    size: *size as u64,
                 };
 
                 if debug.0 {
@@ -2235,7 +2240,7 @@ pub fn build_text(matched_sym: &MatchedSymbol) -> String {
             SymbolBody::Varnode(vnode) => vnode.name.to_owned(),
             _ => panic!(),
         },
-        MatchedSymbol::Literal(val) => format!("0x{:x}", val),
+        MatchedSymbol::Literal((val, _)) => format!("0x{:x}", val),
         _ => todo!()
     }
 }
