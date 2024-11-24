@@ -1780,7 +1780,15 @@ fn evaluate_expr(
         Expr::Const(val) => (*val, 8), // FIXME
         Expr::Operand(op_expr) if (op_expr.idx as usize) < operands.len() => {
             if let MatchedSymbol::Literal((val, sz)) = &operands[op_expr.idx as usize] {
-                (*val, *sz)
+                let signed_val = match *sz {
+                    1 => (*val as i8) as i64,
+                    2 => (*val as i16) as i64,
+                    4 => (*val as i32) as i64,
+                    8 => (*val as i64) as i64,
+                    _ => *val,
+                };
+
+                (signed_val, *sz)
             } else {
                 panic!();
             }
@@ -1823,32 +1831,26 @@ fn resolve_operands<'a>(
 ) -> (Vec<MatchedSymbol<'a>>, usize) {
     let mut matched_ops = vec![];
     let mut bit_end: usize = 0;
-    // println!("{:?}\n", ct);
 
     for op_idx in &ct.operands {
         let operand = get_operand(&op_idx, &symbols);
-        // println!("{} {:?}\n", op_idx, operand);
 
         match &operand.expr {
             Some(Expr::Field(Field::Token(expr))) => {
-                // TODO: Handle end_byte.
                 let size = expr.end_bit - expr.start_bit + 1;
                 let bit_start = 32 - (expr.start_bit + size);
                 let word = get_word_le(words, bit_end / 8 + expr.start_byte as usize);
                 let val = (word >> expr.start_bit) & (((1_u64 << size) - 1) as u32);
-                // println!("{:x} {:x} {:x} {:?}", words[expr.start_byte as usize], word, val, expr);
                 let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
                 matched_ops.push(MatchedSymbol::Literal((val as i64, num_bytes)));
                 bit_end = bit_end.max(((bit_end as u32) / 8 * 8 + expr.start_byte * 8 + size) as usize);
             },
             Some(Expr::Field(Field::Context(expr))) => {
-                // TODO: Handle end_byte.
                 let size = expr.end_bit - expr.start_bit + 1;
                 let bit_start = 32 - (expr.start_bit + size);
                 let val = (ctx[(expr.start_bit / 32) as usize] >> bit_start) & ((1 << size) - 1);
                 let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
                 matched_ops.push(MatchedSymbol::Literal((val as i64, num_bytes)));
-                // bit_end = bit_end.max((expr.start_byte * 8 + size) as usize);
             },
             Some(Expr::Add(_)) => {
                 let (val, sz) = evaluate_expr(operand.expr.as_ref().unwrap(), pc, bit_end, ctx, &matched_ops);
@@ -1871,7 +1873,6 @@ fn resolve_operands<'a>(
                 match resolve_symbol(&new_words, pc, op_sym, symbols, ctx) {
                     Some((matched_sym, sub_bit_end)) => {
                         matched_ops.push(matched_sym);
-                        // println!("sub-constructor took {} bits, started at bit {}", sub_bit_end, operand.off * 8);
                         bit_end = bit_end.max((operand.off * 8) as usize + sub_bit_end);
                     },
                     None => (),
@@ -1891,15 +1892,11 @@ pub fn resolve_symbol<'a>(
     symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
-    // println!("{}", sym.id);
     match &sym.body {
         SymbolBody::Subtable(table) => {
-            // println!("{:#?}", table);
             match resolve_constructor(words, table, symbols, ctx) {
                 Some((ct, bit_end)) => {
-                    // println!("constructor took {} bits", bit_end);
                     let (operands, ops_bit_end) = resolve_operands(words, pc, ct, symbols, ctx);
-                    // println!("operands took {} bits", ops_bit_end);
                     Some((MatchedSymbol::Constructor((ct, operands)), bit_end.max(ops_bit_end)))
                 }
                 None => None,
