@@ -1559,7 +1559,7 @@ fn match_ctx_pattern_block(block: &PatternBlock, words: &Vec<u32>) -> bool {
 fn match_insn_pattern_block(block: &PatternBlock, words: &Vec<u8>) -> bool {
     for (i, mask_word) in block.masks.iter().enumerate() {
         let word = get_word(words, (block.offset as usize) + i * 4);
-        // println!("insn {:x} vs {:x}, {:x}", word & mask_word.mask, mask_word.val, mask_word.mask);
+        // println!("Matching instruction pattern: {:?}", block);
         if (word & mask_word.mask) != mask_word.val {
             return false;
         }
@@ -1663,9 +1663,12 @@ fn resolve_constructor<'a>(
     table: &'a Subtable,
     symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
+    debug: (bool, usize),
 ) -> Option<(&'a Constructor<'a>, usize)> {
     let mut dtree = &table.decision_tree;
     let mut bits_consumed = 0;
+
+    let indent = " ".repeat(debug.1 * 4);
 
     loop {
         match dtree {
@@ -1680,25 +1683,25 @@ fn resolve_constructor<'a>(
                 if !is_context {
                     let word = get_word(words, 0);
                     let idx = ((word >> bit_start) & ((1 << size) - 1)) as usize;
-                    // println!("-- {} {} {} {:x} {}", bit_start, start, size, word, idx);
+
+                    if debug.0 {
+                        println!("{}Extracting bits {}-{} from {:x}", indent, start, start + size, word);
+                    }
+
                     dtree = &children[idx.min(children.len() - 1)];
                     bits_consumed = bits_consumed.max(start + size);
                 } else {
                     let ctx_word = ctx[(*start as usize) / 32];
                     let idx = (ctx_word.overflowing_shr(bit_start).0 & ((1 << size) - 1)) as usize;
-                    // println!("~~~ ctx {} {} {}", start, size, idx);
                     dtree = &children[idx.min(children.len() - 1)];
                 }
             }
             DecisionTree::Leaf(pairs) => {
                 for (ct_id, pattern) in pairs {
                     let ct = &table.constructors[*ct_id as usize];
-                    // println!("{:?}", ct.print_commands);
 
                     if match_pattern(pattern, &words, &ctx) {
-                        // println!("matched {:?}", ct.print_commands);
                         return Some((ct, bits_consumed as usize));
-                        // return Some(ct);
                     }
                 }
 
@@ -1828,18 +1831,45 @@ fn resolve_operands<'a>(
     ct: &'a Constructor,
     symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
+    debug: (bool, usize),
 ) -> (Vec<MatchedSymbol<'a>>, usize) {
     let mut matched_ops = vec![];
     let mut bit_end: usize = 0;
+
+    let indent = " ".repeat(debug.1 * 4);
+
+    if debug.0 {
+        println!("{}Resolving operands", indent);
+    }
 
     for op_idx in &ct.operands {
         let operand = get_operand(&op_idx, &symbols);
 
         match &operand.expr {
             Some(Expr::Field(Field::Token(expr))) => {
+                // TODO: Handle shift field.
                 let size = expr.end_bit - expr.start_bit + 1;
                 let bit_start = 32 - (expr.start_bit + size);
-                let word = get_word_le(words, bit_end / 8 + expr.start_byte as usize);
+
+                let word = if !expr.big_endian { // TODO: Figure out if this is right. I'm just guessing.
+                    get_word_le(words, bit_end / 8 + expr.start_byte as usize)
+                } else {
+                    get_word(words, bit_end / 8 + expr.start_byte as usize)
+                };
+
+                if debug.0 {
+                    println!(
+                        "{}Extracting token from bits {}-{} of bytes {}-{} starting at bit {} from {:x}",
+                        indent,
+                        expr.start_bit,
+                        expr.end_bit + 1,
+                        expr.start_byte,
+                        expr.end_byte + 1,
+                        bit_end,
+                        word,
+                    );
+                }
+
                 let val = (word >> expr.start_bit) & (((1_u64 << size) - 1) as u32);
                 let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
                 matched_ops.push(MatchedSymbol::Literal((val as i64, num_bytes)));
@@ -1858,7 +1888,15 @@ fn resolve_operands<'a>(
             },
             None => {
                 let op_sym = &symbols[&operand.subsym];
-                let new_words = words[(operand.off as usize)..].to_vec(); // TODO: Remove this clone.
+
+                // TODO: Figure out if thise guess is right.
+                let base = if operand.base == -1 {
+                    operand.off as usize
+                } else {
+                    bit_end / 8
+                };
+
+                let new_words = words[base..].to_vec(); // TODO: Remove this clone.
 
                 // Before recursively resolving a symbol, we first need to modify the context.
                 for op in &ct.context_ops {
@@ -1870,10 +1908,25 @@ fn resolve_operands<'a>(
                     ctx[op.i as usize] = (existing & !mask) | (v & mask);
                 }
 
-                match resolve_symbol(&new_words, pc, op_sym, symbols, ctx) {
+                if debug.0 {
+                    println!("{}Resolving sub-constructor", indent);
+                }
+
+                match resolve_symbol(&new_words, pc, op_sym, symbols, ctx, (debug.0, debug.1 + 1)) {
                     Some((matched_sym, sub_bit_end)) => {
+                        let new_bit_end = bit_end.max((base * 8) as usize + sub_bit_end);
+
+                        if debug.0 {
+                            println!(
+                                "{}Sub-Constructor took {} bits from {:?}",
+                                indent,
+                                sub_bit_end,
+                                &new_words[..sub_bit_end/8],
+                            );
+                        }
+
                         matched_ops.push(matched_sym);
-                        bit_end = bit_end.max((operand.off * 8) as usize + sub_bit_end);
+                        bit_end = new_bit_end;
                     },
                     None => (),
                 };
@@ -1891,12 +1944,24 @@ pub fn resolve_symbol<'a>(
     sym: &'a Symbol,
     symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
+    debug: (bool, usize),
 ) -> Option<(MatchedSymbol<'a>, usize)> {
     match &sym.body {
         SymbolBody::Subtable(table) => {
-            match resolve_constructor(words, table, symbols, ctx) {
+            match resolve_constructor(words, table, symbols, ctx, debug) {
                 Some((ct, bit_end)) => {
-                    let (operands, ops_bit_end) = resolve_operands(words, pc, ct, symbols, ctx);
+                    let indent = " ".repeat(debug.1 * 4);
+
+                    if debug.0 && bit_end > 0 {
+                        println!("{}Constructor took {} bits from {:?}", indent, bit_end, &words[..bit_end/8]);
+                    }
+
+                    let (operands, ops_bit_end) = resolve_operands(words, pc, ct, symbols, ctx, debug);
+
+                    if debug.0 && ops_bit_end > 0 {
+                        println!("{}Operands took {} bits from {:?}", indent, ops_bit_end, &words[..ops_bit_end/8]);
+                    }
+
                     Some((MatchedSymbol::Constructor((ct, operands)), bit_end.max(ops_bit_end)))
                 }
                 None => None,

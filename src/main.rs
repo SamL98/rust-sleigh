@@ -143,9 +143,11 @@ fn main() {
             &lang.symbols[&lang.insn_table_id],
             &lang.symbols,
             &mut ctx.clone(),
+            (false, 0),
         ).unwrap();
 
         bits_consumed += num_bits;
+        // println!("\nInstruction took {} bits", num_bits);
 
         // println!("{} {}", num_bits, bits_consumed);
         // println!("{:#?}", matched_symbol);
@@ -161,6 +163,11 @@ fn main() {
             &lang.varnode_map,
             (false, 0),
         );
+
+        // if pc.offset == 0x100003e29 {
+        //     break
+        // }
+        
         // println!("{:#?}\n", pcodeops);
     }
 }
