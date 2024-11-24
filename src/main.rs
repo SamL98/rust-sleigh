@@ -120,7 +120,9 @@ fn main() {
     let mut raw_bytes: Vec<u8> = Vec::new();
     let _ = target_file.read_to_end(&mut raw_bytes);
     // let buf = &raw_bytes[0x3f20..0x3f95];
+
     let buf = &raw_bytes[0x3dc0..0x3eb3];
+    let orig_pc = 0x100003dc0;
         
     let mut bits_consumed = 0;
 
@@ -130,8 +132,14 @@ fn main() {
         let mut tmp_buf: Vec<u8> = buf[bits_consumed / 8..].to_vec();
         tmp_buf[0] = tmp_buf[0].overflowing_shl((bits_consumed % 8) as u32).0;
 
+        let pc = Address {
+            space: "ram".to_owned(),
+            offset: (orig_pc + bits_consumed / 8) as u64,
+        };
+
         let (matched_symbol, num_bits) = resolve_symbol(
             &tmp_buf,
+            pc.offset,
             &lang.symbols[&lang.insn_table_id],
             &lang.symbols,
             &mut ctx.clone(),
@@ -142,21 +150,17 @@ fn main() {
         // println!("{} {}", num_bits, bits_consumed);
         // println!("{:#?}", matched_symbol);
 
-        let pc = Address {
-            space: "ram".to_owned(),
-            offset: 0x1337,
-        };
-
         let asm = build_text(&matched_symbol);
-        println!("{}", asm);
+        println!("0x{:x}: {}", pc.offset, asm);
 
         let (pcodeops, _) = build_sym(
             &matched_symbol,
             &pc,
+            num_bits,
             &lang.spaces,
             &lang.varnode_map,
             (false, 0),
         );
-        println!("{:#?}\n", pcodeops);
+        // println!("{:#?}\n", pcodeops);
     }
 }
