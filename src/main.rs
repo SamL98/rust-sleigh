@@ -10,74 +10,12 @@ use crate::arch::get_language;
 use crate::parser::*;
 use crate::sleigh::types::Address;
 
-use nom::branch::*;
-use nom::bytes::complete::*;
-use nom::character::complete::*;
-use nom::character::*;
-use nom::combinator::*;
-use nom::error::*;
-use nom::multi::*;
-use nom::sequence::*;
-use nom::*;
-
 use bitvec::prelude::*;
 
-use termios::{Termios, TCSANOW, ECHO, ICANON, tcsetattr};
 use std::io::{self, Read, Seek};
 use std::fs;
 
 use std::collections::{HashMap, HashSet};
-
-fn _explore_dtree(
-    dtree: &DecisionTree,
-    depth: usize,
-    line: usize,
-    selected_line: usize,
-    open_idxs: &HashSet<usize>,
-    table: &Subtable,
-) -> usize {
-    let mut num_lines = 0;
-
-    match dtree {
-        DecisionTree::NonLeaf((is_context, start, size, children)) => {
-            let c = if line == selected_line { '>' } else { ' ' };
-            println!("{} {}+ ({}, {}, {})", c, " ".repeat(depth * 2), start, size, is_context);
-            num_lines += 1;
-
-            if open_idxs.contains(&line) {
-                for child in children {
-                    num_lines += _explore_dtree(
-                        child,
-                        depth + 1,
-                        line + num_lines,
-                        selected_line,
-                        open_idxs,
-                        table
-                    );
-                }
-            }
-        },
-        DecisionTree::Leaf(pairs) => {
-            for (ct_id, pattern) in pairs {
-                let c = if line + num_lines == selected_line { '>' } else { ' ' };
-                let ct = &table.constructors[*ct_id as usize];
-                println!("{} {}{:?}", c, " ".repeat(depth * 2), ct.print_commands);
-                num_lines += 1
-            }
-        },
-    };
-
-    num_lines
-}
-
-fn explore_dtree(
-    dtree: &DecisionTree,
-    selected_line: usize,
-    open_idxs: &HashSet<usize>,
-    table: &Subtable,
-) {
-    _explore_dtree(dtree, 0, 0, selected_line, open_idxs, table);
-}
 
 fn main() {
     let contents = read_file("x86-64.sla");

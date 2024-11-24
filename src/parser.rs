@@ -1532,7 +1532,17 @@ fn string(input: &str) -> Res<&str, &str> {
 }
 
 pub fn read_file(filename: &str) -> String {
-    fs::read_to_string(format!("{}/{}", SLEIGH_PATH, filename)).expect("can't read file")
+    #[cfg(target_arch = "wasm32")]
+    {
+        use super::do_get_request;
+        let url = format!("http://localhost:8000/Processors/x86/data/languages/{}", filename);
+        do_get_request(url.as_str())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        fs::read_to_string(format!("{}/{}", SLEIGH_PATH, filename)).expect("Could not read file")
+    }
 }
 
 fn match_ctx_pattern_block(block: &PatternBlock, words: &Vec<u32>) -> bool {

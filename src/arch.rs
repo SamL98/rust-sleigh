@@ -24,6 +24,21 @@ pub struct CompilerSpec {
     pub prototypes: Vec<Prototype>
 }
 
+pub fn read_file(path: PathBuf, root: &Path) -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use super::do_get_request;
+        let rel = path.strip_prefix(root).unwrap().to_str().unwrap();
+        let url = format!("http://localhost:8000/Processors/x86/data/languages/{}", rel);
+        do_get_request(url.as_str())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        fs::read_to_string(path.to_str().unwrap()).expect("Could not read file")
+    }
+}
+
 /*impl CompilerSpec {
     fn new(arch_path: Path, compiler: &Element) -> CompilerSpec {
         let cspec_filename = compiler.get_attr("spec").unwrap();
@@ -81,8 +96,7 @@ impl Language {
 
         let pspec_filename = lang.get_attr("processorspec").unwrap();
         let pspec_path = arch_path.join(pspec_filename);
-        let pspec_contents = fs::read_to_string(pspec_path.to_str().unwrap())
-                                    .expect("Could not read pspec");
+        let pspec_contents = read_file(pspec_path, arch_path);
 
         let pspec_elem = Element::from_reader(pspec_contents.as_bytes()).unwrap();
         let pspec = ProcessorSpec::new(&pspec_elem);
@@ -130,7 +144,13 @@ impl Architecture {
 }*/
 
 pub fn get_language(arch_name: &str, language_id: &str) -> Option<Language> {
-    let ghidra_root_envvar = env::var("GHIDRA_PATH").expect("$GHIDRA_PATH not set");
+    let mut ghidra_root_envvar = ".".to_string();
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        ghidra_root_envvar = env::var("GHIDRA_PATH").expect("$GHIDRA_PATH not set");
+    }
+
     let ghidra_root_path = Path::new(&ghidra_root_envvar);
 
     let arch_path = ghidra_root_path.join("Ghidra")
@@ -139,21 +159,17 @@ pub fn get_language(arch_name: &str, language_id: &str) -> Option<Language> {
                                     .join("data")
                                     .join("languages");
 
-    for ldef_entry in glob(&format!("{}/*.ldefs", arch_path.display()))
-                        .expect("Couldn't read glob") {
-        if let Ok(ldef_path) = ldef_entry {
-            let ldef_contents = fs::read_to_string(ldef_path.to_str().unwrap())
-                                        .expect("Could not read ldef");
+    // TODO: Make wasm search ldef paths.
+    let ldef_path = arch_path.join("x86.ldefs");
+    let ldef_contents = read_file(ldef_path, &arch_path);
 
-            let ldef = Element::from_reader(ldef_contents.as_bytes()).unwrap();
+    let ldef = Element::from_reader(ldef_contents.as_bytes()).unwrap();
 
-            for language_elem in ldef.find_all("language") {
-                if let Some(lang_id) = language_elem.get_attr("id") {
-                    if lang_id.eq(language_id) {
-                        let language = Language::new(&arch_path, language_elem);
-                        return Some(language);
-                    }
-                }
+    for language_elem in ldef.find_all("language") {
+        if let Some(lang_id) = language_elem.get_attr("id") {
+            if lang_id.eq(language_id) {
+                let language = Language::new(&arch_path, language_elem);
+                return Some(language);
             }
         }
     }
