@@ -2172,7 +2172,7 @@ fn build_pcodeop<'a>(
 
     let pc = seq.pc.offset;
 
-    PcodeOp {
+    let op = PcodeOp {
         seq: seq,
         opcode: OpCode::from_str(op_tpl.code),
         inputs: op_tpl
@@ -2184,6 +2184,56 @@ fn build_pcodeop<'a>(
             .output
             .as_ref()
             .map(|tpl| build_varnode(&tpl, pc, bit_len, varnodes, spaces, varnode_map, debug)),
+    };
+
+    if op.opcode == OpCode::Copy && op.output.as_ref().map(|o| o.space == "ram").unwrap_or(false) {
+        let out = op.output.unwrap();
+
+        PcodeOp {
+            seq: op.seq,
+            opcode: OpCode::Store,
+            inputs: vec![
+                Varnode {
+                    name: None,
+                    space: "DUMMY".to_string(), // TODO: Figure out what to put here.
+                    offset: 0,
+                    size: 0,
+                },
+                // FIXME: It's probably not generally true that these are from the unique space
+                //        but fixing will require properly dealing with handles.
+                Varnode { 
+                    name: None,
+                    space: "unique".to_string(),
+                    offset: out.offset,
+                    size: out.size,
+                },
+                op.inputs[0].clone(),
+            ],
+            output: None,
+        }
+    } else if op.opcode == OpCode::Copy && op.inputs[0].space == "ram" {
+        PcodeOp {
+            seq: op.seq,
+            opcode: OpCode::Load,
+            inputs: vec![
+                Varnode {
+                    name: None,
+                    space: "DUMMY".to_string(), // TODO: Same thing.
+                    offset: 0,
+                    size: 0,
+                },
+                // FIXME: Same thing.
+                Varnode {
+                    name: None,
+                    space: "unique".to_string(),
+                    offset: op.inputs[0].offset,
+                    size: op.inputs[0].size,
+                }
+            ],
+            output: op.output,
+        }
+    } else {
+        op
     }
 }
 
