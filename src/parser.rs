@@ -1774,13 +1774,11 @@ fn resolve_valuemap<'a>(
 
 fn evaluate_expr(
     expr: &Expr,
-    pc: u64,
-    bit_end: usize,
     ctx: &Vec<u32>,
     operands: &Vec<MatchedSymbol<'_>>,
-) -> (i64, usize) {
+) -> (i64, usize, bool) {
     match expr {
-        Expr::Const(val) => (*val, 8), // FIXME
+        Expr::Const(val) => (*val, 8, false), // FIXME
         Expr::Operand(op_expr) if (op_expr.idx as usize) < operands.len() => {
             if let MatchedSymbol::Literal((val, sz)) = &operands[op_expr.idx as usize] {
                 let signed_val = match *sz {
@@ -1791,35 +1789,32 @@ fn evaluate_expr(
                     _ => *val,
                 };
 
-                (signed_val, *sz)
+                (signed_val, *sz, false)
             } else {
                 panic!();
             }
         },
         Expr::Xor((lhs, rhs)) => {
-            let (lhs_val, lhs_sz) = evaluate_expr(&**lhs, pc, bit_end, ctx, operands);
-            let (rhs_val, rhs_sz) = evaluate_expr(&**rhs, pc, bit_end, ctx, operands);
-            (lhs_val ^ rhs_val, lhs_sz.max(rhs_sz))
+            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands);
+            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands);
+            (lhs_val ^ rhs_val, lhs_sz.max(rhs_sz), lhs_fixme || rhs_fixme)
         },
         Expr::Add((lhs, rhs)) => {
-            let (lhs_val, lhs_sz) = evaluate_expr(&**lhs, pc, bit_end, ctx, operands);
-            let (rhs_val, rhs_sz) = evaluate_expr(&**rhs, pc, bit_end, ctx, operands);
-            (lhs_val + rhs_val, lhs_sz.max(rhs_sz))
+            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands);
+            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands);
+            (lhs_val + rhs_val, lhs_sz.max(rhs_sz), lhs_fixme || rhs_fixme)
         },
         Expr::Field(Field::Context(ctx_field)) => {
             // FIXME: Use BitVec for context. Use end_byte.
-            // println!("{:?}", ctx_field);
             let idx = (ctx_field.start_bit / 32) as usize;
-            // let ctx_word = (ctx[idx] >> (32 - (ctx_field.start_byte * 8 + 8))) & 0xff;
             let ctx_word = ctx[idx];
             let size = ctx_field.end_bit - ctx_field.start_bit + 1;
-            // println!("{} {}", ctx_field.start_bit, size);
             let bit_start = 32 - (ctx_field.start_bit + size);
             let rv = ((ctx_word >> bit_start) & ((1 << size) - 1)) as i64;
-            (rv, (size / 8) as usize)
+            (rv, (size / 8) as usize, false)
         },
         Expr::End => {
-            ((pc as usize + bit_end / 8) as i64, 8)
+            (0, 8, true)
         },
         _ => todo!("{:?}", expr),
     }
@@ -1832,8 +1827,9 @@ fn resolve_operands<'a>(
     symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
     debug: (bool, usize),
-) -> (Vec<MatchedSymbol<'a>>, usize) {
+) -> (Vec<MatchedSymbol<'a>>, Vec<usize>, usize) {
     let mut matched_ops = vec![];
+    let mut fixups = vec![];
     let mut bit_end: usize = 0;
 
     let indent = " ".repeat(debug.1 * 4);
@@ -1883,8 +1879,12 @@ fn resolve_operands<'a>(
                 matched_ops.push(MatchedSymbol::Literal((val as i64, num_bytes)));
             },
             Some(Expr::Add(_)) => {
-                let (val, sz) = evaluate_expr(operand.expr.as_ref().unwrap(), pc, bit_end, ctx, &matched_ops);
+                let (val, sz, fixme) = evaluate_expr(operand.expr.as_ref().unwrap(), ctx, &matched_ops);
                 matched_ops.push(MatchedSymbol::Literal((val, sz)));
+
+                if fixme {
+                    fixups.push(matched_ops.len() - 1);
+                }
             },
             None => {
                 let op_sym = &symbols[&operand.subsym];
@@ -1903,7 +1903,7 @@ fn resolve_operands<'a>(
                     let existing = ctx[op.i as usize];
                     let mask = op.mask;
 
-                    let (val, _) = evaluate_expr(&op.expr, pc, bit_end, ctx, &matched_ops);
+                    let (val, _, _) = evaluate_expr(&op.expr, ctx, &matched_ops);
                     let v = ((val as u32) << op.shift);
                     ctx[op.i as usize] = (existing & !mask) | (v & mask);
                 }
@@ -1912,7 +1912,7 @@ fn resolve_operands<'a>(
                     println!("{}Resolving sub-constructor", indent);
                 }
 
-                match resolve_symbol(&new_words, pc, op_sym, symbols, ctx, (debug.0, debug.1 + 1)) {
+                match resolve_symbol(&new_words, pc + base as u64, op_sym, symbols, ctx, (debug.0, debug.1 + 1)) {
                     Some((matched_sym, sub_bit_end)) => {
                         let new_bit_end = bit_end.max((base * 8) as usize + sub_bit_end);
 
@@ -1935,7 +1935,7 @@ fn resolve_operands<'a>(
         }
     }
 
-    (matched_ops, bit_end)
+    (matched_ops, fixups, bit_end)
 }
 
 pub fn resolve_symbol<'a>(
@@ -1956,13 +1956,22 @@ pub fn resolve_symbol<'a>(
                         println!("{}Constructor took {} bits from {:?}", indent, bit_end, &words[..bit_end/8]);
                     }
 
-                    let (operands, ops_bit_end) = resolve_operands(words, pc, ct, symbols, ctx, debug);
+                    let (mut operands, fixups, ops_bit_end) = resolve_operands(words, pc, ct, symbols, ctx, debug);
 
                     if debug.0 && ops_bit_end > 0 {
                         println!("{}Operands took {} bits from {:?}", indent, ops_bit_end, &words[..ops_bit_end/8]);
                     }
 
-                    Some((MatchedSymbol::Constructor((ct, operands)), bit_end.max(ops_bit_end)))
+                    let bit_len = bit_end.max(ops_bit_end);
+
+                    for idx in fixups {
+                        if let MatchedSymbol::Literal((val, sz)) = operands[idx].clone() {
+                            let new_val = val + (pc as usize + bit_len / 8) as i64;
+                            operands[idx] = MatchedSymbol::Literal((new_val, sz));
+                        }
+                    }
+
+                    Some((MatchedSymbol::Constructor((ct, operands)), bit_len))
                 }
                 None => None,
             }

@@ -168,6 +168,6 @@ fn main() {
         //     break
         // }
         
-        // println!("{:#?}\n", pcodeops);
+        println!("{:#?}\n", pcodeops);
     }
 }
