@@ -2232,6 +2232,13 @@ fn build_pcodeop<'a>(
             ],
             output: op.output,
         }
+    } else if op.opcode == OpCode::IntAdd && op.inputs[1].is_negative() {
+        PcodeOp {
+            seq: op.seq,
+            opcode: OpCode::IntSub,
+            inputs: vec![op.inputs[0].clone(), op.inputs[1].negate()],
+            output: op.output.clone(),
+        }
     } else {
         op
     }

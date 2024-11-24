@@ -21,6 +21,27 @@ impl Varnode{
             }
         }
     }
+
+    pub fn is_negative(&self) -> bool {
+        self.space.as_str() == "const" && self.offset >> (self.size * 8 - 1) == 1
+    }
+
+    pub fn negate(&self) -> Varnode {
+        let signed_off = match self.size {
+            1 => -(self.offset as i8) as u64,
+            2 => -(self.offset as i16) as u64,
+            4 => -(self.offset as i32) as u64,
+            8 => -(self.offset as i64) as u64,
+            _ => self.offset,
+        };
+
+        Varnode {
+            name: self.name.clone(),
+            space: self.space.clone(),
+            offset: signed_off,
+            size: self.size,
+        }
+    }
 }
 
 impl fmt::Debug for Varnode {
