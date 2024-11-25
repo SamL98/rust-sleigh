@@ -10,7 +10,6 @@ use super::arch::Language;
 use nom::branch::*;
 use nom::bytes::complete::*;
 use nom::character::complete::*;
-use nom::character::*;
 use nom::combinator::*;
 use nom::error::*;
 use nom::multi::*;
@@ -20,12 +19,14 @@ use nom::*;
 use bitvec::prelude::*;
 
 use std::collections::HashMap;
-use std::collections::HashSet;
-use std::fs;
 use std::fmt;
-use std::fs::File;
 use std::hash::{Hash, Hasher};
-use std::io::Write;
+
+#[cfg(not(target_arch = "wasm32"))]
+use {
+    std::fs,
+    std::fs::File,
+};
 
 static SLEIGH_PATH: &'static str =
     "/Users/samlerner/ghidra_10.3_PUBLIC/Ghidra/Processors/x86/data/languages";
@@ -632,15 +633,15 @@ fn field_expr(input: &str) -> Res<&str, Expr> {
 }
 
 fn start_expr(input: &str) -> Res<&str, Expr> {
-    tag("<start_exp/>")(input).map(|(next, res)| (next, (Expr::Start)))
+    tag("<start_exp/>")(input).map(|(next, _)| (next, (Expr::Start)))
 }
 
 fn end_expr(input: &str) -> Res<&str, Expr> {
-    tag("<end_exp/>")(input).map(|(next, res)| (next, (Expr::End)))
+    tag("<end_exp/>")(input).map(|(next, _)| (next, (Expr::End)))
 }
 
 fn next2_expr(input: &str) -> Res<&str, Expr> {
-    tag("<next2_exp/>")(input).map(|(next, res)| (next, (Expr::Next2)))
+    tag("<next2_exp/>")(input).map(|(next, _)| (next, (Expr::Next2)))
 }
 
 fn unary_expr(input: &str) -> Res<&str, Expr> {
@@ -779,7 +780,7 @@ fn nonnull_varnode_template(input: &str) -> Res<&str, Option<VarnodeTemplate>> {
 }
 
 fn null_varnode_template(input: &str) -> Res<&str, Option<VarnodeTemplate>> {
-    tag("<null/>")(input).map(|(next, res)| (next, None))
+    tag("<null/>")(input).map(|(next, _)| (next, None))
 }
 
 fn varnode_template(input: &str) -> Res<&str, Option<VarnodeTemplate>> {
@@ -860,7 +861,7 @@ fn handle_template(input: &str) -> Res<&str, ConsTemplate> {
 }
 
 fn null_ops(input: &str) -> Res<&str, Vec<ConsTemplate>> {
-    tag("<null/>")(input).map(|(next, res)| (next, vec![]))
+    tag("<null/>")(input).map(|(next, _)| (next, vec![]))
 }
 
 fn constructor_template(input: &str) -> Res<&str, ConstructorTemplate> {
@@ -1265,7 +1266,7 @@ fn nonnull_var(input: &str) -> Res<&str, Option<u32>> {
 }
 
 fn null_var(input: &str) -> Res<&str, Option<u32>> {
-    tag("<null/>")(input).map(|(next, res)| (next, None))
+    tag("<null/>")(input).map(|(next, _)| (next, None))
 }
 
 fn var(input: &str) -> Res<&str, Option<u32>> {
@@ -1547,9 +1548,9 @@ pub fn read_file(filename: &str) -> String {
 
 fn match_ctx_pattern_block(block: &PatternBlock, words: &Vec<u32>) -> bool {
     let mut word_idx = (block.offset / 4) as usize;
-    let mut byte_idx = block.offset % 4;
+    let byte_idx = block.offset % 4;
 
-    for (i, mask_word) in block.masks.iter().enumerate() {
+    for (_, mask_word) in block.masks.iter().enumerate() {
         let cw = words[word_idx];
         let nw = if word_idx < words.len() - 1 { words[word_idx+1] } else { 0 };
         let word = (cw & (((1_u64 << (32 - (byte_idx * 8))) - 1) as u32)).overflowing_shl(byte_idx * 8).0 | 
@@ -1557,8 +1558,6 @@ fn match_ctx_pattern_block(block: &PatternBlock, words: &Vec<u32>) -> bool {
 
         word_idx += 1;
 
-        // let word = words[i];
-        // println!("ctx {:x} vs {:x}, {:x} ({:x})", word & mask_word.mask, mask_word.val, mask_word.mask, word);
         if (word & mask_word.mask) != mask_word.val {
             return false;
         }
@@ -1628,15 +1627,15 @@ fn get_word(words: &Vec<u8>, start: usize) -> u32 {
     let mut word: u32 = 0;
 
     if words.len() > start {
-        word |= ((words[start] as u32) << 24);
+        word |= (words[start] as u32) << 24;
     }
 
     if words.len() > start + 1 {
-        word |= ((words[start+1] as u32) << 16);
+        word |= (words[start+1] as u32) << 16;
     }
 
     if words.len() > start + 2 {
-        word |= ((words[start+2] as u32) << 8);
+        word |= (words[start+2] as u32) << 8;
     }
 
     if words.len() > start + 3 {
@@ -1650,15 +1649,15 @@ fn get_word_le(words: &Vec<u8>, start: usize) -> u32 {
     let mut word: u32 = 0;
 
     if words.len() > start {
-        word |= (words[start] as u32);
+        word |= words[start] as u32;
     }
 
     if words.len() > start + 1 {
-        word |= ((words[start+1] as u32) << 8);
+        word |= (words[start+1] as u32) << 8;
     }
 
     if words.len() > start + 2 {
-        word |= ((words[start+2] as u32) << 16);
+        word |= (words[start+2] as u32) << 16;
     }
 
     if words.len() > start + 3 {
@@ -1671,7 +1670,7 @@ fn get_word_le(words: &Vec<u8>, start: usize) -> u32 {
 fn resolve_constructor<'a>(
     words: &Vec<u8>,
     table: &'a Subtable,
-    symbols: &'a HashMap<u32, Symbol>,
+    _symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
     debug: (bool, usize),
 ) -> Option<(&'a Constructor<'a>, usize)> {
@@ -1726,7 +1725,7 @@ fn resolve_varlist<'a>(
     words: &Vec<u8>,
     varlist: &'a Varlist,
     symbols: &'a HashMap<u32, Symbol>,
-    ctx: &mut Vec<u32>,
+    _ctx: &mut Vec<u32>,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
     match &varlist.field {
         Field::Token(token) => {
@@ -1755,8 +1754,8 @@ fn resolve_varlist<'a>(
 fn resolve_valuemap<'a>(
     words: &Vec<u8>,
     valuemap: &'a Valuemap,
-    symbols: &'a HashMap<u32, Symbol>,
-    ctx: &mut Vec<u32>,
+    _symbols: &'a HashMap<u32, Symbol>,
+    _ctx: &mut Vec<u32>,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
     match &valuemap.field {
         Field::Token(token) => {
@@ -1855,7 +1854,6 @@ fn resolve_operands<'a>(
             Some(Expr::Field(Field::Token(expr))) => {
                 // TODO: Handle shift field.
                 let size = expr.end_bit - expr.start_bit + 1;
-                let bit_start = 32 - (expr.start_bit + size);
 
                 let word = if !expr.big_endian { // TODO: Figure out if this is right. I'm just guessing.
                     get_word_le(words, bit_end / 8 + expr.start_byte as usize)
@@ -1914,7 +1912,7 @@ fn resolve_operands<'a>(
                     let mask = op.mask;
 
                     let (val, _, _) = evaluate_expr(&op.expr, ctx, &matched_ops);
-                    let v = ((val as u32) << op.shift);
+                    let v = (val as u32) << op.shift;
                     ctx[op.i as usize] = (existing & !mask) | (v & mask);
                 }
 
@@ -1992,7 +1990,7 @@ pub fn resolve_symbol<'a>(
         SymbolBody::Valuemap(valuemap) => {
             resolve_valuemap(words, valuemap, symbols, ctx)
         },
-        SymbolBody::Varnode(vnode) => {
+        SymbolBody::Varnode(_) => {
             Some((MatchedSymbol::Symbol(sym), 0))
         },
         _ => todo!("{:?}", sym.body),
@@ -2044,7 +2042,7 @@ fn build_value<'a>(
     pc: u64,
     bit_len: usize,
     varnodes: &'a Vec<Varnode>,
-    debug: (bool, usize),
+    _debug: (bool, usize),
 ) -> VarnodeValue<'a> {
     match const_tpl {
         ConstTemplate::SpaceId(space) => VarnodeValue::String(space),
@@ -2052,17 +2050,8 @@ fn build_value<'a>(
         ConstTemplate::Handle(idx) => {
             let ix = *idx as usize;
             VarnodeValue::Op(&varnodes[ix])
-
-            // match &varnodes[ix] {
-            //     Handle::Varnode(vn) => VarnodeValue::Op(vn),
-            //     Handle::Indirect((space_vn, ptr_vn)) if space_vn.space == "const" => {
-            //         VarnodeValue::Op(space_vn)
-            //     }
-            //     Handle::Indirect((space_vn, ptr_vn)) => panic!("{} {}", space_vn, ptr_vn),
-            //     _ => panic!(),
-            // }
         },
-        ConstTemplate::Relative(idx) => todo!(),
+        ConstTemplate::Relative(_idx) => todo!(),
         ConstTemplate::Start => todo!(),
         ConstTemplate::Next => VarnodeValue::Int(pc + (bit_len / 8) as u64),
         ConstTemplate::CurSpace => todo!(),
@@ -2138,10 +2127,10 @@ fn build_varnode<'a>(
         VarnodeValue::Op(op) => {
             if space == "const" {
                 match op.size {
-                    1 => (((op.offset as i8) as i64) as u64),
-                    2 => (((op.offset as i16) as i64) as u64),
-                    4 => (((op.offset as i32) as i64) as u64),
-                    8 => (((op.offset as i64) as i64) as u64),
+                    1 => ((op.offset as i8) as i64) as u64,
+                    2 => ((op.offset as i16) as i64) as u64,
+                    4 => ((op.offset as i32) as i64) as u64,
+                    8 => ((op.offset as i64) as i64) as u64,
                     _ => op.offset,
                 }
             } else {
@@ -2149,7 +2138,6 @@ fn build_varnode<'a>(
             }
         },
         VarnodeValue::String(name) => spaces[name],
-        _ => panic!(),
     };
 
     let name = match space {
@@ -2413,7 +2401,6 @@ pub fn build_text(matched_sym: &MatchedSymbol) -> String {
             _ => panic!(),
         },
         MatchedSymbol::Literal((val, _)) => format!("0x{:x}", val),
-        _ => todo!()
     }
 }
 

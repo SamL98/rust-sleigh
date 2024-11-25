@@ -1,14 +1,16 @@
-use super::types::{Context, Instruction, PcodeOp, Address};
-use super::pcode::PcodeIface;
+use super::types::{
+    // Context,
+    Instruction,
+    // PcodeOp,
+    // Address
+};
+// use super::pcode::PcodeIface;
 
-use std::cmp::{PartialEq, Eq};
-use std::hash::{Hash, Hasher};
-use std::clone::Clone;
 use std::fmt;
 
 impl fmt::Display for Instruction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} {}", self.mnemonic, self.body)
+        write!(f, "{}", self.asm)
     }
 }
 
@@ -44,40 +46,39 @@ pub trait InstructionIface {
     }
 }*/
 
-impl Hash for Instruction {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.address.hash(state);
-        for op in &self.ops {
-            op.hash(state);
-        }
-    }
-}
+// impl Hash for Instruction {
+//     fn hash<H: Hasher>(&self, state: &mut H) {
+//         self.address.hash(state);
+//         for op in &self.ops {
+//             op.hash(state);
+//         }
+//     }
+// }
 
-impl PartialEq for Instruction {
-    fn eq(&self, other: &Self) -> bool {
-        let mut equal = self.address == other.address;
-        equal &= self.ops.len() == other.ops.len();
+// impl PartialEq for Instruction {
+//     fn eq(&self, other: &Self) -> bool {
+//         let mut equal = self.address == other.address;
+//         equal &= self.ops.len() == other.ops.len();
 
-        if equal {
-            for i in 0..self.ops.len() {
-                equal &= self.ops[i] == other.ops[i]
-            }
-        }
+//         if equal {
+//             for i in 0..self.ops.len() {
+//                 equal &= self.ops[i] == other.ops[i]
+//             }
+//         }
 
-        return equal;
-    }
-}
+//         return equal;
+//     }
+// }
 
-impl Eq for Instruction {}
+// impl Eq for Instruction {}
 
-impl Clone for Instruction {
-    fn clone(&self) -> Self {
-        return Instruction {
-            address: self.address.clone(),
-            length: self.length,
-            mnemonic: self.mnemonic.clone(),
-            body: self.body.clone(),
-            ops: self.ops.clone()
-        };
-    }
-}
+// impl Clone for Instruction {
+//     fn clone(&self) -> Self {
+//         return Instruction {
+//             address: self.address.clone(),
+//             length: self.length,
+//             asm: self.asm.clone(),
+//             ops: self.ops.clone()
+//         };
+//     }
+// }

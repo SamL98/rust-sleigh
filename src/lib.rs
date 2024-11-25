@@ -6,9 +6,8 @@ mod parser;
 mod sleigh;
 mod utils;
 
-use crate::arch::get_language;
 use crate::parser::*;
-use crate::sleigh::types::Address;
+use crate::sleigh::types::{Address, Instruction};
 
 use bitvec::prelude::*;
 
@@ -36,7 +35,7 @@ pub fn do_get_request(url: &str) -> String {
 const FILE_BYTES: &[u8] = include_bytes!("/Users/samlerner/Projects/ideco_PUBLIC/test_cases/simple_linked_list");
 
 #[wasm_bindgen]
-pub fn disassemble() {
+pub fn disassemble() -> Vec<Instruction> {
     init_panic_hook();
 
     let contents = read_file("x86-64.sla");
@@ -61,7 +60,8 @@ pub fn disassemble() {
         
     let mut bits_consumed = 0;
 
-    let mut ctx = read_ctx(&lang.context_reg, &reg_space);
+    let ctx = read_ctx(&lang.context_reg, &reg_space);
+    let mut insns = vec![];
 
     while bits_consumed < buf.len() * 8 {
         let mut tmp_buf: Vec<u8> = buf[bits_consumed / 8..].to_vec();
@@ -84,17 +84,27 @@ pub fn disassemble() {
         bits_consumed += num_bits;
 
         let asm = build_text(&matched_symbol);
-        log(format!("0x{:x}: {}", pc.offset, asm).as_str());
+        // log(format!("0x{:x}: {}", pc.offset, asm).as_str());
 
-        // let (pcodeops, _) = build_sym(
-        //     &matched_symbol,
-        //     &pc,
-        //     num_bits,
-        //     &lang.spaces,
-        //     &lang.varnode_map,
-        //     (false, 0),
-        // );
+        let (pcodeops, _) = build_sym(
+            &matched_symbol,
+            &pc,
+            num_bits,
+            &lang.spaces,
+            &lang.varnode_map,
+            (false, 0),
+        );
+
+        let insn = Instruction {
+            address: pc,
+            length: (num_bits / 8) as u64,
+            asm: asm,
+            ops: pcodeops,
+        };
 
         // println!("{:#?}\n", pcodeops);
+        insns.push(insn);
     }
+
+    insns
 }

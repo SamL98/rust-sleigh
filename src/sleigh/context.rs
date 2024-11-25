@@ -1,12 +1,12 @@
 use super::types::{
     Context,
     Instruction,
-    Varnode,
+    // Varnode,
 };
-use super::instruction::InstructionIface;
+// use super::instruction::InstructionIface;
 use crate::arch::Language;
 
-use std::collections::HashMap;
+// use std::collections::HashMap;
 
 pub trait ContextIface {
     fn new(lang: Language, compiler_id: &str) -> Context;

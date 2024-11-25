@@ -1,10 +1,10 @@
 use super::types::{
     Varnode,
-    Context
+    // Context
 };
 
-use std::cmp::{PartialEq, Eq};
-use std::hash::{Hash, Hasher};
+// use std::cmp::{PartialEq, Eq};
+// use std::hash::{Hash, Hasher};
 use std::clone::Clone;
 use std::fmt;
 

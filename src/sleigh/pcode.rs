@@ -1,18 +1,16 @@
+use wasm_bindgen::prelude::*;
 use super::types::{
-    SeqNum, 
-    Varnode, 
+    // SeqNum, 
+    // Varnode, 
     PcodeOp, 
-    Context,
-    Address
+    // Context,
+    // Address
 };
 use super::opcode::OpCode;
-use super::varnode::*;
+// use super::varnode::*;
 
-use std::cmp::{PartialEq, Eq};
-use std::hash::{Hash, Hasher};
-use std::clone::Clone;
 use std::fmt;
-use std::mem;
+// use std::mem;
 
 impl PcodeOp {
     fn fmt_unary(&self, opstr: &str) -> String {
@@ -101,7 +99,6 @@ impl PcodeOp {
             &OpCode::BoolNegate => self.fmt_unary("!"),
             &OpCode::FloatNeg => self.fmt_unary("f-"),
             &OpCode::Int2Comp => self.fmt_unary("-"),
-            &OpCode::IntNegate => self.fmt_unary("~"),
             _ => panic!("Don't know how to format {}!", self.opcode)
         }
     }
@@ -114,9 +111,16 @@ impl PcodeOp {
     }
 }
 
+#[wasm_bindgen]
+impl PcodeOp {
+    pub fn to_string(&self) -> String {
+        format!("{}{}", self.fmt_output(), self.fmt_inputs())
+    }
+}
+
 impl fmt::Debug for PcodeOp {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
-        write!(f, "{}{}", self.fmt_output(), self.fmt_inputs())
+        write!(f, "{}", self.to_string())
     }
 }
 
@@ -162,71 +166,4 @@ impl PcodeIface for PcodeOp {
             output: output
         };
     }*/
-}
-
-impl Hash for SeqNum {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.pc.hash(state);
-        self.uniq.hash(state);
-        self.order.hash(state);
-    }
-}
-
-impl PartialEq for SeqNum {
-    fn eq(&self, other: &Self) -> bool {
-        return self.pc == other.pc && self.uniq == other.uniq && self.order == other.order;
-    }
-}
-
-impl Eq for SeqNum {}
-
-impl Clone for SeqNum {
-    fn clone(&self) -> Self {
-        return SeqNum {
-            pc: self.pc.clone(),
-            uniq: self.uniq,
-            order: self.order
-        };
-    }
-}
-
-impl Hash for PcodeOp {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.seq.hash(state);
-        self.opcode.hash(state);
-        for input in &self.inputs {
-            input.hash(state);
-        }
-        self.output.hash(state);
-    }
-}
-
-impl PartialEq for PcodeOp {
-    fn eq(&self, other: &Self) -> bool {
-        let mut equal = self.seq == other.seq;
-        equal &= self.opcode == other.opcode;
-        equal &= self.inputs.len() == other.inputs.len();
-
-        if equal {
-            for i in 0..self.inputs.len() {
-                equal &= self.inputs[i] == other.inputs[i]
-            }
-        }
-
-        equal &= self.output == other.output;
-        return equal;
-    }
-}
-
-impl Eq for PcodeOp {}
-
-impl Clone for PcodeOp {
-    fn clone(&self) -> Self {
-        return PcodeOp {
-            seq: self.seq.clone(),
-            opcode: self.opcode,
-            inputs: self.inputs.clone(),
-            output: self.output.clone()
-        };
-    }
 }

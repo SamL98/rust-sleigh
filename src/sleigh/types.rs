@@ -1,18 +1,24 @@
 use super::opcode::OpCode;
+use wasm_bindgen::prelude::*;
 
-use std::collections::HashMap;
+// use std::collections::HashMap;
 
+#[wasm_bindgen(getter_with_clone)]
+#[derive(Eq, PartialEq, Hash, Clone)]
 pub struct Address {
     pub space: String,
     pub offset: u64
 }
 
+#[wasm_bindgen(getter_with_clone)]
+#[derive(Eq, PartialEq, Hash, Clone)]
 pub struct SeqNum {
     pub pc: Address,
     pub uniq: u32,
     pub order: u32
 }
 
+#[wasm_bindgen(getter_with_clone)]
 #[derive(Eq, PartialEq, Hash, Clone)]
 pub struct Varnode {
     pub name: Option<String>,
@@ -21,6 +27,8 @@ pub struct Varnode {
     pub size: u64
 }
 
+#[wasm_bindgen(getter_with_clone)]
+#[derive(Eq, PartialEq, Hash, Clone)]
 pub struct PcodeOp {
     pub seq: SeqNum,
     pub opcode: OpCode,
@@ -28,11 +36,12 @@ pub struct PcodeOp {
     pub output: Option<Varnode>,
 }
 
+#[wasm_bindgen(getter_with_clone)]
+#[derive(Eq, PartialEq, Hash, Clone)]
 pub struct Instruction {
     pub address: Address,
     pub length: u64,
-    pub mnemonic: String,
-    pub body: String,
+    pub asm: String,
     pub ops: Vec<PcodeOp>
 }
 

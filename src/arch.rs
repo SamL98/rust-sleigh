@@ -4,9 +4,14 @@ use crate::utils::*;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use elementtree::Element;
-use glob::glob;
-use std::env;
-use std::fs;
+
+#[cfg(not(target_arch = "wasm32"))]
+use {
+    std::env,
+    std::fs,
+    std::fs::File,
+    glob::glob,
+};
 
 pub struct Prototype {
     pub name: String,
@@ -101,7 +106,7 @@ impl Language {
         let pspec_elem = Element::from_reader(pspec_contents.as_bytes()).unwrap();
         let pspec = ProcessorSpec::new(&pspec_elem);
 
-        let mut cspecs: Vec<CompilerSpec> = Vec::new();
+        // let mut cspecs: Vec<CompilerSpec> = Vec::new();
 
         /*for compiler_elem in lang.find_all("compiler") {
             let cspec = CompilerSpec::new(arch_path, compiler_elem);
@@ -112,7 +117,7 @@ impl Language {
             name: name,
             sla_path: sla_path,
             pspec: pspec,
-            cspecs: cspecs
+            cspecs: vec![],
         }
     }
 }

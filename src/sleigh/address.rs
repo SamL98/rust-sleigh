@@ -1,8 +1,6 @@
+use wasm_bindgen::prelude::*;
 use super::types::Address;
-
-use std::cmp::{PartialEq, Eq};
-use std::hash::{Hash, Hasher};
-use std::clone::Clone;
+use std::fmt;
 
 pub trait AddressIface {
     fn as_int(&self) -> u64;
@@ -22,26 +20,15 @@ impl AddressIface for Address {
     }
 }
 
-impl PartialEq for Address {
-    fn eq(&self, other: &Self) -> bool {
-        return self.space == other.space && self.offset == other.offset;
+#[wasm_bindgen]
+impl Address {
+    pub fn to_string(&self) -> String {
+        format!("0x{:x}", self.offset)
     }
 }
 
-impl Eq for Address {}
-
-impl Hash for Address {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.space.hash(state);
-        self.offset.hash(state);
-    }
-}
-
-impl Clone for Address {
-    fn clone(&self) -> Self {
-        return Address {
-            space: self.space.clone(),
-            offset: self.offset
-        };
+impl fmt::Debug for Address {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.to_string())
     }
 }
