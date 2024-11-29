@@ -19,11 +19,29 @@
     </style>
   </head>
   <body>
+    <div id="hex-view"></div>
     <div id="list-container"></div>
     <script type="module">
-      import init, { disassemble } from "./pkg/sleigh.js";
+      import init, { disassemble, bytes, context, disassemble_one, resolver_debug } from "./pkg/sleigh.js";
       init().then(() => {
-        let insns = disassemble();
+        let fileBytes = bytes();
+        let ctx = context();
+
+        const hexView = document.getElementById('hex-view');
+        let byteStrings = [];
+
+        // Cannot map because it converts to Uint8Array.
+        fileBytes.forEach(n => { byteStrings.push(n.toString(16).padStart(2, '0')) });
+        hexView.textContent = byteStrings.join(' ');
+
+        let resolverState = resolver_debug();
+        let insns = [disassemble_one(ctx, fileBytes, BigInt(0x100003f20), resolverState)];
+
+        resolverState['events'].forEach((ev) => {
+            console.log(ev.to_string());
+        });
+
+        //let insns = disassemble();
         const container = document.getElementById('list-container');
 
         insns.forEach((insn) => {

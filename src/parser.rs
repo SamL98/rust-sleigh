@@ -2,6 +2,8 @@ use crate::arch::get_language;
 use crate::sleigh::opcode::OpCode;
 use crate::sleigh::types::{Address, PcodeOp, SeqNum, Varnode};
 
+use wasm_bindgen::prelude::*;
+
 extern crate bitvec;
 extern crate nom;
 
@@ -29,7 +31,7 @@ use {
 };
 
 static SLEIGH_PATH: &'static str =
-    "/Users/samlerner/ghidra_10.3_PUBLIC/Ghidra/Processors/x86/data/languages";
+    "/Users/sam/ghidra_10.3_PUBLIC/Ghidra/Processors/x86/data/languages";
 
 pub type Res<T, U> = IResult<T, U, Error<T>>;
 
@@ -113,8 +115,8 @@ impl Hash for DecisionPattern {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Space<'a> {
-    pub name: &'a str,
+pub struct Space {
+    pub name: String,
     pub index: u32,
     pub big_endian: bool,
     pub delay: u32,
@@ -128,46 +130,46 @@ pub struct Scope {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct SymbolHead<'a> {
-    pub name: &'a str,
+pub struct SymbolHead {
+    pub name: String,
     pub scope: u32,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct VarnodeSym<'a> {
-    pub name: &'a str,
+pub struct VarnodeSym {
+    pub name: String,
     pub scope: u32,
-    pub space: &'a str,
+    pub space: String,
     pub offset: u64,
     pub size: u64,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Value<'a> {
-    name: &'a str,
+pub struct Value {
+    name: String,
     scope: u32,
     field: Field,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Varlist<'a> {
-    name: &'a str,
+pub struct Varlist {
+    name: String,
     scope: u32,
     field: Field,
     vars: Vec<Option<u32>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Valuemap<'a> {
-    name: &'a str,
+pub struct Valuemap {
+    name: String,
     scope: u32,
     field: Field,
     vars: Vec<u64>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Operand<'a> {
-    pub name: &'a str,
+pub struct Operand {
+    pub name: String,
     scope: u32,
     subsym: u32,
     off: u64,
@@ -180,8 +182,8 @@ pub struct Operand<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Context<'a> {
-    pub name: &'a str,
+pub struct Context {
+    pub name: String,
     pub scope: u32,
     pub varnode: u32,
     pub low: u32,
@@ -191,40 +193,40 @@ pub struct Context<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct UserOp<'a> {
-    name: &'a str,
+pub struct UserOp {
+    name: String,
     scope: u32,
     idx: u32,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum SymbolBody<'a> {
+pub enum SymbolBody {
     Scope(Scope),
-    SymHead(SymbolHead<'a>),
-    Subtable(Subtable<'a>),
-    Varnode(VarnodeSym<'a>),
-    Value(Value<'a>),
-    Varlist(Varlist<'a>),
-    Valuemap(Valuemap<'a>),
-    Operand(Operand<'a>),
-    Context(Context<'a>),
-    UserOp(UserOp<'a>),
-    Start(SymbolHead<'a>),
-    End(SymbolHead<'a>),
-    Next2(SymbolHead<'a>),
+    SymHead(SymbolHead),
+    Subtable(Subtable),
+    Varnode(VarnodeSym),
+    Value(Value),
+    Varlist(Varlist),
+    Valuemap(Valuemap),
+    Operand(Operand),
+    Context(Context),
+    UserOp(UserOp),
+    Start(SymbolHead),
+    End(SymbolHead),
+    Next2(SymbolHead),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Symbol<'a> {
+pub struct Symbol {
     pub id: u32,
-    pub body: SymbolBody<'a>,
+    pub body: SymbolBody,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Subtable<'a> {
-    pub name: &'a str,
+pub struct Subtable {
+    pub name: String,
     pub scope: u32,
-    pub constructors: Vec<Constructor<'a>>,
+    pub constructors: Vec<Constructor>,
     pub decision_tree: DecisionTree,
 }
 
@@ -281,20 +283,20 @@ pub enum Expr {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Constructor<'a> {
+pub struct Constructor {
     pub parent: u32,
     pub first: i32,
     pub length: u32,
     pub operands: Vec<u32>,
-    pub print_commands: Option<Vec<PrintCommand<'a>>>,
+    pub print_commands: Option<Vec<PrintCommand>>,
     pub context_ops: Vec<ContextOp>,
-    pub template: Option<ConstructorTemplate<'a>>,
+    pub template: Option<ConstructorTemplate>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum PrintCommand<'a> {
+pub enum PrintCommand {
     Op(u32),
-    Piece(&'a str),
+    Piece(String),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -306,19 +308,19 @@ pub struct ContextOp {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct ConstructorTemplate<'a> {
+pub struct ConstructorTemplate {
     num_labels: u32,
-    statements: Vec<ConsTemplate<'a>>,
+    statements: Vec<ConsTemplate>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct OpTemplate<'a> {
-    code: &'a str,
-    output: Option<VarnodeTemplate<'a>>,
-    inputs: Vec<VarnodeTemplate<'a>>,
+pub struct OpTemplate {
+    code: String,
+    output: Option<VarnodeTemplate>,
+    inputs: Vec<VarnodeTemplate>,
 }
 
-impl fmt::Display for OpTemplate<'_> {
+impl fmt::Display for OpTemplate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let input_str = self.inputs.iter().map(|i| format!("{}", i)).collect::<Vec<String>>().join(", ");
 
@@ -332,13 +334,13 @@ impl fmt::Display for OpTemplate<'_> {
 
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct HandleTemplate<'a> {
-    varnode_template: VarnodeTemplate<'a>,
-    exported_template: VarnodeTemplate<'a>,
-    indirect_template: VarnodeTemplate<'a>,
+pub struct HandleTemplate {
+    varnode_template: VarnodeTemplate,
+    exported_template: VarnodeTemplate,
+    indirect_template: VarnodeTemplate,
 }
 
-impl fmt::Display for HandleTemplate<'_> {
+impl fmt::Display for HandleTemplate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if matches!(self.indirect_template.space_template, ConstTemplate::SpaceId(_)) {
             write!(f, "[{}]({})", self.indirect_template, self.varnode_template)
@@ -349,26 +351,26 @@ impl fmt::Display for HandleTemplate<'_> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum ConsTemplate<'a> {
-    Op(OpTemplate<'a>),
-    Handle(HandleTemplate<'a>),
+pub enum ConsTemplate {
+    Op(OpTemplate),
+    Handle(HandleTemplate),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct ConcreteVarnodeTemplate<'a> {
-    space: &'a str,
+pub struct ConcreteVarnodeTemplate {
+    space: String,
     offset: u64,
     size: u32,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct VarnodeTemplate<'a> {
-    space_template: ConstTemplate<'a>,
-    offset_template: ConstTemplate<'a>,
-    size_template: ConstTemplate<'a>,
+pub struct VarnodeTemplate {
+    space_template: ConstTemplate,
+    offset_template: ConstTemplate,
+    size_template: ConstTemplate,
 }
 
-impl fmt::Display for VarnodeTemplate<'_> {
+impl fmt::Display for VarnodeTemplate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use ConstTemplate::*;
 
@@ -384,8 +386,8 @@ impl fmt::Display for VarnodeTemplate<'_> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum ConstTemplate<'a> {
-    SpaceId(&'a str),
+pub enum ConstTemplate {
+    SpaceId(String),
     Val(u64),
     Handle(u32),
     Relative(u32),
@@ -395,7 +397,7 @@ pub enum ConstTemplate<'a> {
     CurSpaceSize,
 }
 
-impl fmt::Display for ConstTemplate<'_> {
+impl fmt::Display for ConstTemplate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use ConstTemplate::*;
 
@@ -409,14 +411,14 @@ impl fmt::Display for ConstTemplate<'_> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Program<'a> {
+pub struct Program {
     pub version: u32,
     pub bigendian: bool,
     pub align: u32,
     pub uniqbase: u64,
-    pub default_space: &'a str,
-    pub spaces: Vec<Space<'a>>,
-    pub symbols: Vec<Symbol<'a>>,
+    pub default_space: String,
+    pub spaces: Vec<Space>,
+    pub symbols: Vec<Symbol>,
 }
 
 fn source_files(input: &str) -> Res<&str, &str> {
@@ -437,7 +439,7 @@ fn space(input: &str) -> Res<&str, Space> {
         let (_, attrs) = attrs(res).finish().unwrap();
         //println!("{} {:?}", res, attrs);
         let space = Space {
-            name: attrs[0].1,
+            name: attrs[0].1.to_string(),
             index: u32dec(attrs[1].1),
             big_endian: to_bool(attrs[2].1),
             delay: u32dec(attrs[3].1),
@@ -542,7 +544,7 @@ fn sym_head(input: &str) -> Res<&str, Symbol> {
         //println!("{} {:?}", res, attrs);
         let id = u32hex(attrs[1].1);
         let sym_head = SymbolHead {
-            name: attrs[0].1,
+            name: attrs[0].1.to_string(),
             scope: u32hex(attrs[2].1),
         };
         (
@@ -577,7 +579,7 @@ fn opprint(input: &str) -> Res<&str, PrintCommand> {
 fn print_piece(input: &str) -> Res<&str, PrintCommand> {
     delimited(tag("<print"), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
         let (_, attrs) = attrs(res).finish().unwrap();
-        (next, PrintCommand::Piece(attrs[0].1))
+        (next, PrintCommand::Piece(attrs[0].1.to_string()))
     })
 }
 
@@ -746,7 +748,7 @@ fn const_template(input: &str) -> Res<&str, ConstTemplate> {
         //println!("{} {:?}", res, attrs);
 
         let const_template = match attrs[0].1 {
-            "spaceid" => ConstTemplate::SpaceId(attrs[1].1),
+            "spaceid" => ConstTemplate::SpaceId(attrs[1].1.to_string()),
             "real" => ConstTemplate::Val(u64hex(attrs[1].1)),
             "handle" => ConstTemplate::Handle(u32dec(attrs[1].1)),
             "relative" => ConstTemplate::Relative(u32hex(attrs[1].1)),
@@ -804,7 +806,7 @@ fn op_template(input: &str) -> Res<&str, ConsTemplate> {
         //println!("op {:?}", res.1);
         let (_, attrs) = attrs(res.0).finish().unwrap();
         let op_template = OpTemplate {
-            code: attrs[0].1,
+            code: attrs[0].1.to_string(),
             output: res.1,
             inputs: res.2.into_iter().filter_map(|x| x).collect(),
         };
@@ -1094,10 +1096,10 @@ fn subtable_sym(input: &str) -> Res<&str, Symbol> {
         //println!("{} {:?}", res.0, attrs);
         let id = u32hex(attrs[1].1);
         let subtable = Subtable {
-            name: attrs[0].1,
+            name: attrs[0].1.to_string(),
             scope: u32hex(attrs[2].1),
-            constructors: res.1 .0,
-            decision_tree: res.1 .1,
+            constructors: res.1.0,
+            decision_tree: res.1.1,
         };
         (
             next,
@@ -1114,7 +1116,7 @@ fn start_sym(input: &str) -> Res<&str, Symbol> {
         let (_, attrs) = attrs(res).finish().unwrap();
         let id = u32hex(attrs[1].1);
         let sym_head = SymbolHead {
-            name: attrs[0].1,
+            name: attrs[0].1.to_string(),
             scope: u32hex(attrs[2].1),
         };
         (
@@ -1132,7 +1134,7 @@ fn end_sym(input: &str) -> Res<&str, Symbol> {
         let (_, attrs) = attrs(res).finish().unwrap();
         let id = u32hex(attrs[1].1);
         let sym_head = SymbolHead {
-            name: attrs[0].1,
+            name: attrs[0].1.to_string(),
             scope: u32hex(attrs[2].1),
         };
         (
@@ -1150,7 +1152,7 @@ fn next2_sym(input: &str) -> Res<&str, Symbol> {
         let (_, attrs) = attrs(res).finish().unwrap();
         let id = u32hex(attrs[1].1);
         let sym_head = SymbolHead {
-            name: attrs[0].1,
+            name: attrs[0].1.to_string(),
             scope: u32hex(attrs[2].1),
         };
         (
@@ -1177,9 +1179,9 @@ fn varnode_sym(input: &str) -> Res<&str, Symbol> {
         //println!("{} {:?}", res, attrs);
         let id = u32hex(attrs[1].1);
         let varnode = VarnodeSym {
-            name: attrs[0].1,
+            name: attrs[0].1.to_string(),
             scope: u32hex(attrs[2].1),
-            space: attrs[3].1,
+            space: attrs[3].1.to_string(),
             offset: u64hex(attrs[4].1),
             size: u64dec(attrs[5].1),
         };
@@ -1242,7 +1244,7 @@ fn valuemap_sym(input: &str) -> Res<&str, Symbol> {
         let (_, attrs) = attrs(res.0).finish().unwrap();
         let id = u32hex(attrs[1].1);
         let valuemap = Valuemap {
-            name: attrs[0].1,
+            name: attrs[0].1.to_string(),
             scope: u32hex(attrs[2].1),
             field: res.1 .0,
             vars: res.1 .1,
@@ -1295,7 +1297,7 @@ fn varlist_sym(input: &str) -> Res<&str, Symbol> {
         let (_, attrs) = attrs(res.0).finish().unwrap();
         let id = u32hex(attrs[1].1);
         let varlist = Varlist {
-            name: attrs[0].1,
+            name: attrs[0].1.to_string(),
             scope: u32hex(attrs[2].1),
             field: res.1 .0,
             vars: res.1 .1,
@@ -1323,7 +1325,7 @@ fn value_sym(input: &str) -> Res<&str, Symbol> {
         let (_, attrs) = attrs(res.0).finish().unwrap();
         let id = u32hex(attrs[1].1);
         let value = Value {
-            name: attrs[0].1,
+            name: attrs[0].1.to_string(),
             scope: u32hex(attrs[2].1),
             field: res.1,
         };
@@ -1357,7 +1359,7 @@ fn context_sym(input: &str) -> Res<&str, Symbol> {
         let id = u32hex(attrs[1].1);
 
         let context = Context {
-            name: attrs[0].1,
+            name: attrs[0].1.to_string(),
             scope: u32hex(attrs[2].1),
             varnode: u32hex(attrs[3].1),
             low: u32dec(attrs[4].1),
@@ -1400,7 +1402,7 @@ fn operand_sym(input: &str) -> Res<&str, Symbol> {
         let id = u32hex(kvs["id"]);
 
         let operand = Operand {
-            name: kvs["name"],
+            name: kvs["name"].to_string(),
             scope: u32hex(kvs["scope"]),
             subsym: kvs.get("subsym").map(|s| u32hex(s)).unwrap_or(0),
             off: kvs.get("off").map(|s| u64dec(s)).unwrap_or(0),
@@ -1427,7 +1429,7 @@ fn userop(input: &str) -> Res<&str, Symbol> {
         let id = u32hex(attrs[1].1);
 
         let userop = UserOp {
-            name: attrs[0].1,
+            name: attrs[0].1.to_string(),
             scope: u32hex(attrs[2].1),
             idx: u32dec(attrs[3].1),
         };
@@ -1509,7 +1511,7 @@ pub fn program(input: &str) -> Res<&str, Program> {
             bigendian: attrs[1].1.parse::<bool>().unwrap(),
             align: u32::from_str_radix(attrs[2].1, 10).unwrap(),
             uniqbase: u64::from_str_radix(&attrs[3].1[2..], 16).unwrap(),
-            default_space: res.2 .0,
+            default_space: res.2.0.to_string(),
             spaces: res.2 .1,
             symbols: res.3,
         };
@@ -1543,6 +1545,58 @@ pub fn read_file(filename: &str) -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {
         fs::read_to_string(format!("{}/{}", SLEIGH_PATH, filename)).expect("Could not read file")
+    }
+}
+
+#[wasm_bindgen]
+#[repr(u8)]
+#[derive(Clone, Copy)]
+pub enum ResolverEventKind {
+    Constructor,
+    Operand,
+}
+
+#[wasm_bindgen(getter_with_clone)]
+#[derive(Clone)]
+pub struct ResolverEvent {
+    kind: ResolverEventKind,
+    table: String,
+    start: usize,
+    end: usize,
+    word: u32,
+    val: i64,
+}
+
+#[wasm_bindgen]
+impl ResolverEvent {
+    pub fn to_string(&self) -> String {
+        match self.kind {
+            ResolverEventKind::Constructor => {
+                format!("Extracting bits {}-{} from table {} and bytes {:x} to {}", self.start, self.end, self.table, self.word, self.val)
+            },
+            ResolverEventKind::Operand => {
+                format!("Extracting token bits {}-{} from {:x} t {}", self.start, self.end, self.word, self.val)
+            },
+        }
+    }
+}
+
+impl fmt::Display for ResolverEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_string())
+    }
+}
+
+#[wasm_bindgen(getter_with_clone)]
+#[derive(Default, Clone)]
+pub struct ResolverDebug {
+    indent: usize,
+    pub events: Vec<ResolverEvent>,
+}
+
+impl ResolverDebug {
+    pub fn log(&mut self, event: ResolverEvent) {
+        self.events.push(event);
     }
 }
 
@@ -1589,8 +1643,8 @@ fn match_pattern(pattern: &DecisionPattern, insn_words: &Vec<u8>, ctx_words: &Ve
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum MatchedSymbol<'a> {
-    Constructor((&'a Constructor<'a>, Vec<MatchedSymbol<'a>>)),
-    Symbol(&'a Symbol<'a>),
+    Constructor((&'a Constructor, Vec<MatchedSymbol<'a>>)),
+    Symbol(&'a Symbol),
     Literal((i64, usize)),
 }
 
@@ -1672,12 +1726,10 @@ fn resolve_constructor<'a>(
     table: &'a Subtable,
     _symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
-    debug: (bool, usize),
-) -> Option<(&'a Constructor<'a>, usize)> {
+    debug: &mut ResolverDebug,
+) -> Option<(&'a Constructor, usize)> {
     let mut dtree = &table.decision_tree;
     let mut bits_consumed = 0;
-
-    let indent = " ".repeat(debug.1 * 4);
 
     loop {
         match dtree {
@@ -1693,9 +1745,14 @@ fn resolve_constructor<'a>(
                     let word = get_word(words, 0);
                     let idx = ((word >> bit_start) & ((1 << size) - 1)) as usize;
 
-                    if debug.0 {
-                        println!("{}Extracting bits {}-{} from {:x}", indent, start, start + size, word);
-                    }
+                    debug.log(ResolverEvent {
+                        kind: ResolverEventKind::Constructor,
+                        table: table.name.clone(),
+                        start: *start as usize,
+                        end: (start + size) as usize,
+                        word: word,
+                        val: idx as i64,
+                    });
 
                     dtree = &children[idx.min(children.len() - 1)];
                     bits_consumed = bits_consumed.max(start + size);
@@ -1784,7 +1841,7 @@ fn resolve_valuemap<'a>(
 fn evaluate_expr(
     expr: &Expr,
     ctx: &Vec<u32>,
-    operands: &Vec<MatchedSymbol<'_>>,
+    operands: &Vec<MatchedSymbol>,
 ) -> (i64, usize, bool) {
     match expr {
         Expr::Const(val) => (*val, 8, false), // FIXME
@@ -1835,17 +1892,11 @@ fn resolve_operands<'a>(
     ct: &'a Constructor,
     symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
-    debug: (bool, usize),
+    debug: &mut ResolverDebug,
 ) -> (Vec<MatchedSymbol<'a>>, Vec<usize>, usize) {
     let mut matched_ops = vec![];
     let mut fixups = vec![];
     let mut bit_end: usize = 0;
-
-    let indent = " ".repeat(debug.1 * 4);
-
-    if debug.0 {
-        println!("{}Resolving operands", indent);
-    }
 
     for op_idx in &ct.operands {
         let operand = get_operand(&op_idx, &symbols);
@@ -1861,22 +1912,19 @@ fn resolve_operands<'a>(
                     get_word(words, bit_end / 8 + expr.start_byte as usize)
                 };
 
-                if debug.0 {
-                    println!(
-                        "{}Extracting token from bits {}-{} of bytes {}-{} starting at bit {} from {:x}",
-                        indent,
-                        expr.start_bit,
-                        expr.end_bit + 1,
-                        expr.start_byte,
-                        expr.end_byte + 1,
-                        bit_end,
-                        word,
-                    );
-                }
+                let val = ((word >> expr.start_bit) & (((1_u64 << size) - 1) as u32)) as i64;
 
-                let val = (word >> expr.start_bit) & (((1_u64 << size) - 1) as u32);
+                debug.log(ResolverEvent {
+                    kind: ResolverEventKind::Operand,
+                    table: String::new(),
+                    start: expr.start_bit as usize,
+                    end: (expr.end_bit + 1) as usize,
+                    word: word,
+                    val: val,
+                });
+
                 let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
-                matched_ops.push(MatchedSymbol::Literal((val as i64, num_bytes)));
+                matched_ops.push(MatchedSymbol::Literal((val, num_bytes)));
                 bit_end = bit_end.max(((bit_end as u32) / 8 * 8 + expr.start_byte * 8 + size) as usize);
             },
             Some(Expr::Field(Field::Context(expr))) => {
@@ -1916,22 +1964,18 @@ fn resolve_operands<'a>(
                     ctx[op.i as usize] = (existing & !mask) | (v & mask);
                 }
 
-                if debug.0 {
-                    println!("{}Resolving sub-constructor", indent);
-                }
-
-                match resolve_symbol(&new_words, pc + base as u64, op_sym, symbols, ctx, (debug.0, debug.1 + 1)) {
+                match resolve_symbol(&new_words, pc + base as u64, op_sym, symbols, ctx, debug) {
                     Some((matched_sym, sub_bit_end)) => {
                         let new_bit_end = bit_end.max((base * 8) as usize + sub_bit_end);
 
-                        if debug.0 {
-                            println!(
-                                "{}Sub-Constructor took {} bits from {:?}",
-                                indent,
-                                sub_bit_end,
-                                &new_words[..sub_bit_end/8],
-                            );
-                        }
+                        // if debug.0 {
+                        //     println!(
+                        //         "{}Sub-Constructor took {} bits from {:?}",
+                        //         indent,
+                        //         sub_bit_end,
+                        //         &new_words[..sub_bit_end/8],
+                        //     );
+                        // }
 
                         matched_ops.push(matched_sym);
                         bit_end = new_bit_end;
@@ -1952,23 +1996,21 @@ pub fn resolve_symbol<'a>(
     sym: &'a Symbol,
     symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
-    debug: (bool, usize),
+    debug: &mut ResolverDebug,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
     match &sym.body {
         SymbolBody::Subtable(table) => {
             match resolve_constructor(words, table, symbols, ctx, debug) {
                 Some((ct, bit_end)) => {
-                    let indent = " ".repeat(debug.1 * 4);
-
-                    if debug.0 && bit_end > 0 {
-                        println!("{}Constructor took {} bits from {:?}", indent, bit_end, &words[..bit_end/8]);
-                    }
+                    // if debug.0 && bit_end > 0 {
+                    //     println!("{}Constructor took {} bits from {:?}", indent, bit_end, &words[..bit_end/8]);
+                    // }
 
                     let (mut operands, fixups, ops_bit_end) = resolve_operands(words, pc, ct, symbols, ctx, debug);
 
-                    if debug.0 && ops_bit_end > 0 {
-                        println!("{}Operands took {} bits from {:?}", indent, ops_bit_end, &words[..ops_bit_end/8]);
-                    }
+                    // if debug.0 && ops_bit_end > 0 {
+                    //     println!("{}Operands took {} bits from {:?}", indent, ops_bit_end, &words[..ops_bit_end/8]);
+                    // }
 
                     let bit_len = bit_end.max(ops_bit_end);
 
@@ -1997,7 +2039,7 @@ pub fn resolve_symbol<'a>(
     }
 }
 
-fn get_table<'a>(id: u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Subtable<'a> {
+fn get_table<'a>(id: u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Subtable {
     let sym = &symbols[&id];
     match &sym.body {
         SymbolBody::Subtable(subtable) => subtable,
@@ -2005,7 +2047,7 @@ fn get_table<'a>(id: u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Subtable<'a>
     }
 }
 
-fn get_operand<'a>(id: &u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Operand<'a> {
+fn get_operand<'a>(id: &u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Operand {
     let sym = &symbols[id];
     match &sym.body {
         SymbolBody::Operand(operand) => operand,
@@ -2015,7 +2057,7 @@ fn get_operand<'a>(id: &u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Operand<'
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum VarnodeValue<'a> {
-    String(&'a str),
+    String(String),
     Int(u64),
     Op(&'a Varnode),
 }
@@ -2045,7 +2087,7 @@ fn build_value<'a>(
     _debug: (bool, usize),
 ) -> VarnodeValue<'a> {
     match const_tpl {
-        ConstTemplate::SpaceId(space) => VarnodeValue::String(space),
+        ConstTemplate::SpaceId(space) => VarnodeValue::String(space.clone()),
         ConstTemplate::Val(val) => VarnodeValue::Int(*val),
         ConstTemplate::Handle(idx) => {
             let ix = *idx as usize;
@@ -2064,8 +2106,8 @@ fn build_handle<'a>(
     pc: u64,
     bit_len: usize,
     varnodes: &'a Vec<Varnode>,
-    spaces: &'a HashMap<&'a str, u64>,
-    varnode_map: &'a HashMap<(u64, u64), &'a str>,
+    spaces: &'a HashMap<String, u64>,
+    varnode_map: &'a HashMap<(u64, u64), String>,
     debug: (bool, usize),
 ) -> Varnode {
     let varnode = build_varnode(
@@ -2100,8 +2142,8 @@ fn build_varnode<'a>(
     pc: u64,
     bit_len: usize,
     varnodes: &'a Vec<Varnode>,
-    spaces: &'a HashMap<&'a str, u64>,
-    varnode_map: &'a HashMap<(u64, u64), &'a str>,
+    spaces: &'a HashMap<String, u64>,
+    varnode_map: &'a HashMap<(u64, u64), String>,
     debug: (bool, usize),
 ) -> Varnode {
     if debug.0 {
@@ -2111,8 +2153,8 @@ fn build_varnode<'a>(
     }
 
     let space = match build_value(&vnode_tpl.space_template, pc, bit_len, varnodes, debug) {
-        VarnodeValue::String(name) => name,
-        VarnodeValue::Op(op) => op.space.as_str(),
+        VarnodeValue::String(name) => name.clone(),
+        VarnodeValue::Op(op) => op.space.clone(),
         _ => panic!(),
     };
 
@@ -2137,10 +2179,10 @@ fn build_varnode<'a>(
                 op.offset
             }
         },
-        VarnodeValue::String(name) => spaces[name],
+        VarnodeValue::String(name) => spaces[&name],
     };
 
-    let name = match space {
+    let name = match space.as_str() {
         "register" => varnode_map.get(&(offset, size)).map(|x| x.to_string()),
         _ => None,
     };
@@ -2158,8 +2200,8 @@ fn build_pcodeop<'a>(
     bit_len: usize,
     op_tpl: &'a OpTemplate,
     varnodes: &'a Vec<Varnode>,
-    spaces: &'a HashMap<&'a str, u64>,
-    varnode_map: &'a HashMap<(u64, u64), &'a str>,
+    spaces: &'a HashMap<String, u64>,
+    varnode_map: &'a HashMap<(u64, u64), String>,
     debug: (bool, usize),
 ) -> PcodeOp {
     if debug.0 {
@@ -2172,7 +2214,7 @@ fn build_pcodeop<'a>(
 
     let op = PcodeOp {
         seq: seq,
-        opcode: OpCode::from_str(op_tpl.code),
+        opcode: OpCode::from_str(op_tpl.code.as_str()),
         inputs: op_tpl
             .inputs
             .iter()
@@ -2246,8 +2288,8 @@ pub fn build_sym<'a>(
     matched_sym: &'a MatchedSymbol,
     pc: &Address,
     bit_len: usize,
-    spaces: &'a HashMap<&'a str, u64>,
-    varnode_map: &'a HashMap<(u64, u64), &'a str>,
+    spaces: &'a HashMap<String, u64>,
+    varnode_map: &'a HashMap<(u64, u64), String>,
     debug: (bool, usize),
 ) -> (Vec<PcodeOp>, Option<Varnode>) {
     let mut built_pcodeops = vec![];
@@ -2267,7 +2309,7 @@ pub fn build_sym<'a>(
 
             if let MatchedSymbol::Symbol(sym) = op {
                 if let SymbolBody::Varnode(vnode) = &sym.body {
-                    let name = match vnode.space {
+                    let name = match vnode.space.as_str() {
                         "register" => varnode_map.get(&(vnode.offset, vnode.size)),
                         _ => None,
                     };
@@ -2404,34 +2446,34 @@ pub fn build_text(matched_sym: &MatchedSymbol) -> String {
     }
 }
 
-pub struct SleighLanguage<'a> {
+pub struct SleighLanguage {
     pub language: Language,
-    pub program: Program<'a>,
-    pub symbols: HashMap<u32, Symbol<'a>>,
-    pub spaces: HashMap<&'a str, u64>,
-    pub varnodes: HashMap<&'a str, VarnodeSym<'a>>,
-    pub varnode_map: HashMap<(u64, u64), &'a str>,
-    pub context_syms: HashMap<&'a str, Context<'a>>,
+    pub program: Program,
+    pub symbols: HashMap<u32, Symbol>,
+    pub spaces: HashMap<String, u64>,
+    pub varnodes: HashMap<String, VarnodeSym>,
+    pub varnode_map: HashMap<(u64, u64), String>,
+    pub context_syms: HashMap<String, Context>,
     pub reg_space_size: usize,
     pub insn_table_id: u32,
-    pub context_reg: VarnodeSym<'a>,
+    pub context_reg: VarnodeSym,
 }
 
-impl<'a> SleighLanguage<'a> {
-    pub fn create(arch_family: &str, lang_id: &str, sla_contents: &'a str) -> SleighLanguage<'a> {
+impl SleighLanguage {
+    pub fn create<'a>(arch_family: &str, lang_id: &str, sla_contents: &'a str) -> SleighLanguage {
         let lang = get_language(arch_family, lang_id).unwrap();
         let (_, sla) = program(sla_contents).finish().unwrap();
 
         let mut symbols: HashMap<u32, Symbol> = HashMap::new();
-        let mut spaces: HashMap<&str, u64> = HashMap::new();
-        let mut varnodes: HashMap<&str, VarnodeSym> = HashMap::new();
-        let mut varnode_map: HashMap<(u64, u64), &str> = HashMap::new();
-        let mut context_syms: HashMap<&str, Context> = HashMap::new();
+        let mut spaces: HashMap<String, u64> = HashMap::new();
+        let mut varnodes: HashMap<String, VarnodeSym> = HashMap::new();
+        let mut varnode_map: HashMap<(u64, u64), String> = HashMap::new();
+        let mut context_syms: HashMap<String, Context> = HashMap::new();
         let mut reg_space_size: usize = 0;
         let mut insn_table_id = 0;
 
         for space in &sla.spaces {
-            spaces.insert(space.name, spaces.len() as u64);
+            spaces.insert(space.name.clone(), spaces.len() as u64);
         }
 
         for sym in &sla.symbols {
@@ -2442,16 +2484,16 @@ impl<'a> SleighLanguage<'a> {
                     }
                 }
                 SymbolBody::Varnode(varnode) => {
-                    varnodes.insert(varnode.name, varnode.clone());
+                    varnodes.insert(varnode.name.clone(), varnode.clone());
 
                     if varnode.space == "register" {
                         reg_space_size =
                             reg_space_size.max((varnode.offset + varnode.size) as usize);
-                        varnode_map.insert((varnode.offset, varnode.size), varnode.name);
+                        varnode_map.insert((varnode.offset, varnode.size), varnode.name.clone());
                     }
                 }
                 SymbolBody::Context(ctx) => {
-                    context_syms.insert(ctx.name, ctx.clone());
+                    context_syms.insert(ctx.name.clone(), ctx.clone());
                 }
                 _ => (),
             }

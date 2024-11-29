@@ -40,7 +40,7 @@ pub struct PcodeOp {
 #[derive(Eq, PartialEq, Hash, Clone)]
 pub struct Instruction {
     pub address: Address,
-    pub length: u64,
+    pub bit_len: usize,
     pub asm: String,
     pub ops: Vec<PcodeOp>
 }

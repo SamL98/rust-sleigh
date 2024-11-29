@@ -51,16 +51,17 @@ fn main() {
     // let buf = vec![0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56];
     // let buf = vec![0x48, 0x89, 0xe5];
 
-    let binary_path = "/Users/samlerner/Projects/ideco_PUBLIC/test_cases/simple_linked_list";
+    let binary_path = "/Users/sam/scratch/rust-sleigh/test";
     let mut target_file = fs::File::open(binary_path).expect(format!("Could not open
              {}", binary_path).as_str());
 
     let mut raw_bytes: Vec<u8> = Vec::new();
     let _ = target_file.read_to_end(&mut raw_bytes);
-    // let buf = &raw_bytes[0x3f20..0x3f95];
+    let buf = &raw_bytes[0x3f20..0x3f95];
+    let orig_pc = 0x100003f20;
 
-    let buf = &raw_bytes[0x3dc0..0x3eb3];
-    let orig_pc = 0x100003dc0;
+    // let buf = &raw_bytes[0x3dc0..0x3eb3];
+    // let orig_pc = 0x100003dc0;
         
     let mut bits_consumed = 0;
 
@@ -81,7 +82,7 @@ fn main() {
             &lang.symbols[&lang.insn_table_id],
             &lang.symbols,
             &mut ctx.clone(),
-            (false, 0),
+            &mut ResolverDebug::default(),
         ).unwrap();
 
         bits_consumed += num_bits;
