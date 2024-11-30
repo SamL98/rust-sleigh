@@ -1559,12 +1559,12 @@ pub enum ResolverEventKind {
 #[wasm_bindgen(getter_with_clone)]
 #[derive(Clone)]
 pub struct ResolverEvent {
-    kind: ResolverEventKind,
-    table: String,
-    start: usize,
-    end: usize,
-    word: u32,
-    val: i64,
+    pub kind: ResolverEventKind,
+    pub table: String,
+    pub start: usize,
+    pub end: usize,
+    pub word: u32,
+    pub val: i64,
 }
 
 #[wasm_bindgen]

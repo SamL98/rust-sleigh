@@ -42,6 +42,8 @@ pub fn bytes() -> Vec<u8> {
 pub struct WasmContext {
     lang: SleighLanguage,
     ctx: Vec<u32>,
+    addr: u64,
+    offset: usize,
 }
 
 #[wasm_bindgen]
@@ -70,6 +72,8 @@ pub fn context() -> *mut WasmContext {
     Box::into_raw(Box::new(WasmContext {
         lang: lang,
         ctx: ctx,
+        addr: 0x100003f20,
+        offset: 0,
     }))
 }
 
@@ -84,6 +88,21 @@ pub fn resolver_debug() -> ResolverDebug {
 //     let resolver_debug = unsafe { Box::from_raw(resolver_debug) };
 //     (*resolver_debug).events.clone()
 // }
+
+#[wasm_bindgen]
+pub fn get_context(ctx: *mut WasmContext) -> Vec<u32> {
+    unsafe { (*ctx).ctx.clone() }
+}
+
+#[wasm_bindgen]
+pub fn get_addr(ctx: *mut WasmContext) -> u64 {
+    unsafe { (*ctx).addr }
+}
+
+#[wasm_bindgen]
+pub fn get_offset(ctx: *mut WasmContext) -> usize {
+    unsafe { (*ctx).offset }
+}
 
 #[wasm_bindgen]
 pub fn disassemble_one(

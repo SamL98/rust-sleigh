@@ -19,27 +19,88 @@
     </style>
   </head>
   <body>
+    <h3>Bytes</h3>
     <div id="hex-view"></div>
+    <h3>Context</h3>
+    <div id="context-view"></div>
+    <h3>Word</h3>
+    <div id="word-view"></div>
+    <h3>Instructions</h3>
     <div id="list-container"></div>
     <script type="module">
-      import init, { disassemble, bytes, context, disassemble_one, resolver_debug } from "./pkg/sleigh.js";
+      import init, { 
+        disassemble, bytes, context, disassemble_one, resolver_debug,
+        get_context, get_addr, get_offset
+      } from "./pkg/sleigh.js";
       init().then(() => {
         let fileBytes = bytes();
         let ctx = context();
+        let sleighCtx = get_context(ctx);
+        let origPc = get_addr(ctx);
+        let off = get_offset(ctx);
 
         const hexView = document.getElementById('hex-view');
         let byteStrings = [];
 
         // Cannot map because it converts to Uint8Array.
-        fileBytes.forEach(n => { byteStrings.push(n.toString(16).padStart(2, '0')) });
-        hexView.textContent = byteStrings.join(' ');
+        fileBytes.forEach((n, i) => { 
+            let s = n.toString(16).padStart(2, '0');
+            byteStrings.push('<span id=byte' + i + '>' + s + '</span>');
+        });
+        hexView.innerHTML = byteStrings.join(' ');
+
+        function setColor(color) {
+            for (let i = 0; i < 4; i++) {
+                let o = off + i;
+                if (o < fileBytes.length)
+                    document.getElementById('byte' + i).style = 'color: ' + color;
+            }
+        }
+
+        function getWord() {
+            let word = 0;
+            for (let i = 0; i < 4; i++) {
+                let o = off + i;
+                if (o < fileBytes.length)
+                    word = (word << 8) | fileBytes[o];
+            }
+            return word;
+        }
+
+        setColor('red');
+
+        const ctxView = document.getElementById('context-view');
+        byteStrings = [];
+
+        // Cannot map because it converts to Uint8Array.
+        sleighCtx.forEach(n => { byteStrings.push(n.toString(16).padStart(8, '0')) });
+        ctxView.textContent = byteStrings.join(' ');
 
         let resolverState = resolver_debug();
         let insns = [disassemble_one(ctx, fileBytes, BigInt(0x100003f20), resolverState)];
 
-        resolverState['events'].forEach((ev) => {
-            console.log(ev.to_string());
-        });
+        const wordView = document.getElementById('word-view');
+        let events = resolverState['events'];
+
+        function displayEvent(ev) {
+            let kind = ev['kind'];
+
+            if (kind == 0) {
+                let startBit = ev['start'];
+                let endBit = ev['end'];
+                let word = getWord();
+                let hexStr = word.toString(16).padStart(8, '0');
+                let binStr = word.toString(2).padStart(32, '0').split('').map((b, i) => {
+                    let color = 'black';
+                    if (i >= startBit && i < endBit)
+                        color = 'red';
+                    return '<span style="color: ' + color + '">' + b + '</span>';
+                }).join('');
+                wordView.innerHTML = hexStr + '    ' + binStr;
+            }
+        };
+
+        displayEvent(events[0]);
 
         //let insns = disassemble();
         const container = document.getElementById('list-container');
