@@ -1553,6 +1553,7 @@ pub fn read_file(filename: &str) -> String {
 #[derive(Clone, Copy)]
 pub enum ResolverEventKind {
     Constructor,
+    Match,
     Operand,
 }
 
@@ -1565,6 +1566,7 @@ pub struct ResolverEvent {
     pub end: usize,
     pub word: u32,
     pub val: i64,
+    pub matched_constructor: String,
 }
 
 #[wasm_bindgen]
@@ -1577,6 +1579,7 @@ impl ResolverEvent {
             ResolverEventKind::Operand => {
                 format!("Extracting token bits {}-{} from {:x} t {}", self.start, self.end, self.word, self.val)
             },
+            _ => String::new(),
         }
     }
 }
@@ -1752,6 +1755,7 @@ fn resolve_constructor<'a>(
                         end: (start + size) as usize,
                         word: word,
                         val: idx as i64,
+                        matched_constructor: String::new(),
                     });
 
                     dtree = &children[idx.min(children.len() - 1)];
@@ -1767,6 +1771,32 @@ fn resolve_constructor<'a>(
                     let ct = &table.constructors[*ct_id as usize];
 
                     if match_pattern(pattern, &words, &ctx) {
+                        let c = ct.print_commands.as_ref().map(|pcs| {
+                            let strings = pcs.iter().map(|pc| {
+                                if let PrintCommand::Op(idx) = pc {
+                                    format!("op#{}", idx)
+                                } else if let PrintCommand::Piece(piece) = pc {
+                                    piece.clone()
+                                } else {
+                                    String::new()
+                                }
+                            })
+                            .collect::<Vec<String>>();
+
+                            strings.join("")
+                        })
+                        .unwrap_or(String::new());
+
+                        debug.log(ResolverEvent {
+                            kind: ResolverEventKind::Match,
+                            table: table.name.clone(),
+                            start: 0,
+                            end: 0,
+                            word: 0,
+                            val: 0,
+                            matched_constructor: c,
+                        });
+
                         return Some((ct, bits_consumed as usize));
                     }
                 }
@@ -1906,7 +1936,8 @@ fn resolve_operands<'a>(
                 // TODO: Handle shift field.
                 let size = expr.end_bit - expr.start_bit + 1;
 
-                let word = if !expr.big_endian { // TODO: Figure out if this is right. I'm just guessing.
+                // TODO: Figure out if this is right. I'm just guessing.
+                let word = if !expr.big_endian {
                     get_word_le(words, bit_end / 8 + expr.start_byte as usize)
                 } else {
                     get_word(words, bit_end / 8 + expr.start_byte as usize)
@@ -1921,6 +1952,7 @@ fn resolve_operands<'a>(
                     end: (expr.end_bit + 1) as usize,
                     word: word,
                     val: val,
+                    matched_constructor: String::new(),
                 });
 
                 let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
@@ -1967,16 +1999,6 @@ fn resolve_operands<'a>(
                 match resolve_symbol(&new_words, pc + base as u64, op_sym, symbols, ctx, debug) {
                     Some((matched_sym, sub_bit_end)) => {
                         let new_bit_end = bit_end.max((base * 8) as usize + sub_bit_end);
-
-                        // if debug.0 {
-                        //     println!(
-                        //         "{}Sub-Constructor took {} bits from {:?}",
-                        //         indent,
-                        //         sub_bit_end,
-                        //         &new_words[..sub_bit_end/8],
-                        //     );
-                        // }
-
                         matched_ops.push(matched_sym);
                         bit_end = new_bit_end;
                     },
@@ -2002,16 +2024,7 @@ pub fn resolve_symbol<'a>(
         SymbolBody::Subtable(table) => {
             match resolve_constructor(words, table, symbols, ctx, debug) {
                 Some((ct, bit_end)) => {
-                    // if debug.0 && bit_end > 0 {
-                    //     println!("{}Constructor took {} bits from {:?}", indent, bit_end, &words[..bit_end/8]);
-                    // }
-
                     let (mut operands, fixups, ops_bit_end) = resolve_operands(words, pc, ct, symbols, ctx, debug);
-
-                    // if debug.0 && ops_bit_end > 0 {
-                    //     println!("{}Operands took {} bits from {:?}", indent, ops_bit_end, &words[..ops_bit_end/8]);
-                    // }
-
                     let bit_len = bit_end.max(ops_bit_end);
 
                     for idx in fixups {

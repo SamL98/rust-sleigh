@@ -23,8 +23,12 @@
     <div id="hex-view"></div>
     <h3>Context</h3>
     <div id="context-view"></div>
-    <h3>Word</h3>
-    <div id="word-view"></div>
+	<div class="container">
+		<button id="prev">Prev</button>
+		<button id="next">Next</button>
+	</div>
+    <h3>Event</h3>
+    <div id="event-view"></div>
     <h3>Instructions</h3>
     <div id="list-container"></div>
     <script type="module">
@@ -79,7 +83,7 @@
         let resolverState = resolver_debug();
         let insns = [disassemble_one(ctx, fileBytes, BigInt(0x100003f20), resolverState)];
 
-        const wordView = document.getElementById('word-view');
+        const wordView = document.getElementById('event-view');
         let events = resolverState['events'];
 
         function displayEvent(ev) {
@@ -96,11 +100,28 @@
                         color = 'red';
                     return '<span style="color: ' + color + '">' + b + '</span>';
                 }).join('');
-                wordView.innerHTML = hexStr + '    ' + binStr;
+                wordView.innerHTML = ev['table'] + '    ' + hexStr + '    ' + binStr;
+            }
+            else if (kind == 1) {
+                wordView.innerHTML = 'Matched ' + ev['matched_constructor'];
+            }
+            else if (kind == 2) {
+                wordView.innerHTML = 'Operand'
             }
         };
 
-        displayEvent(events[0]);
+        let eventIdx = 0;
+        displayEvent(events[eventIdx]);
+
+        document.getElementById('next').addEventListener('click', () => {
+            eventIdx = Math.min(eventIdx + 1, events.length - 1);
+            displayEvent(events[eventIdx]);
+        });
+
+        document.getElementById('prev').addEventListener('click', () => {
+            eventIdx = Math.max(eventIdx - 1, 0);
+            displayEvent(events[eventIdx]);
+        });
 
         //let insns = disassemble();
         const container = document.getElementById('list-container');
