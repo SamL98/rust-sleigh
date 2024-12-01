@@ -20,6 +20,10 @@ extern {
 #[wasm_bindgen(module = "/utils.js")]
 extern "C" {
     pub fn sync_fetch(url: &str) -> String;
+    pub fn create_div(children: Vec<JsValue>) -> JsValue;
+    pub fn create_p(text: &str) -> JsValue;
+    pub fn create_li(content: &str) -> JsValue;
+    pub fn create_ul(elems: Vec<JsValue>) -> JsValue;
 }
 
 #[wasm_bindgen]
@@ -78,18 +82,6 @@ pub fn context() -> *mut WasmContext {
 }
 
 #[wasm_bindgen]
-pub fn resolver_debug() -> ResolverDebug {
-    ResolverDebug::default()
-    // Box::into_raw(Box::new(ResolverDebug::default()))
-}
-
-// #[wasm_bindgen]
-// pub fn get_events(resolver_debug: *mut ResolverDebug) -> Vec<ResolverEvent> {
-//     let resolver_debug = unsafe { Box::from_raw(resolver_debug) };
-//     (*resolver_debug).events.clone()
-// }
-
-#[wasm_bindgen]
 pub fn get_context(ctx: *mut WasmContext) -> Vec<u32> {
     unsafe { (*ctx).ctx.clone() }
 }
@@ -104,7 +96,6 @@ pub fn get_offset(ctx: *mut WasmContext) -> usize {
     unsafe { (*ctx).offset }
 }
 
-#[wasm_bindgen]
 pub fn disassemble_one(
     ctx: *mut WasmContext,
     bytes: Vec<u8>,
@@ -147,26 +138,52 @@ pub fn disassemble_one(
     }
 }
 
+#[wasm_bindgen(getter_with_clone)]
+pub struct WasmInstruction {
+    pub insn: Instruction,
+    pub debug: *mut ResolverDebug,
+    pub num_events: usize,
+}
+
 #[wasm_bindgen]
-pub fn disassemble() -> Vec<Instruction> {
-    init_panic_hook();
+impl WasmInstruction {
+    pub fn render_event(&self, idx: usize, wasm_ctx: *mut WasmContext) -> JsValue {
+        let lang = unsafe { &(*wasm_ctx).lang };
+        let events = unsafe { &(*self.debug).events };
 
-    let contents = read_file("x86-64.sla");
-    let lang = SleighLanguage::create("x86", "x86:LE:64:default", &contents);
+        match events[idx] {
+            ResolverEvent::InstructionBits {
+                sym: sym_idx,
+                start: start,
+                end: end,
+                word: word,
+                val: val,
+            } => {
+                let sym = &lang.symbols[&sym_idx];
 
-    let mut reg_space: BitVec<u8, Msb0> = BitVec::with_capacity(lang.reg_space_size * 8);
-    for _ in 0..(lang.reg_space_size * 8) {
-        reg_space.push(false);
-    }
-
-    for (var, val) in lang.language.pspec.defaults {
-        if let Some(sym) = lang.context_syms.get(var.as_str()) {
-            let start = (lang.context_reg.offset * 8 + (sym.low as u64)) as usize;
-            let end = (lang.context_reg.offset * 8 + (sym.high as u64) + 1) as usize;
-            let existing = reg_space[start..end].load_be::<u32>();
-            reg_space[start..end].store_be(val | existing);
+                match &sym.body {
+                    SymbolBody::Subtable(table) => {
+                        let title = create_p(format!("Table: {}", table.name).as_str());
+                        let elem1 = create_li("foo");
+                        let elem2 = create_li("bar");
+                        let ul = create_ul(vec![elem1, elem2]);
+                        let html = create_div(vec![title, ul]);
+                        html
+                    },
+                    _ => todo!(),
+                }
+            },
+            _ => todo!(),
         }
     }
+}
+
+#[wasm_bindgen]
+pub fn disassemble(wasm_ctx: *mut WasmContext) -> Vec<WasmInstruction> {
+    init_panic_hook();
+
+    let ctx = unsafe { &(*wasm_ctx).ctx };
+    let lang = unsafe { &(*wasm_ctx).lang };
 
     // let buf = &FILE_BYTES[0x3dc0..0x3eb3];
     // let orig_pc: u64 = 0x100003dc0;
@@ -175,51 +192,27 @@ pub fn disassemble() -> Vec<Instruction> {
     let orig_pc: u64 = 0x100003f20;
         
     let mut bits_consumed = 0;
-
-    let ctx = read_ctx(&lang.context_reg, &reg_space);
     let mut insns = vec![];
 
     while bits_consumed < buf.len() * 8 {
-        let mut tmp_buf: Vec<u8> = buf[bits_consumed / 8..].to_vec();
-        tmp_buf[0] = tmp_buf[0].overflowing_shl((bits_consumed % 8) as u32).0;
+        let tmp_buf: Vec<u8> = buf[bits_consumed / 8..].to_vec();
+        let mut debug = ResolverDebug::default();
 
-        let pc = Address {
-            space: "ram".to_owned(),
-            offset: (orig_pc + bits_consumed as u64 / 8) as u64,
-        };
-
-        let (matched_symbol, num_bits) = resolve_symbol(
-            &tmp_buf,
-            pc.offset,
-            &lang.symbols[&lang.insn_table_id],
-            &lang.symbols,
-            &mut ctx.clone(),
-            &mut ResolverDebug::default(),
-        ).unwrap();
-
-        bits_consumed += num_bits;
-
-        let asm = build_text(&matched_symbol);
-        // log(format!("0x{:x}: {}", pc.offset, asm).as_str());
-
-        let (pcodeops, _) = build_sym(
-            &matched_symbol,
-            &pc,
-            num_bits,
-            &lang.spaces,
-            &lang.varnode_map,
-            (false, 0),
+        let insn = disassemble_one(
+            wasm_ctx,
+            tmp_buf,
+            (orig_pc + bits_consumed as u64 / 8) as u64,
+            &mut debug,
         );
 
-        let insn = Instruction {
-            address: pc,
-            bit_len: num_bits,
-            asm: asm,
-            ops: pcodeops,
-        };
+        let num_events = debug.events.len();
+        bits_consumed += insn.bit_len;
 
-        // println!("{:#?}\n", pcodeops);
-        insns.push(insn);
+        insns.push(WasmInstruction{
+            insn: insn,
+            debug: Box::into_raw(Box::new(debug)),
+            num_events: num_events,
+        });
     }
 
     insns

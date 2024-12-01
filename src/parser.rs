@@ -1548,51 +1548,17 @@ pub fn read_file(filename: &str) -> String {
     }
 }
 
-#[wasm_bindgen]
-#[repr(u8)]
-#[derive(Clone, Copy)]
-pub enum ResolverEventKind {
-    Constructor,
-    Match,
-    Operand,
-    Value,
-    Var,
-}
-
-#[wasm_bindgen(getter_with_clone)]
 #[derive(Clone)]
-pub struct ResolverEvent {
-    pub kind: ResolverEventKind,
-    pub table: String,
-    pub start: usize,
-    pub end: usize,
-    pub word: u32,
-    pub val: i64,
-    pub matched_constructor: String,
+pub enum ResolverEvent {
+    InstructionBits {
+        sym: u32,
+        start: usize,
+        end: usize,
+        word: u32,
+        val: i64,
+    },
 }
 
-#[wasm_bindgen]
-impl ResolverEvent {
-    pub fn to_string(&self) -> String {
-        match self.kind {
-            ResolverEventKind::Constructor => {
-                format!("Extracting bits {}-{} from table {} and bytes {:x} to {}", self.start, self.end, self.table, self.word, self.val)
-            },
-            ResolverEventKind::Operand => {
-                format!("Extracting token bits {}-{} from {:x} t {}", self.start, self.end, self.word, self.val)
-            },
-            _ => String::new(),
-        }
-    }
-}
-
-impl fmt::Display for ResolverEvent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_string())
-    }
-}
-
-#[wasm_bindgen(getter_with_clone)]
 #[derive(Default, Clone)]
 pub struct ResolverDebug {
     indent: usize,
@@ -1727,6 +1693,7 @@ fn get_word_le(words: &Vec<u8>, start: usize) -> u32 {
 }
 
 fn resolve_constructor<'a>(
+    sym_idx: u32,
     words: &Vec<u8>,
     table: &'a Subtable,
     _symbols: &'a HashMap<u32, Symbol>,
@@ -1750,14 +1717,12 @@ fn resolve_constructor<'a>(
                     let word = get_word(words, 0);
                     let idx = ((word >> bit_start) & ((1 << size) - 1)) as usize;
 
-                    debug.log(ResolverEvent {
-                        kind: ResolverEventKind::Constructor,
-                        table: table.name.clone(),
+                    debug.log(ResolverEvent::InstructionBits {
+                        sym: sym_idx,
                         start: *start as usize,
-                        end: (start + size) as usize,
+                        end: (*start + size + 1) as usize,
                         word: word,
                         val: idx as i64,
-                        matched_constructor: String::new(),
                     });
 
                     dtree = &children[idx.min(children.len() - 1)];
@@ -1789,15 +1754,15 @@ fn resolve_constructor<'a>(
                         })
                         .unwrap_or(String::new());
 
-                        debug.log(ResolverEvent {
-                            kind: ResolverEventKind::Match,
-                            table: table.name.clone(),
-                            start: 0,
-                            end: 0,
-                            word: 0,
-                            val: 0,
-                            matched_constructor: c,
-                        });
+                        // debug.log(ResolverEvent {
+                        //     kind: ResolverEventKind::Match,
+                        //     table: table.name.clone(),
+                        //     start: 0,
+                        //     end: 0,
+                        //     word: 0,
+                        //     val: 0,
+                        //     matched_constructor: c,
+                        // });
 
                         return Some((ct, bits_consumed as usize));
                     }
@@ -1833,22 +1798,20 @@ fn resolve_varlist<'a>(
             let idx = ((token_word >> start) & ((1 << size) - 1)) as usize;
             let var = &symbols[&varlist.vars[idx].unwrap()];
 
-            // println!("{:?} {:x} {}", token, token_word, idx);
-
             let c = match &var.body {
                 SymbolBody::Varnode(vn) => vn.name.clone(),
                 _ => todo!(),
             };
 
-            debug.log(ResolverEvent {
-                kind: ResolverEventKind::Var,
-                table: String::new(),
-                start: (token.start_byte * 8 + token.start_bit) as usize,
-                end: (token.end_bit + 1) as usize,
-                word: token_word,
-                val: idx as i64,
-                matched_constructor: c,
-            });
+            // debug.log(ResolverEvent {
+            //     kind: ResolverEventKind::Var,
+            //     table: String::new(),
+            //     start: (token.start_byte * 8 + token.start_bit) as usize,
+            //     end: (token.end_bit + 1) as usize,
+            //     word: token_word,
+            //     val: idx as i64,
+            //     matched_constructor: c,
+            // });
 
             // Not super sure if this size calculation is right but it seems to work.
             Some(((MatchedSymbol::Symbol(var)), (token.end_byte * 8 + (8 - token.end_bit - 1) + size) as usize))
@@ -1881,15 +1844,15 @@ fn resolve_valuemap<'a>(
             let idx = ((token_word >> start) & ((1 << size) - 1)) as usize;
             let val = valuemap.vars[idx] as i64;
 
-            debug.log(ResolverEvent {
-                kind: ResolverEventKind::Value,
-                table: String::new(),
-                start: token.start_bit as usize,
-                end: (token.end_bit + 1) as usize,
-                word: token_word,
-                val: val,
-                matched_constructor: String::new(),
-            });
+            // debug.log(ResolverEvent {
+            //     kind: ResolverEventKind::Value,
+            //     table: String::new(),
+            //     start: token.start_bit as usize,
+            //     end: (token.end_bit + 1) as usize,
+            //     word: token_word,
+            //     val: val,
+            //     matched_constructor: String::new(),
+            // });
 
             // Not super sure if this size calculation is right but it seems to work.
             let literal = MatchedSymbol::Literal((val, size as usize));
@@ -1977,15 +1940,15 @@ fn resolve_operands<'a>(
 
                 let val = ((word >> expr.start_bit) & (((1_u64 << size) - 1) as u32)) as i64;
 
-                debug.log(ResolverEvent {
-                    kind: ResolverEventKind::Operand,
-                    table: String::new(),
-                    start: expr.start_bit as usize,
-                    end: (expr.end_bit + 1) as usize,
-                    word: word,
-                    val: val,
-                    matched_constructor: String::new(),
-                });
+                // debug.log(ResolverEvent {
+                //     kind: ResolverEventKind::Operand,
+                //     table: String::new(),
+                //     start: expr.start_bit as usize,
+                //     end: (expr.end_bit + 1) as usize,
+                //     word: word,
+                //     val: val,
+                //     matched_constructor: String::new(),
+                // });
 
                 let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
                 matched_ops.push(MatchedSymbol::Literal((val, num_bytes)));
@@ -2054,7 +2017,7 @@ pub fn resolve_symbol<'a>(
 ) -> Option<(MatchedSymbol<'a>, usize)> {
     match &sym.body {
         SymbolBody::Subtable(table) => {
-            match resolve_constructor(words, table, symbols, ctx, debug) {
+            match resolve_constructor(sym.id, words, table, symbols, ctx, debug) {
                 Some((ct, bit_end)) => {
                     let (mut operands, fixups, ops_bit_end) = resolve_operands(words, pc, ct, symbols, ctx, debug);
                     let bit_len = bit_end.max(ops_bit_end);
