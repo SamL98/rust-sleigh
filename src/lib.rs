@@ -21,8 +21,9 @@ extern {
 extern "C" {
     pub fn sync_fetch(url: &str) -> String;
     pub fn create_div(children: Vec<JsValue>) -> JsValue;
+    pub fn create_span(text: &str) -> JsValue;
     pub fn create_p(text: &str) -> JsValue;
-    pub fn create_li(content: &str) -> JsValue;
+    pub fn create_li(child: JsValue) -> JsValue;
     pub fn create_ul(elems: Vec<JsValue>) -> JsValue;
 }
 
@@ -145,6 +146,56 @@ pub struct WasmInstruction {
     pub num_events: usize,
 }
 
+fn render_constructor(ct: &Constructor) -> JsValue {
+    let c = ct.print_commands.as_ref().map(|pcs| {
+        let strings = pcs.iter().map(|pc| {
+            if let PrintCommand::Op(idx) = pc {
+                format!("op#{}", idx)
+            } else if let PrintCommand::Piece(piece) = pc {
+                piece.clone()
+            } else {
+                String::new()
+            }
+        })
+        .collect::<Vec<String>>();
+
+        strings.join("")
+    })
+    .unwrap_or(String::new());
+
+    create_span(c.as_str())
+}
+
+fn render_dtree(table: &Subtable, dtree: &DecisionTree) -> JsValue {
+    match dtree {
+        DecisionTree::NonLeaf((is_context, start, size, children)) => {
+            let title = create_p(format!("Context: {}, Start: {}, Size: {}", is_context, start, size).as_str());
+            let mut lis = vec![];
+
+            for child in children {
+                let subtree = render_dtree(table, child);
+                let li = create_li(subtree);
+                lis.push(li);
+            }
+
+            let ul = create_ul(lis);
+            create_div(vec![title, ul])
+        }
+        DecisionTree::Leaf(pairs) => {
+            let mut lis = vec![];
+
+            for (ct_id, pattern) in pairs {
+                let ct = &table.constructors[*ct_id as usize];
+                // TODO: render the decision blocks.
+                let li = create_li(render_constructor(ct));
+                lis.push(li);
+            }
+
+            create_ul(lis)
+        }
+    }
+}
+
 #[wasm_bindgen]
 impl WasmInstruction {
     pub fn render_event(&self, idx: usize, wasm_ctx: *mut WasmContext) -> JsValue {
@@ -164,10 +215,8 @@ impl WasmInstruction {
                 match &sym.body {
                     SymbolBody::Subtable(table) => {
                         let title = create_p(format!("Table: {}", table.name).as_str());
-                        let elem1 = create_li("foo");
-                        let elem2 = create_li("bar");
-                        let ul = create_ul(vec![elem1, elem2]);
-                        let html = create_div(vec![title, ul]);
+                        let dt = render_dtree(table, &table.decision_tree);
+                        let html = create_div(vec![title, dt]);
                         html
                     },
                     _ => todo!(),

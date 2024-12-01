@@ -1738,22 +1738,6 @@ fn resolve_constructor<'a>(
                     let ct = &table.constructors[*ct_id as usize];
 
                     if match_pattern(pattern, &words, &ctx) {
-                        let c = ct.print_commands.as_ref().map(|pcs| {
-                            let strings = pcs.iter().map(|pc| {
-                                if let PrintCommand::Op(idx) = pc {
-                                    format!("op#{}", idx)
-                                } else if let PrintCommand::Piece(piece) = pc {
-                                    piece.clone()
-                                } else {
-                                    String::new()
-                                }
-                            })
-                            .collect::<Vec<String>>();
-
-                            strings.join("")
-                        })
-                        .unwrap_or(String::new());
-
                         // debug.log(ResolverEvent {
                         //     kind: ResolverEventKind::Match,
                         //     table: table.name.clone(),

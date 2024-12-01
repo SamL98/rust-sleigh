@@ -15,9 +15,15 @@ export function create_div(children) {
     return div;
 }
 
+export function create_span(text) {
+    let span = document.createElement('span');
+    span.innerText = text;
+    return span;
+}
+
 export function create_p(text) {
     let p = document.createElement('p');
-    p.innerHTML = text;
+    p.innerText = text;
     return p;
 }
 
@@ -27,8 +33,8 @@ export function create_ul(lis) {
     return ul;
 }
 
-export function create_li(content) {
+export function create_li(child) {
     let li = document.createElement('li');
-    li.innerHTML = content;
+    li.appendChild(child);
     return li;
 }
