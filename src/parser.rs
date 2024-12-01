@@ -1555,6 +1555,8 @@ pub enum ResolverEventKind {
     Constructor,
     Match,
     Operand,
+    Value,
+    Var,
 }
 
 #[wasm_bindgen(getter_with_clone)]
@@ -1813,10 +1815,10 @@ fn resolve_varlist<'a>(
     varlist: &'a Varlist,
     symbols: &'a HashMap<u32, Symbol>,
     _ctx: &mut Vec<u32>,
+    debug: &mut ResolverDebug,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
     match &varlist.field {
         Field::Token(token) => {
-            // println!("{:?}", token);
             let num_bytes = (token.end_byte - token.start_byte + 1) as usize;
             let sb = token.start_byte as usize;
             let mut token_word: u32 = 0;
@@ -1831,6 +1833,23 @@ fn resolve_varlist<'a>(
             let idx = ((token_word >> start) & ((1 << size) - 1)) as usize;
             let var = &symbols[&varlist.vars[idx].unwrap()];
 
+            // println!("{:?} {:x} {}", token, token_word, idx);
+
+            let c = match &var.body {
+                SymbolBody::Varnode(vn) => vn.name.clone(),
+                _ => todo!(),
+            };
+
+            debug.log(ResolverEvent {
+                kind: ResolverEventKind::Var,
+                table: String::new(),
+                start: (token.start_byte * 8 + token.start_bit) as usize,
+                end: (token.end_bit + 1) as usize,
+                word: token_word,
+                val: idx as i64,
+                matched_constructor: c,
+            });
+
             // Not super sure if this size calculation is right but it seems to work.
             Some(((MatchedSymbol::Symbol(var)), (token.end_byte * 8 + (8 - token.end_bit - 1) + size) as usize))
         }
@@ -1843,6 +1862,7 @@ fn resolve_valuemap<'a>(
     valuemap: &'a Valuemap,
     _symbols: &'a HashMap<u32, Symbol>,
     _ctx: &mut Vec<u32>,
+    debug: &mut ResolverDebug,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
     match &valuemap.field {
         Field::Token(token) => {
@@ -1861,8 +1881,20 @@ fn resolve_valuemap<'a>(
             let idx = ((token_word >> start) & ((1 << size) - 1)) as usize;
             let val = valuemap.vars[idx] as i64;
 
+            debug.log(ResolverEvent {
+                kind: ResolverEventKind::Value,
+                table: String::new(),
+                start: token.start_bit as usize,
+                end: (token.end_bit + 1) as usize,
+                word: token_word,
+                val: val,
+                matched_constructor: String::new(),
+            });
+
             // Not super sure if this size calculation is right but it seems to work.
-            Some(((MatchedSymbol::Literal((val, size as usize))), (token.end_byte * 8 + (8 - token.end_bit - 1) + size) as usize))
+            let literal = MatchedSymbol::Literal((val, size as usize));
+            let token_size = (token.end_byte * 8 + (8 - token.end_bit - 1) + size) as usize;
+            Some((literal, token_size))
         }
         _ => todo!(),
     }
@@ -2040,10 +2072,10 @@ pub fn resolve_symbol<'a>(
             }
         },
         SymbolBody::Varlist(varlist) => {
-            resolve_varlist(words, varlist, symbols, ctx)
+            resolve_varlist(words, varlist, symbols, ctx, debug)
         },
         SymbolBody::Valuemap(valuemap) => {
-            resolve_valuemap(words, valuemap, symbols, ctx)
+            resolve_valuemap(words, valuemap, symbols, ctx, debug)
         },
         SymbolBody::Varnode(_) => {
             Some((MatchedSymbol::Symbol(sym), 0))

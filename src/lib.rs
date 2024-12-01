@@ -111,10 +111,8 @@ pub fn disassemble_one(
     pc: u64,
     resolver_debug: &mut ResolverDebug,
 ) -> Instruction {
-    let wasm_ctx = unsafe { Box::from_raw(ctx) };
-    // let mut resolver_debug = unsafe { Box::from_raw(resolver_debug) };
-    let lang = &(*wasm_ctx).lang;
-    let ctx = &(*wasm_ctx).ctx;
+    let lang = unsafe { &(*ctx).lang };
+    let ctx = unsafe { &(*ctx).ctx };
 
     let pc = Address {
         space: "ram".to_owned(),
@@ -128,7 +126,6 @@ pub fn disassemble_one(
         &lang.symbols,
         &mut ctx.clone(),
         resolver_debug,
-        // &mut *resolver_debug,
     ).unwrap();
 
     let asm = build_text(&matched_symbol);

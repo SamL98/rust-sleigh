@@ -69,7 +69,7 @@ fn main() {
 
     while bits_consumed < buf.len() * 8 {
         let mut tmp_buf: Vec<u8> = buf[bits_consumed / 8..].to_vec();
-        tmp_buf[0] = tmp_buf[0].overflowing_shl((bits_consumed % 8) as u32).0;
+        // tmp_buf[0] = tmp_buf[0].overflowing_shl((bits_consumed % 8) as u32).0;
 
         let pc = Address {
             space: "ram".to_owned(),
@@ -107,6 +107,6 @@ fn main() {
         //     break
         // }
         
-        println!("{:#?}\n", pcodeops);
+        // println!("{:#?}\n", pcodeops);
     }
 }
