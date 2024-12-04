@@ -68,7 +68,7 @@ function displayEvent(state, idx, off) {
                 nodeView = nodeView.firstElementChild;
         });
 
-        dtView.scrollTop = nodeView.offsetTop;
+        dtView.scrollTop = nodeView.offsetTop - dtView.offsetTop;
         nodeView.classList.add('selected');
     }
 };
