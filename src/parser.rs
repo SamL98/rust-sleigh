@@ -1551,12 +1551,13 @@ pub fn read_file(filename: &str) -> String {
 
 #[derive(Clone)]
 pub enum ResolverEvent {
-    InstructionBits {
+    Bits {
         sym: u32,
+        is_context: bool,
         start: usize,
         end: usize,
         word: u32,
-        val: i64,
+        path: Vec<usize>,
     },
 }
 
@@ -1703,6 +1704,7 @@ fn resolve_constructor<'a>(
 ) -> Option<(&'a Constructor, usize)> {
     let mut dtree = &table.decision_tree;
     let mut bits_consumed = 0;
+    let mut path = vec![];
 
     loop {
         match dtree {
@@ -1717,13 +1719,15 @@ fn resolve_constructor<'a>(
                 if !is_context {
                     let word = get_word(words, 0);
                     let idx = ((word >> bit_start) & ((1 << size) - 1)) as usize;
+                    path.push(idx);
 
-                    debug.log(ResolverEvent::InstructionBits {
+                    debug.log(ResolverEvent::Bits {
                         sym: sym_idx,
+                        is_context: false,
                         start: *start as usize,
                         end: (*start + size + 1) as usize,
                         word: word,
-                        val: idx as i64,
+                        path: path.clone(),
                     });
 
                     dtree = &children[idx.min(children.len() - 1)];
@@ -1731,6 +1735,17 @@ fn resolve_constructor<'a>(
                 } else {
                     let ctx_word = ctx[(*start as usize) / 32];
                     let idx = (ctx_word.overflowing_shr(bit_start).0 & ((1 << size) - 1)) as usize;
+                    path.push(idx);
+
+                    debug.log(ResolverEvent::Bits {
+                        sym: sym_idx,
+                        is_context: true,
+                        start: *start as usize,
+                        end: (*start + size + 1) as usize,
+                        word: ctx_word,
+                        path: path.clone(),
+                    });
+
                     dtree = &children[idx.min(children.len() - 1)];
                 }
             }

@@ -50,6 +50,27 @@ function displayEvent(state, idx, off) {
     const wordView = document.getElementById('event-view');
     wordView.innerHTML = ''
     wordView.appendChild(state.render_event(idx, sleighCtx));
+
+    let dtView = document.getElementById('decision-tree');
+
+    if (dtView !== undefined) {
+        let path = dtView.getAttribute('path').split(',').map((e) => parseInt(e));
+        console.log(path);
+        let nodeView = dtView;
+
+        path.forEach((ix, j) => {
+            nodeView = nodeView.firstElementChild.nextSibling.firstElementChild;
+
+            for (let i = 0; i < ix; i++)
+                nodeView = nodeView.nextSibling;
+
+            if (j < path.length - 1)
+                nodeView = nodeView.firstElementChild;
+        });
+
+        dtView.scrollTop = nodeView.offsetTop;
+        nodeView.classList.add('selected');
+    }
 };
 
 init().then(() => {
@@ -77,14 +98,14 @@ init().then(() => {
     displayEvent(insnStates[0], eventIdx, off);
 
     document.getElementById('next').addEventListener('click', () => {
-        if (eventIdx == states[insnIdx]['num_events'] - 1 && insnIdx < insn.length - 1) {
+        if (eventIdx == insnStates[insnIdx]['num_events'] - 1 && insnIdx < insn.length - 1) {
             setColor(off, 'black');
-            off += insns[insnIdx]['bit_len'] / 8;
+            off += insnStates[insnIdx]['insn']['bit_len'] / 8;
             setColor(off, 'red');
 
             insnIdx += 1;
             eventIdx = 0;
-        } else if (eventIdx < states[indnIdx]['events'].length) {
+        } else if (eventIdx < insnStates[insnIdx]['num_events']) {
             eventIdx += 1;
         }
 
@@ -94,11 +115,11 @@ init().then(() => {
     document.getElementById('prev').addEventListener('click', () => {
         if (eventIdx == 0 && insnIdx > 0) {
             setColor(off, 'black');
-            off -= insns[insIdx - 1]['bit_len'] / 8;
+            off -= insnStates[insIdx - 1]['insn']['bit_len'] / 8;
             setColor(off, 'red');
 
             insnIdx -= 1;
-            eventIdx = states[insnIdx]['num_events'] - 1;
+            eventIdx = insnStates[insnIdx]['num_events'] - 1;
         } else if (eventIdx > 0) {
             eventIdx -= 1;
         }

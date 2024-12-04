@@ -177,7 +177,7 @@ fn render_dtree(table: &Subtable, dtree: &DecisionTree) -> JsValue {
             let title_str = format!("Context: {}, Start: {}, Size: {}", is_context, start, size);
             let mut lis = vec![];
 
-            for child in children {
+            for (i, child) in children.iter().enumerate() {
                 let subtree = render_dtree(table, child);
                 let li = create_li(subtree);
                 lis.push(li);
@@ -185,20 +185,22 @@ fn render_dtree(table: &Subtable, dtree: &DecisionTree) -> JsValue {
 
             let ul = create_ul(lis);
             let ul_id = generate_guid();
-            ul.dyn_ref::<HtmlElement>().unwrap().set_id(ul_id.as_str());
+            let ul_html = ul.dyn_ref::<HtmlElement>().unwrap();
+            ul_html.set_id(ul_id.as_str());
 
             let title = create_button(title_str.as_str());
 
             let onclick = Closure::<dyn Fn()>::new(move || {
-                let window = web_sys::window().expect("should have a window in this context");
-                let document = window.document().expect("window should have a document");
+                let window = web_sys::window().unwrap();
+                let document = window.document().unwrap();
                 let ul = document.get_element_by_id(ul_id.as_str()).unwrap();
                 toggle_visible(&ul)
             });
             title.dyn_ref::<HtmlElement>().unwrap().set_onclick(Some(onclick.as_ref().unchecked_ref()));
             onclick.forget();
 
-            create_div(vec![title, ul])
+            let div = create_div(vec![title, ul]);
+            div
         }
         DecisionTree::Leaf(pairs) => {
             let mut lis = vec![];
@@ -221,25 +223,46 @@ impl WasmInstruction {
         let lang = unsafe { &(*wasm_ctx).lang };
         let events = unsafe { &(*self.debug).events };
 
-        match events[idx] {
-            ResolverEvent::InstructionBits {
+        let window = web_sys::window().expect("should have a window in this context");
+        let document = window.document().expect("window should have a document");
+
+        match &events[idx] {
+            ResolverEvent::Bits {
                 sym: sym_idx,
+                is_context: is_context,
                 start: start,
                 end: end,
                 word: word,
-                val: val,
+                path: path,
             } => {
-                let sym = &lang.symbols[&sym_idx];
+                let sym = &lang.symbols[sym_idx];
 
-                match &sym.body {
+                let hex_view = create_span(format!("{:0>8x}", *word).as_str());
+                let bin_view = create_span(format!("{:0>32b}", *word).as_str());
+                let word_view = create_div(vec![
+                    create_span("Word: "),
+                    hex_view,
+                    create_span("    "),
+                    bin_view,
+                ]);
+
+                let idx_view = create_p(format!("Index: {}", path[path.len() - 1]).as_str());
+
+                let body_view = match &sym.body {
                     SymbolBody::Subtable(table) => {
                         let title = create_p(format!("Table: {}", table.name).as_str());
+
                         let dt = render_dtree(table, &table.decision_tree);
-                        let html = create_div(vec![title, dt]);
-                        html
+                        let dt_html = dt.dyn_ref::<HtmlElement>().unwrap();
+                        dt_html.set_id("decision-tree");
+                        dt_html.set_attribute("path", path.iter().map(|ix| format!("{}", ix)).collect::<Vec<String>>().join(",").as_str());
+
+                        create_div(vec![title, dt])
                     },
                     _ => todo!(),
-                }
+                };
+
+                create_div(vec![word_view, idx_view, body_view])
             },
             _ => todo!(),
         }
