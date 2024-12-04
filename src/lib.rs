@@ -1,4 +1,5 @@
 use wasm_bindgen::prelude::*;
+use web_sys::HtmlElement;
 use console_error_panic_hook;
 
 mod arch;
@@ -20,11 +21,14 @@ extern {
 #[wasm_bindgen(module = "/utils.js")]
 extern "C" {
     pub fn sync_fetch(url: &str) -> String;
+    pub fn generate_guid() -> String;
     pub fn create_div(children: Vec<JsValue>) -> JsValue;
     pub fn create_span(text: &str) -> JsValue;
     pub fn create_p(text: &str) -> JsValue;
+    pub fn create_button(text: &str) -> JsValue;
     pub fn create_li(child: JsValue) -> JsValue;
     pub fn create_ul(elems: Vec<JsValue>) -> JsValue;
+    pub fn toggle_visible(elem: &JsValue);
 }
 
 #[wasm_bindgen]
@@ -37,11 +41,12 @@ pub fn do_get_request(url: &str) -> String {
     sync_fetch(url)
 }
 
-const FILE_BYTES: &[u8] = include_bytes!("/Users/sam/scratch/rust-sleigh/test");
+const FILE_BYTES: &[u8] = include_bytes!("/Users/samlerner/Projects/ideco_PUBLIC/test_cases/simple_linked_list");
 
 #[wasm_bindgen]
 pub fn bytes() -> Vec<u8> {
-    FILE_BYTES[0x3f20..0x3f95].to_vec()
+    // FILE_BYTES[0x3f20..0x3f95].to_vec()
+    FILE_BYTES[0x3dc0..0x3eb3].to_vec()
 }
 
 pub struct WasmContext {
@@ -77,7 +82,7 @@ pub fn context() -> *mut WasmContext {
     Box::into_raw(Box::new(WasmContext {
         lang: lang,
         ctx: ctx,
-        addr: 0x100003f20,
+        addr: 0x100003dc0,
         offset: 0,
     }))
 }
@@ -169,7 +174,7 @@ fn render_constructor(ct: &Constructor) -> JsValue {
 fn render_dtree(table: &Subtable, dtree: &DecisionTree) -> JsValue {
     match dtree {
         DecisionTree::NonLeaf((is_context, start, size, children)) => {
-            let title = create_p(format!("Context: {}, Start: {}, Size: {}", is_context, start, size).as_str());
+            let title_str = format!("Context: {}, Start: {}, Size: {}", is_context, start, size);
             let mut lis = vec![];
 
             for child in children {
@@ -179,6 +184,20 @@ fn render_dtree(table: &Subtable, dtree: &DecisionTree) -> JsValue {
             }
 
             let ul = create_ul(lis);
+            let ul_id = generate_guid();
+            ul.dyn_ref::<HtmlElement>().unwrap().set_id(ul_id.as_str());
+
+            let title = create_button(title_str.as_str());
+
+            let onclick = Closure::<dyn Fn()>::new(move || {
+                let window = web_sys::window().expect("should have a window in this context");
+                let document = window.document().expect("window should have a document");
+                let ul = document.get_element_by_id(ul_id.as_str()).unwrap();
+                toggle_visible(&ul)
+            });
+            title.dyn_ref::<HtmlElement>().unwrap().set_onclick(Some(onclick.as_ref().unchecked_ref()));
+            onclick.forget();
+
             create_div(vec![title, ul])
         }
         DecisionTree::Leaf(pairs) => {
@@ -234,11 +253,11 @@ pub fn disassemble(wasm_ctx: *mut WasmContext) -> Vec<WasmInstruction> {
     let ctx = unsafe { &(*wasm_ctx).ctx };
     let lang = unsafe { &(*wasm_ctx).lang };
 
-    // let buf = &FILE_BYTES[0x3dc0..0x3eb3];
-    // let orig_pc: u64 = 0x100003dc0;
+    let buf = &FILE_BYTES[0x3dc0..0x3eb3];
+    let orig_pc: u64 = 0x100003dc0;
 
-    let buf = &FILE_BYTES[0x3f20..0x3f95];
-    let orig_pc: u64 = 0x100003f20;
+    // let buf = &FILE_BYTES[0x3f20..0x3f95];
+    // let orig_pc: u64 = 0x100003f20;
         
     let mut bits_consumed = 0;
     let mut insns = vec![];

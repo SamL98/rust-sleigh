@@ -31,7 +31,8 @@ use {
 };
 
 static SLEIGH_PATH: &'static str =
-    "/Users/sam/ghidra_10.3_PUBLIC/Ghidra/Processors/x86/data/languages";
+    "/Users/samlerner/ghidra_10.3_PUBLIC/Ghidra/Processors/x86/data/languages";
+    // "/Users/sam/ghidra_10.3_PUBLIC/Ghidra/Processors/x86/data/languages";
 
 pub type Res<T, U> = IResult<T, U, Error<T>>;
 
