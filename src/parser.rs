@@ -1799,13 +1799,11 @@ fn resolve_varlist<'a>(
             let var_idx = varlist.vars[idx].unwrap();
             let var = &symbols[&var_idx];
 
-            println!("{:?}", token);
-
             debug.log(ResolverEvent::Var {
                 var: var_idx,
-                start: 32 - (token.start_byte * 8 + token.start_bit) as usize,
-                end: 32 - (token.end_bit + 1) as usize,
-                word: u32::from_be(token_word),
+                start: 32 - (token.end_bit + 1) as usize,
+                end: 33 - token.start_bit as usize,
+                word: token_word,
                 idx: idx,
             });
 

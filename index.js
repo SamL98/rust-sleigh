@@ -53,7 +53,7 @@ function displayEvent(state, idx, off) {
 
     let dtView = document.getElementById('decision-tree');
 
-    if (dtView !== undefined) {
+    if (dtView !== undefined && dtView !== null) {
         let path = dtView.getAttribute('path').split(',').map((e) => parseInt(e));
         let nodeView = dtView;
 
@@ -153,7 +153,7 @@ init().then(() => {
     renderInstructions(insnStates);
 
     document.getElementById('next').addEventListener('click', () => {
-        if (eventIdx == insnStates[insnIdx]['num_events'] - 1 && insnIdx < insn.length - 1) {
+        if (eventIdx == insnStates[insnIdx]['num_events'] - 1 && insnIdx < insnStates.length - 1) {
             setColor(off, 'black');
             off += insnStates[insnIdx]['insn']['bit_len'] / 8;
             setColor(off, 'red');
