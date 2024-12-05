@@ -317,6 +317,16 @@ impl WasmInstruction {
 
                 create_div(vec![word_view, idx_view, body_view])
             },
+            ResolverEvent::Val {
+                val,
+                start,
+                end,
+                word,
+            } => {
+                let word_view = render_word_view(*word, *start, *end, false);
+                let body_view = create_p(format!("0x{:x}", val).as_str());
+                create_div(vec![word_view, body_view])
+            },
         }
     }
 }

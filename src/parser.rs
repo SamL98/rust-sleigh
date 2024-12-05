@@ -1560,6 +1560,12 @@ pub enum ResolverEvent {
         word: u32,
         idx: usize,
     },
+    Val {
+        val: i64,
+        start: usize,
+        end: usize,
+        word: u32,
+    },
 }
 
 #[derive(Default, Clone)]
@@ -1823,7 +1829,6 @@ fn resolve_valuemap<'a>(
 ) -> Option<(MatchedSymbol<'a>, usize)> {
     match &valuemap.field {
         Field::Token(token) => {
-            // println!("{:?}", token);
             let num_bytes = (token.end_byte - token.start_byte + 1) as usize;
             let sb = token.start_byte as usize;
             let mut token_word: u32 = 0;
@@ -1838,15 +1843,12 @@ fn resolve_valuemap<'a>(
             let idx = ((token_word >> start) & ((1 << size) - 1)) as usize;
             let val = valuemap.vars[idx] as i64;
 
-            // debug.log(ResolverEvent {
-            //     kind: ResolverEventKind::Value,
-            //     table: String::new(),
-            //     start: token.start_bit as usize,
-            //     end: (token.end_bit + 1) as usize,
-            //     word: token_word,
-            //     val: val,
-            //     matched_constructor: String::new(),
-            // });
+            debug.log(ResolverEvent::Val {
+                start: 32 - (token.end_bit + 1) as usize,
+                end: 33 - token.start_bit as usize,
+                word: token_word,
+                val: val,
+            });
 
             // Not super sure if this size calculation is right but it seems to work.
             let literal = MatchedSymbol::Literal((val, size as usize));

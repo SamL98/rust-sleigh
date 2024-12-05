@@ -2,55 +2,7 @@ import init, {
     disassemble, bytes, context
 } from "./pkg/sleigh.js";
 
-let sleighCtx = undefined;
-let fileBytes = undefined;
-
-function setColor(off, color) {
-    for (let i = 0; i < 4; i++) {
-        let o = off + i;
-        if (o < fileBytes.length) {
-            let elem = document.getElementById('byte' + o);
-            elem.style.color = color;
-        }
-    }
-}
-
-function getWord(off) {
-    let word = 0;
-    for (let i = 0; i < 4; i++) {
-        let o = off + i;
-        if (o < fileBytes.length)
-            word = (word << 8) | fileBytes[o];
-    }
-    return word;
-}
-
-function displayInstruction(insn) {
-    const container = document.getElementById('list-container');
-
-    const collapsible = document.createElement('div');
-    collapsible.className = 'collapsible';
-    collapsible.textContent = insn['address'].to_string() + ' ' + insn['asm'];
-    container.appendChild(collapsible);
-
-    insn['ops'].forEach((op) => {
-        const content = document.createElement('div');
-        content.className = 'content';
-        content.textContent = '  ' + op.to_string();
-
-        collapsible.addEventListener('click', () => {
-            content.style.display = content.style.display === 'block' ? 'none' : 'block';
-        });
-
-        container.appendChild(content);
-    });
-}
-
-function displayEvent(state, idx, off) {
-    const wordView = document.getElementById('event-view');
-    wordView.innerHTML = ''
-    wordView.appendChild(state.render_event(idx, sleighCtx));
-
+function highlightSelectedDecisionNode() {
     let dtView = document.getElementById('decision-tree');
 
     if (dtView !== undefined && dtView !== null) {
@@ -70,54 +22,94 @@ function displayEvent(state, idx, off) {
         dtView.scrollTop = nodeView.offsetTop - dtView.offsetTop;
         nodeView.classList.add('selected');
     }
-};
-
-function renderBytes(bytes) {
-    let existingView = document.getElementById('hex-view');
-
-    let hexView = document.createElement('div');
-    hexView.id = 'hex-view';
-    let byteStrings = [];
-
-    // Cannot map because it converts to Uint8Array.
-    fileBytes.forEach((n, i) => { 
-        let s = n.toString(16).padStart(2, '0');
-        byteStrings.push('<span id=byte' + i + '>' + s + '</span>');
-    });
-    hexView.innerHTML = byteStrings.join(' ');
-
-    existingView.parentNode.replaceChild(hexView, existingView);
 }
 
-function renderInstructions(insnStates) {
-    document.getElementById('list-container').innerHTML = '';
+class App {
+    constructor(sleighCtx, fileBytes) {
+        this.sleighCtx = sleighCtx;
+        this.setBytes(fileBytes);
+    }
 
-    setColor(0, fileBytes.length, 'red');
-    insnStates.forEach(state => displayInstruction(state['insn']));
-    displayEvent(insnStates[0], 0, 0);
-}
+    setBytes(bytes) {
+        this.fileBytes = bytes;
+        this.insnStates = disassemble(this.sleighCtx, this.fileBytes);
 
-init().then(() => {
-    sleighCtx = context();
-    fileBytes = bytes();
-    let insnStates = disassemble(sleighCtx, fileBytes);
-    let off = 0;
+        this.displayInstructions();
+        this.setInstructionIdx(0);
 
-    renderBytes(fileBytes);
+        let existingView = document.getElementById('hex-view');
 
-    let editButton = document.getElementById('edit');
-    let saveButton = document.getElementById('save');
+        let hexView = document.createElement('div');
+        hexView.id = 'hex-view';
+        let byteStrings = [];
 
-    editButton.addEventListener('click', () => {
-        editButton.disabled = true;
-        saveButton.disabled = false;
+        // Cannot map because it converts to Uint8Array.
+        this.fileBytes.forEach((n, i) => { 
+            let s = n.toString(16).padStart(2, '0');
+            byteStrings.push('<span id=byte' + i + '>' + s + '</span>');
+        });
+        hexView.innerHTML = byteStrings.join(' ');
 
+        existingView.parentNode.replaceChild(hexView, existingView);
+    }
+
+    displayInstructions() {
+        const container = document.getElementById('list-container');
+        container.innerHTML = '';
+
+        this.insnStates.forEach((state, i) => {
+            let insn = state['insn'];
+
+            const collapsible = document.createElement('div');
+            collapsible.className = 'collapsible';
+            collapsible.textContent = insn['address'].to_string() + ' ' + insn['asm'];
+            container.appendChild(collapsible);
+
+            container.addEventListener('click', () => {
+                this.setInstructionIdx(i);
+            });
+
+            insn['ops'].forEach((op) => {
+                const content = document.createElement('div');
+                content.className = 'content';
+                content.textContent = '  ' + op.to_string();
+
+                collapsible.addEventListener('click', () => {
+                    content.style.display = content.style.display === 'block' ? 'none' : 'block';
+                });
+
+                container.appendChild(content);
+            });
+        });
+    }
+
+    setInstructionIdx(insnIdx) {
+        this.insnIdx = insnIdx;
+        this.insn = this.insnStates[this.insnIdx]['insn'];
+        this.numEvents = this.insnStates[this.insnIdx]['num_events'];
+        this.setEventIdx(0);
+    }
+
+    setEventIdx(eventIdx) {
+        this.eventIdx = eventIdx;
+
+        const wordView = document.getElementById('event-view');
+        wordView.innerHTML = ''
+
+        let state = this.insnStates[this.insnIdx];
+        let eventView = state.render_event(this.eventIdx, this.sleighCtx);
+        wordView.appendChild(eventView);
+
+        highlightSelectedDecisionNode();
+    };
+
+    editBytes() {
         let existingView = document.getElementById('hex-view');
 
         let editView = document.createElement('textarea');
         editView.id = 'hex-view';
 
-        fileBytes.forEach((b, i) => {
+        this.fileBytes.forEach((b, i) => {
             let s = b.toString(16);
 
             while (s.length < 2)
@@ -125,60 +117,64 @@ init().then(() => {
 
             editView.value += s;
 
-            if (i < fileBytes.length - 1)
+            if (i < this.fileBytes.length - 1)
                 editView.value += ' ';
         });
 
         existingView.parentNode.replaceChild(editView, existingView);
+    }
+
+    saveBytes() {
+        let existingView = document.getElementById('hex-view');
+        let newBytes = existingView.value.split(' ').map((b) => parseInt(b, 16));
+        this.setBytes(newBytes);
+    }
+
+    incrementEventIdx() {
+        if (this.eventIdx == this.numEvents - 1 && this.insnIdx < this.insnStates.length - 1) {
+            this.off += this.insn['bit_len'] / 8;
+            this.setInstructionIdx(this.insnIdx + 1);
+        } else if (this.eventIdx < this.numEvents - 1) {
+            this.setEventIdx(this.eventIdx + 1);
+        }
+    }
+
+    decrementEventIdx() {
+        if (this.eventIdx == 0 && this.insnIdx > 0) {
+            this.off -= this.insnStates[this.insnIdx - 1]['insn']['bit_len'] / 8;
+            this.setInstructionIdx(this.insnIdx - 1);
+            this.setEventIdx(this.numEvents - 1);
+        } else if (this.eventIdx > 0) {
+            this.setEventIdx(this.eventIdx - 1);
+        }
+    }
+}
+
+init().then(() => {
+    let sleighCtx = context();
+    let fileBytes = bytes();
+    let app = new App(sleighCtx, fileBytes);
+
+    let editButton = document.getElementById('edit');
+    let saveButton = document.getElementById('save');
+
+    editButton.addEventListener('click', () => {
+        editButton.disabled = true;
+        saveButton.disabled = false;
+        app.editBytes();
     });
 
     saveButton.addEventListener('click', () => {
         editButton.disabled = false;
         saveButton.disabled = true;
-
-        let existingView = document.getElementById('hex-view');
-        fileBytes = existingView.value.split(' ').map((b) => parseInt(b, 16));
-
-        insnStates = disassemble(sleighCtx, fileBytes);
-        off = 0;
-        insnIdx = 0;
-        eventIdx = 0;
-
-        renderBytes(fileBytes);
-        renderInstructions(insnStates);
+        app.saveBytes();
     });
 
-    let insnIdx = 0;
-    let eventIdx = 0;
-    renderInstructions(insnStates);
-
     document.getElementById('next').addEventListener('click', () => {
-        if (eventIdx == insnStates[insnIdx]['num_events'] - 1 && insnIdx < insnStates.length - 1) {
-            setColor(off, 'black');
-            off += insnStates[insnIdx]['insn']['bit_len'] / 8;
-            setColor(off, 'red');
-
-            insnIdx += 1;
-            eventIdx = 0;
-        } else if (eventIdx < insnStates[insnIdx]['num_events']) {
-            eventIdx += 1;
-        }
-
-        displayEvent(insnStates[insnIdx], eventIdx, off);
+        app.incrementEventIdx();
     });
 
     document.getElementById('prev').addEventListener('click', () => {
-        if (eventIdx == 0 && insnIdx > 0) {
-            setColor(off, 'black');
-            off -= insnStates[insIdx - 1]['insn']['bit_len'] / 8;
-            setColor(off, 'red');
-
-            insnIdx -= 1;
-            eventIdx = insnStates[insnIdx]['num_events'] - 1;
-        } else if (eventIdx > 0) {
-            eventIdx -= 1;
-        }
-
-        displayEvent(insnStates[insnIdx], eventIdx, off);
+        app.decrementEventIdx();
     });
 });
