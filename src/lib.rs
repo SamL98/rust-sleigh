@@ -177,7 +177,7 @@ fn render_dtree(table: &Subtable, dtree: &DecisionTree) -> JsValue {
             let title_str = format!("Context: {}, Start: {}, Size: {}", is_context, start, size);
             let mut lis = vec![];
 
-            for (i, child) in children.iter().enumerate() {
+            for (_i, child) in children.iter().enumerate() {
                 let subtree = render_dtree(table, child);
                 let li = create_li(subtree);
                 lis.push(li);
@@ -205,7 +205,7 @@ fn render_dtree(table: &Subtable, dtree: &DecisionTree) -> JsValue {
         DecisionTree::Leaf(pairs) => {
             let mut lis = vec![];
 
-            for (ct_id, pattern) in pairs {
+            for (ct_id, _pattern) in pairs {
                 let ct = &table.constructors[*ct_id as usize];
                 // TODO: render the decision blocks.
                 let li = create_li(render_constructor(ct));
@@ -217,56 +217,68 @@ fn render_dtree(table: &Subtable, dtree: &DecisionTree) -> JsValue {
     }
 }
 
+fn render_word_view(word: u32, start: usize, end: usize, is_context: bool) -> JsValue {
+    let hex_view = create_span(format!("{:0>8x}", word).as_str());
+
+    let mut bit_views = vec![];
+
+    for i in 0..32 {
+        let color = if i >= start && i < (end - 1) {
+            "red"
+        } else {
+            "black"
+        };
+
+        let bit = (word >> (31 - i)) & 1;
+        let bit_view = create_span(format!("{}", bit).as_str());
+        let css = format!("color: {};", color);
+        bit_view.dyn_ref::<HtmlElement>().unwrap().style().set_css_text(css.as_str());
+        bit_views.push(bit_view);
+    }
+
+    let bin_view = create_div(bit_views);
+    bin_view.dyn_ref::<HtmlElement>().unwrap().style().set_css_text("display: inline-block;");
+
+    let context_str = if is_context {
+        "Context"
+    } else {
+        "Instruction"
+    };
+
+    create_div(vec![
+        create_span(format!("Word ({}): ", context_str).as_str()),
+        hex_view,
+        create_span("    "),
+        bin_view,
+    ])
+}
+
+fn render_idx_view(idx: usize) -> JsValue {
+    create_p(format!("Index: {}", idx).as_str())
+}
+
 #[wasm_bindgen]
 impl WasmInstruction {
     pub fn render_event(&self, idx: usize, wasm_ctx: *mut WasmContext) -> JsValue {
         let lang = unsafe { &(*wasm_ctx).lang };
         let events = unsafe { &(*self.debug).events };
 
-        let window = web_sys::window().expect("should have a window in this context");
-        let document = window.document().expect("window should have a document");
+        // let window = web_sys::window().expect("should have a window in this context");
+        // let document = window.document().expect("window should have a document");
 
         match &events[idx] {
             ResolverEvent::Bits {
                 sym: sym_idx,
-                is_context: is_context,
-                start: start,
-                end: end,
-                word: word,
-                path: path,
+                is_context,
+                start,
+                end,
+                word,
+                path,
             } => {
                 let sym = &lang.symbols[sym_idx];
 
-                let hex_view = create_span(format!("{:0>8x}", *word).as_str());
-                // let bin_view = create_span(format!("{:0>32b}", *word).as_str());
-
-                let mut bit_views = vec![];
-
-                for i in 0..32 {
-                    let color = if i >= *start && i < (*end - 1) {
-                        "red"
-                    } else {
-                        "black"
-                    };
-
-                    let bit = (*word >> (31 - i)) & 1;
-                    let bit_view = create_span(format!("{}", bit).as_str());
-                    let css = format!("color: {};", color);
-                    bit_view.dyn_ref::<HtmlElement>().unwrap().style().set_css_text(css.as_str());
-                    bit_views.push(bit_view);
-                }
-
-                let bin_view = create_div(bit_views);
-                bin_view.dyn_ref::<HtmlElement>().unwrap().style().set_css_text("display: inline-block;");
-
-                let word_view = create_div(vec![
-                    create_span("Word: "),
-                    hex_view,
-                    create_span("    "),
-                    bin_view,
-                ]);
-
-                let idx_view = create_p(format!("Index: {}", path[path.len() - 1]).as_str());
+                let word_view = render_word_view(*word, *start, *end, *is_context);
+                let idx_view = render_idx_view(path[path.len() - 1]);
 
                 let body_view = match &sym.body {
                     SymbolBody::Subtable(table) => {
@@ -275,7 +287,7 @@ impl WasmInstruction {
                         let dt = render_dtree(table, &table.decision_tree);
                         let dt_html = dt.dyn_ref::<HtmlElement>().unwrap();
                         dt_html.set_id("decision-tree");
-                        dt_html.set_attribute("path", path.iter().map(|ix| format!("{}", ix)).collect::<Vec<String>>().join(",").as_str());
+                        let _ = dt_html.set_attribute("path", path.iter().map(|ix| format!("{}", ix)).collect::<Vec<String>>().join(",").as_str());
 
                         create_div(vec![title, dt])
                     },
@@ -284,7 +296,27 @@ impl WasmInstruction {
 
                 create_div(vec![word_view, idx_view, body_view])
             },
-            _ => todo!(),
+            ResolverEvent::Var {
+                var: var_idx,
+                start,
+                end,
+                word,
+                idx,
+            } => {
+                let var = &lang.symbols[var_idx];
+
+                let word_view = render_word_view(*word, *start, *end, false);
+                let idx_view = render_idx_view(*idx);
+
+                let body_view = match &var.body {
+                    SymbolBody::Varnode(vn) => {
+                        create_p(format!("{}", vn.name).as_str())
+                    },
+                    _ => todo!(),
+                };
+
+                create_div(vec![word_view, idx_view, body_view])
+            },
         }
     }
 }
@@ -292,9 +324,6 @@ impl WasmInstruction {
 #[wasm_bindgen]
 pub fn disassemble(wasm_ctx: *mut WasmContext) -> Vec<WasmInstruction> {
     init_panic_hook();
-
-    let ctx = unsafe { &(*wasm_ctx).ctx };
-    let lang = unsafe { &(*wasm_ctx).lang };
 
     let buf = &FILE_BYTES[0x3dc0..0x3eb3];
     let orig_pc: u64 = 0x100003dc0;

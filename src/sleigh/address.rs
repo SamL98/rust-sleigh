@@ -2,23 +2,23 @@ use wasm_bindgen::prelude::*;
 use super::types::Address;
 use std::fmt;
 
-pub trait AddressIface {
-    fn as_int(&self) -> u64;
-    fn adding(&self, addend: u64) -> Address;
-}
+// pub trait AddressIface {
+//     fn as_int(&self) -> u64;
+//     fn adding(&self, addend: u64) -> Address;
+// }
 
-impl AddressIface for Address {
-    fn as_int(&self) -> u64 {
-        return self.offset;
-    }
+// impl AddressIface for Address {
+//     fn as_int(&self) -> u64 {
+//         return self.offset;
+//     }
 
-    fn adding(&self, addend: u64) -> Address {
-        return Address {
-            space: self.space.clone(),
-            offset: self.offset + addend
-        };
-    }
-}
+//     fn adding(&self, addend: u64) -> Address {
+//         return Address {
+//             space: self.space.clone(),
+//             offset: self.offset + addend
+//         };
+//     }
+// }
 
 #[wasm_bindgen]
 impl Address {

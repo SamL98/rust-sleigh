@@ -45,4 +45,4 @@ pub struct Instruction {
     pub ops: Vec<PcodeOp>
 }
 
-pub struct Context {}
+// pub struct Context {}

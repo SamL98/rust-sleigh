@@ -14,19 +14,19 @@ use {
 };
 
 pub struct Prototype {
-    pub name: String,
-    pub extrapop: u64,
-    pub stackshift: u64,
-    pub inputs: HashMap<String, Vec<Varnode>>,
-    pub outputs: HashMap<String, Vec<Varnode>>,
-    pub killed: HashSet<Varnode>,
-    pub unaff: HashSet<Varnode>
+    pub _name: String,
+    pub _extrapop: u64,
+    pub _stackshift: u64,
+    pub _inputs: HashMap<String, Vec<Varnode>>,
+    pub _outputs: HashMap<String, Vec<Varnode>>,
+    pub _killed: HashSet<Varnode>,
+    pub _unaff: HashSet<Varnode>
 }
 
 pub struct CompilerSpec {
-    pub stack_pointer: Varnode,
-    pub default_proto: Prototype,
-    pub prototypes: Vec<Prototype>
+    pub _stack_pointer: Varnode,
+    pub _default_proto: Prototype,
+    pub _prototypes: Vec<Prototype>
 }
 
 pub fn read_file(path: PathBuf, root: &Path) -> String {
@@ -86,10 +86,10 @@ impl ProcessorSpec {
 }
 
 pub struct Language {
-    pub name: String,
-    pub sla_path: PathBuf,
+    pub _name: String,
+    pub _sla_path: PathBuf,
     pub pspec: ProcessorSpec,
-    pub cspecs: Vec<CompilerSpec>
+    pub _cspecs: Vec<CompilerSpec>
 }
 
 impl Language {
@@ -114,10 +114,10 @@ impl Language {
         }*/
 
         return Language {
-            name: name,
-            sla_path: sla_path,
+            _name: name,
+            _sla_path: sla_path,
             pspec: pspec,
-            cspecs: vec![],
+            _cspecs: vec![],
         }
     }
 }

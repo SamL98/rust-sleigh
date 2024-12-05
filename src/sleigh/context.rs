@@ -1,17 +1,17 @@
-use super::types::{
-    Context,
-    Instruction,
-    // Varnode,
-};
+// use super::types::{
+//     Context,
+//     Instruction,
+//     // Varnode,
+// };
 // use super::instruction::InstructionIface;
-use crate::arch::Language;
+// use crate::arch::Language;
 
 // use std::collections::HashMap;
 
-pub trait ContextIface {
-    fn new(lang: Language, compiler_id: &str) -> Context;
-    fn disassemble_one(&self, bytes: &Vec<u8>, address: u64) -> Option<Instruction>;
-}
+// pub trait ContextIface {
+//     fn new(lang: Language, compiler_id: &str) -> Context;
+//     fn disassemble_one(&self, bytes: &Vec<u8>, address: u64) -> Option<Instruction>;
+// }
 
 /*impl ContextIface for Context {
     fn new(lang: Language, compiler_id: &str) -> Context {

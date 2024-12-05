@@ -14,9 +14,9 @@ impl fmt::Display for Instruction {
     }
 }
 
-pub trait InstructionIface {
-    //fn new(ctx: &Context, insn_c: *const csleigh_Translation) -> Instruction;
-}
+//pub trait InstructionIface {
+//    //fn new(ctx: &Context, insn_c: *const csleigh_Translation) -> Instruction;
+//}
 
 /*impl InstructionIface for Instruction {
     fn new(ctx: &Context, insn_c: *const csleigh_Translation) -> Instruction {

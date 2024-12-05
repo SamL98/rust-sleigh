@@ -124,46 +124,46 @@ impl fmt::Debug for PcodeOp {
     }
 }
 
-pub trait PcodeIface {
-    //fn new(ctx: &Context, op_c: *const csleigh_PcodeOp) -> PcodeOp;
-}
+//pub trait PcodeIface {
+//    //fn new(ctx: &Context, op_c: *const csleigh_PcodeOp) -> PcodeOp;
+//}
 
-impl PcodeIface for PcodeOp {
-    /*fn new(ctx: &Context, op_c: *const csleigh_PcodeOp) -> PcodeOp {
-        let addr_space_ptr = unsafe { (*op_c).seq.pc.space };
-        let addr_space_str = get_addr_space_name(addr_space_ptr);
+// impl PcodeIface for PcodeOp {
+//     /*fn new(ctx: &Context, op_c: *const csleigh_PcodeOp) -> PcodeOp {
+//         let addr_space_ptr = unsafe { (*op_c).seq.pc.space };
+//         let addr_space_str = get_addr_space_name(addr_space_ptr);
 
-        let off = unsafe { (*op_c).seq.pc.off };
-        let pc = Address { space: addr_space_str, offset: off };
-        let opcode: OpCode = unsafe { mem::transmute((*op_c).opcode) };
+//         let off = unsafe { (*op_c).seq.pc.off };
+//         let pc = Address { space: addr_space_str, offset: off };
+//         let opcode: OpCode = unsafe { mem::transmute((*op_c).opcode) };
 
-        let mut inputs: Vec<Varnode> = Vec::new();
-        let num_inputs = unsafe { (*op_c).num_inputs };
+//         let mut inputs: Vec<Varnode> = Vec::new();
+//         let num_inputs = unsafe { (*op_c).num_inputs };
 
-        for i in 0..(num_inputs as usize) {
-            let input_c = unsafe { 
-                (*op_c).inputs.offset(i as isize)
-            };
-            inputs.push(Varnode::new(ctx, input_c));
-        }
+//         for i in 0..(num_inputs as usize) {
+//             let input_c = unsafe { 
+//                 (*op_c).inputs.offset(i as isize)
+//             };
+//             inputs.push(Varnode::new(ctx, input_c));
+//         }
 
-        let output = unsafe {
-            if (*op_c).output.is_null() { 
-                None 
-            } 
-            else { 
-                Some(Varnode::new(ctx, (*op_c).output))
-            }
-        };
+//         let output = unsafe {
+//             if (*op_c).output.is_null() { 
+//                 None 
+//             } 
+//             else { 
+//                 Some(Varnode::new(ctx, (*op_c).output))
+//             }
+//         };
 
-        let uniq = unsafe { (*op_c).seq.uniq };
-        let order = unsafe { (*op_c).seq.order };
+//         let uniq = unsafe { (*op_c).seq.uniq };
+//         let order = unsafe { (*op_c).seq.order };
 
-        return PcodeOp {
-            seq: SeqNum { pc: pc, uniq: uniq, order: order },
-            opcode: opcode,
-            inputs: inputs,
-            output: output
-        };
-    }*/
-}
+//         return PcodeOp {
+//             seq: SeqNum { pc: pc, uniq: uniq, order: order },
+//             opcode: opcode,
+//             inputs: inputs,
+//             output: output
+//         };
+//     }*/
+// }

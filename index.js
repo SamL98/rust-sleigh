@@ -55,7 +55,6 @@ function displayEvent(state, idx, off) {
 
     if (dtView !== undefined) {
         let path = dtView.getAttribute('path').split(',').map((e) => parseInt(e));
-        console.log(path);
         let nodeView = dtView;
 
         path.forEach((ix, j) => {
@@ -73,13 +72,11 @@ function displayEvent(state, idx, off) {
     }
 };
 
-init().then(() => {
-    sleighCtx = context();
-    fileBytes = bytes();
-    let insnStates = disassemble(sleighCtx);
-    let off = 0;
+function renderBytes(bytes) {
+    let existingView = document.getElementById('hex-view');
 
-    const hexView = document.getElementById('hex-view');
+    let hexView = document.createElement('div');
+    hexView.id = 'hex-view';
     let byteStrings = [];
 
     // Cannot map because it converts to Uint8Array.
@@ -88,6 +85,54 @@ init().then(() => {
         byteStrings.push('<span id=byte' + i + '>' + s + '</span>');
     });
     hexView.innerHTML = byteStrings.join(' ');
+
+    existingView.parentNode.replaceChild(hexView, existingView);
+}
+
+init().then(() => {
+    sleighCtx = context();
+    fileBytes = bytes();
+    let insnStates = disassemble(sleighCtx);
+    let off = 0;
+
+    renderBytes(fileBytes);
+
+    let editButton = document.getElementById('edit');
+    let saveButton = document.getElementById('save');
+
+    editButton.addEventListener('click', () => {
+        editButton.disabled = true;
+        saveButton.disabled = false;
+
+        let existingView = document.getElementById('hex-view');
+
+        let editView = document.createElement('textarea');
+        editView.id = 'hex-view';
+
+        fileBytes.forEach((b, i) => {
+            let s = b.toString(16);
+
+            while (s.length < 2)
+                s = '0' + s;
+
+            editView.value += s;
+
+            if (i < fileBytes.length - 1)
+                editView.value += ' ';
+        });
+
+        existingView.parentNode.replaceChild(editView, existingView);
+    });
+
+    saveButton.addEventListener('click', () => {
+        editButton.disabled = false;
+        saveButton.disabled = true;
+
+        let existingView = document.getElementById('hex-view');
+        fileBytes = existingView.value.split(' ').map((b) => parseInt(b, 16));
+
+        renderBytes(fileBytes);
+    });
 
     setColor(0, fileBytes.length, 'red');
     insnStates.forEach(state => displayInstruction(state['insn']));

@@ -2,8 +2,6 @@ use crate::arch::get_language;
 use crate::sleigh::opcode::OpCode;
 use crate::sleigh::types::{Address, PcodeOp, SeqNum, Varnode};
 
-use wasm_bindgen::prelude::*;
-
 extern crate bitvec;
 extern crate nom;
 
@@ -1527,10 +1525,6 @@ fn identifier(input: &str) -> Res<&str, &str> {
     ))(input)
 }
 
-fn identifier_ws(input: &str) -> Res<&str, &str> {
-    terminated(identifier, space0)(input)
-}
-
 fn string(input: &str) -> Res<&str, &str> {
     delimited(char('"'), take_until("\""), char('"'))(input)
 }
@@ -1559,11 +1553,17 @@ pub enum ResolverEvent {
         word: u32,
         path: Vec<usize>,
     },
+    Var {
+        var: u32,
+        start: usize,
+        end: usize,
+        word: u32,
+        idx: usize,
+    },
 }
 
 #[derive(Default, Clone)]
 pub struct ResolverDebug {
-    indent: usize,
     pub events: Vec<ResolverEvent>,
 }
 
@@ -1638,17 +1638,17 @@ pub fn read_ctx(
     words
 }
 
-fn write_ctx(
-    ctx: &Vec<u32>,
-    ctx_reg: &VarnodeSym,
-    reg_space: &mut BitVec<u8, Msb0>,
-) {
-    for (i, word) in ctx.iter().enumerate() {
-        let start = (ctx_reg.offset * 8 + (i as u64) * 32) as usize;
-        let end = (start + 32) as usize;
-        reg_space[start..end].store_be(*word);
-    }
-}
+// fn write_ctx(
+//     ctx: &Vec<u32>,
+//     ctx_reg: &VarnodeSym,
+//     reg_space: &mut BitVec<u8, Msb0>,
+// ) {
+//     for (i, word) in ctx.iter().enumerate() {
+//         let start = (ctx_reg.offset * 8 + (i as u64) * 32) as usize;
+//         let end = (start + 32) as usize;
+//         reg_space[start..end].store_be(*word);
+//     }
+// }
 
 fn get_word(words: &Vec<u8>, start: usize) -> u32 {
     let mut word: u32 = 0;
@@ -1796,22 +1796,18 @@ fn resolve_varlist<'a>(
             let start = token.start_bit;
             let size = token.end_bit - start + 1;
             let idx = ((token_word >> start) & ((1 << size) - 1)) as usize;
-            let var = &symbols[&varlist.vars[idx].unwrap()];
+            let var_idx = varlist.vars[idx].unwrap();
+            let var = &symbols[&var_idx];
 
-            let c = match &var.body {
-                SymbolBody::Varnode(vn) => vn.name.clone(),
-                _ => todo!(),
-            };
+            println!("{:?}", token);
 
-            // debug.log(ResolverEvent {
-            //     kind: ResolverEventKind::Var,
-            //     table: String::new(),
-            //     start: (token.start_byte * 8 + token.start_bit) as usize,
-            //     end: (token.end_bit + 1) as usize,
-            //     word: token_word,
-            //     val: idx as i64,
-            //     matched_constructor: c,
-            // });
+            debug.log(ResolverEvent::Var {
+                var: var_idx,
+                start: 32 - (token.start_byte * 8 + token.start_bit) as usize,
+                end: 32 - (token.end_bit + 1) as usize,
+                word: u32::from_be(token_word),
+                idx: idx,
+            });
 
             // Not super sure if this size calculation is right but it seems to work.
             Some(((MatchedSymbol::Symbol(var)), (token.end_byte * 8 + (8 - token.end_bit - 1) + size) as usize))
@@ -2047,13 +2043,13 @@ pub fn resolve_symbol<'a>(
     }
 }
 
-fn get_table<'a>(id: u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Subtable {
-    let sym = &symbols[&id];
-    match &sym.body {
-        SymbolBody::Subtable(subtable) => subtable,
-        _ => panic!(),
-    }
-}
+// fn get_table<'a>(id: u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Subtable {
+//     let sym = &symbols[&id];
+//     match &sym.body {
+//         SymbolBody::Subtable(subtable) => subtable,
+//         _ => panic!(),
+//     }
+// }
 
 fn get_operand<'a>(id: &u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Operand {
     let sym = &symbols[id];
@@ -2456,10 +2452,9 @@ pub fn build_text(matched_sym: &MatchedSymbol) -> String {
 
 pub struct SleighLanguage {
     pub language: Language,
-    pub program: Program,
     pub symbols: HashMap<u32, Symbol>,
     pub spaces: HashMap<String, u64>,
-    pub varnodes: HashMap<String, VarnodeSym>,
+    pub _varnodes: HashMap<String, VarnodeSym>,
     pub varnode_map: HashMap<(u64, u64), String>,
     pub context_syms: HashMap<String, Context>,
     pub reg_space_size: usize,
@@ -2513,10 +2508,9 @@ impl SleighLanguage {
 
         SleighLanguage {
             language: lang,
-            program: sla,
             symbols: symbols,
             spaces: spaces,
-            varnodes: varnodes,
+            _varnodes: varnodes,
             varnode_map: varnode_map,
             context_syms: context_syms,
             reg_space_size: reg_space_size,
