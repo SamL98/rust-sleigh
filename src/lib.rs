@@ -322,11 +322,10 @@ impl WasmInstruction {
 }
 
 #[wasm_bindgen]
-pub fn disassemble(wasm_ctx: *mut WasmContext) -> Vec<WasmInstruction> {
+pub fn disassemble(wasm_ctx: *mut WasmContext, buf: Vec<u8>) -> Vec<WasmInstruction> {
     init_panic_hook();
 
-    let buf = &FILE_BYTES[0x3dc0..0x3eb3];
-    let orig_pc: u64 = 0x100003dc0;
+    let orig_pc: u64 = unsafe { (*wasm_ctx).addr };
 
     // let buf = &FILE_BYTES[0x3f20..0x3f95];
     // let orig_pc: u64 = 0x100003f20;

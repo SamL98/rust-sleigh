@@ -89,10 +89,18 @@ function renderBytes(bytes) {
     existingView.parentNode.replaceChild(hexView, existingView);
 }
 
+function renderInstructions(insnStates) {
+    document.getElementById('list-container').innerHTML = '';
+
+    setColor(0, fileBytes.length, 'red');
+    insnStates.forEach(state => displayInstruction(state['insn']));
+    displayEvent(insnStates[0], 0, 0);
+}
+
 init().then(() => {
     sleighCtx = context();
     fileBytes = bytes();
-    let insnStates = disassemble(sleighCtx);
+    let insnStates = disassemble(sleighCtx, fileBytes);
     let off = 0;
 
     renderBytes(fileBytes);
@@ -131,16 +139,18 @@ init().then(() => {
         let existingView = document.getElementById('hex-view');
         fileBytes = existingView.value.split(' ').map((b) => parseInt(b, 16));
 
-        renderBytes(fileBytes);
-    });
+        insnStates = disassemble(sleighCtx, fileBytes);
+        off = 0;
+        insnIdx = 0;
+        eventIdx = 0;
 
-    setColor(0, fileBytes.length, 'red');
-    insnStates.forEach(state => displayInstruction(state['insn']));
+        renderBytes(fileBytes);
+        renderInstructions(insnStates);
+    });
 
     let insnIdx = 0;
     let eventIdx = 0;
-
-    displayEvent(insnStates[0], eventIdx, off);
+    renderInstructions(insnStates);
 
     document.getElementById('next').addEventListener('click', () => {
         if (eventIdx == insnStates[insnIdx]['num_events'] - 1 && insnIdx < insn.length - 1) {
