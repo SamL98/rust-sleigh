@@ -27,5 +27,5 @@ js-sys = "0.3.72"
 
 [dependencies.web-sys]
 version = "0.3"
-features = ['Headers', 'Request', 'RequestInit', 'RequestMode', 'Response', 'Window', 'HtmlElement', 'Document', 'Element', 'DomTokenList']
+features = ['Headers', 'Request', 'RequestInit', 'RequestMode', 'Response', 'Window', 'HtmlElement', 'Document', 'Element', 'DomTokenList', 'CssStyleDeclaration']
 # path = "../../crates/web-sys"

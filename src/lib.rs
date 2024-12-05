@@ -238,7 +238,27 @@ impl WasmInstruction {
                 let sym = &lang.symbols[sym_idx];
 
                 let hex_view = create_span(format!("{:0>8x}", *word).as_str());
-                let bin_view = create_span(format!("{:0>32b}", *word).as_str());
+                // let bin_view = create_span(format!("{:0>32b}", *word).as_str());
+
+                let mut bit_views = vec![];
+
+                for i in 0..32 {
+                    let color = if i >= *start && i < (*end - 1) {
+                        "red"
+                    } else {
+                        "black"
+                    };
+
+                    let bit = (*word >> (31 - i)) & 1;
+                    let bit_view = create_span(format!("{}", bit).as_str());
+                    let css = format!("color: {};", color);
+                    bit_view.dyn_ref::<HtmlElement>().unwrap().style().set_css_text(css.as_str());
+                    bit_views.push(bit_view);
+                }
+
+                let bin_view = create_div(bit_views);
+                bin_view.dyn_ref::<HtmlElement>().unwrap().style().set_css_text("display: inline-block;");
+
                 let word_view = create_div(vec![
                     create_span("Word: "),
                     hex_view,
