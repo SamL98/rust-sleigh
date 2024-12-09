@@ -29,8 +29,7 @@ use {
 };
 
 static SLEIGH_PATH: &'static str =
-    "/Users/samlerner/ghidra_10.3_PUBLIC/Ghidra/Processors/x86/data/languages";
-    // "/Users/sam/ghidra_10.3_PUBLIC/Ghidra/Processors/x86/data/languages";
+    "/Users/sam/ghidra_10.3_PUBLIC/Ghidra/Processors/AARCH64/data/languages";
 
 pub type Res<T, U> = IResult<T, U, Error<T>>;
 
@@ -159,6 +158,14 @@ pub struct Varlist {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub struct NameTable {
+    name: String,
+    scope: u32,
+    field: Field,
+    names: Vec<Option<String>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Valuemap {
     name: String,
     scope: u32,
@@ -206,6 +213,7 @@ pub enum SymbolBody {
     Varnode(VarnodeSym),
     Value(Value),
     Varlist(Varlist),
+    Nametab(NameTable),
     Valuemap(Valuemap),
     Operand(Operand),
     Context(Context),
@@ -269,8 +277,10 @@ pub enum Expr {
     Operand(OperandExpr),
     Field(Field),
     Not(Box<Expr>),
+    Minus(Box<Expr>),
     Xor((Box<Expr>, Box<Expr>)),
     Add((Box<Expr>, Box<Expr>)),
+    Sub((Box<Expr>, Box<Expr>)),
     Lshift((Box<Expr>, Box<Expr>)),
     Rshift((Box<Expr>, Box<Expr>)),
     Mult((Box<Expr>, Box<Expr>)),
@@ -529,6 +539,7 @@ fn sym_head(input: &str) -> Res<&str, Symbol> {
                         tag("value"),
                         tag("context"),
                         tag("operand"),
+                        tag("name"),
                     )),
                     tag("_sym_head "),
                 ),
@@ -557,11 +568,17 @@ fn sym_head(input: &str) -> Res<&str, Symbol> {
 }
 
 fn operand(input: &str) -> Res<&str, u32> {
-    delimited(tag("<oper"), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
+    let res = delimited(tag("<oper"), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
         let (_, attrs) = attrs(res).finish().unwrap();
         //println!("{} {:?}", res, attrs);
         (next, u32hex(attrs[0].1))
-    })
+    });
+
+    // if res.is_err() {
+    //     panic!("Could not parse operand at {}", input);
+    // }
+    
+    res
 }
 
 fn operands(input: &str) -> Res<&str, Vec<u32>> {
@@ -647,7 +664,11 @@ fn next2_expr(input: &str) -> Res<&str, Expr> {
 
 fn unary_expr(input: &str) -> Res<&str, Expr> {
     //println!("* unary {}", &input[0..20]);
-    let expr_types = alt((tag("not_exp"), tag("dummy_exp")));
+    let expr_types = alt((
+        tag("not_exp"),
+        tag("minus_exp"),
+        tag("dummy_exp")
+    ));
 
     let (input, (expr_type, hs_expr, _)) = tuple((
         terminated(delimited(char('<'), expr_types, char('>')), line_ending),
@@ -659,6 +680,7 @@ fn unary_expr(input: &str) -> Res<&str, Expr> {
 
     let expr = match expr_type {
         "not_exp" => Expr::Not(hs),
+        "minus_exp" => Expr::Minus(hs),
         _ => todo!(),
     };
 
@@ -669,6 +691,7 @@ fn binary_expr(input: &str) -> Res<&str, Expr> {
     //println!("* binary {}", &input[0..20]);
     let expr_types = alt((
         tag("plus_exp"),
+        tag("sub_exp"),
         tag("and_exp"),
         tag("xor_exp"),
         tag("or_exp"),
@@ -688,6 +711,7 @@ fn binary_expr(input: &str) -> Res<&str, Expr> {
 
     let expr = match expr_type {
         "plus_exp" => Expr::Add((lhs, rhs)),
+        "sub_exp" => Expr::Sub((lhs, rhs)),
         "and_exp" => Expr::And((lhs, rhs)),
         "or_exp" => Expr::Or((lhs, rhs)),
         "xor_exp" => Expr::Xor((lhs, rhs)),
@@ -702,7 +726,7 @@ fn binary_expr(input: &str) -> Res<&str, Expr> {
 
 fn expr(input: &str) -> Res<&str, Expr> {
     //println!("* context expr {}", &input[0..20]);
-    alt((
+    let res = alt((
         start_expr,
         end_expr,
         next2_expr,
@@ -711,11 +735,17 @@ fn expr(input: &str) -> Res<&str, Expr> {
         field_expr,
         unary_expr,
         binary_expr,
-    ))(input)
+    ))(input);
+
+    // if res.is_err() {
+    //     panic!("Could not parse expr at {}", input);
+    // }
+
+    res
 }
 
 fn context_op(input: &str) -> Res<&str, ContextOp> {
-    tuple((
+    let res = tuple((
         terminated(
             delimited(tag("<context_op"), take_until(">"), tag(">")),
             line_ending,
@@ -733,7 +763,13 @@ fn context_op(input: &str) -> Res<&str, ContextOp> {
             expr: res.1,
         };
         (next, context_op)
-    })
+    });
+
+    // if res.is_err() {
+    //     panic!("Could not parse context op at {}", input);
+    // }
+
+    res
 }
 
 fn context_ops(input: &str) -> Res<&str, Vec<ContextOp>> {
@@ -902,7 +938,7 @@ fn constructor_template(input: &str) -> Res<&str, ConstructorTemplate> {
 }
 
 fn constructor(input: &str) -> Res<&str, Constructor> {
-    tuple((
+    let res = tuple((
         delimited(
             tag("<constructor "),
             take_until(">"),
@@ -932,7 +968,13 @@ fn constructor(input: &str) -> Res<&str, Constructor> {
             template: res.1 .3,
         };
         (next, constructor)
-    })
+    });
+
+    // if res.is_err() {
+    //     panic!("Could not parse constructor at {}", input);
+    // }
+
+    res
 }
 
 fn mask_word(input: &str) -> Res<&str, MaskWord> {
@@ -1298,14 +1340,64 @@ fn varlist_sym(input: &str) -> Res<&str, Symbol> {
         let varlist = Varlist {
             name: attrs[0].1.to_string(),
             scope: u32hex(attrs[2].1),
-            field: res.1 .0,
-            vars: res.1 .1,
+            field: res.1.0,
+            vars: res.1.1,
         };
         (
             next,
             Symbol {
                 id: id,
                 body: SymbolBody::Varlist(varlist),
+            },
+        )
+    })
+}
+
+fn name(input: &str) -> Res<&str, Option<String>> {
+    //println!("name {}", &input[0..20]);
+    delimited(tag("<nametab"), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
+        let (_, attrs) = attrs(res).finish().unwrap();
+
+        if attrs.len() == 0 {
+            (next, None)
+        } else {
+            let name = attrs[0].1.to_string();
+            (next, Some(name))
+        }
+    })
+}
+
+fn name_sym(input: &str) -> Res<&str, Symbol> {
+    //println!("varlist {}", &input[0..50]);
+    tuple((
+        delimited(
+            tag("<name_sym "),
+            take_until(">"),
+            terminated(tag(">"), line_ending),
+        ),
+        terminated(
+            separated_pair(
+                field,
+                line_ending,
+                terminated(separated_list0(line_ending, name), line_ending),
+            ),
+            tag("</name_sym>"),
+        ),
+    ))(input)
+    .map(|(next, res)| {
+        let (_, attrs) = attrs(res.0).finish().unwrap();
+        let id = u32hex(attrs[1].1);
+        let nametab = NameTable {
+            name: attrs[0].1.to_string(),
+            scope: u32hex(attrs[2].1),
+            field: res.1.0,
+            names: res.1.1,
+        };
+        (
+            next,
+            Symbol {
+                id: id,
+                body: SymbolBody::Nametab(nametab),
             },
         )
     })
@@ -1453,6 +1545,7 @@ fn sym(input: &str) -> Res<&str, Symbol> {
         next2_sym,
         valuemap_sym,
         varlist_sym,
+        name_sym,
         value_sym,
         context_sym,
         operand_sym,
@@ -1533,7 +1626,7 @@ pub fn read_file(filename: &str) -> String {
     #[cfg(target_arch = "wasm32")]
     {
         use super::do_get_request;
-        let url = format!("http://localhost:8000/Processors/x86/data/languages/{}", filename);
+        let url = format!("http://localhost:8000/Processors/AARCH64/data/languages/{}", filename);
         do_get_request(url.as_str())
     }
 
@@ -1814,7 +1907,7 @@ fn resolve_varlist<'a>(
             });
 
             // Not super sure if this size calculation is right but it seems to work.
-            Some(((MatchedSymbol::Symbol(var)), (token.end_byte * 8 + (8 - token.end_bit - 1) + size) as usize))
+            Some(((MatchedSymbol::Symbol(var)), (token.end_byte * 8 + (8 - (token.end_bit % 8) - 1) + size) as usize))
         }
         _ => todo!(),
     }
@@ -1891,6 +1984,40 @@ fn evaluate_expr(
             let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands);
             (lhs_val + rhs_val, lhs_sz.max(rhs_sz), lhs_fixme || rhs_fixme)
         },
+        Expr::Sub((lhs, rhs)) => {
+            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands);
+            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands);
+            (lhs_val - rhs_val, lhs_sz.max(rhs_sz), lhs_fixme || rhs_fixme)
+        },
+        Expr::And((lhs, rhs)) => {
+            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands);
+            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands);
+            (lhs_val & rhs_val, lhs_sz.max(rhs_sz), lhs_fixme || rhs_fixme)
+        },
+        Expr::And((lhs, rhs)) => {
+            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands);
+            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands);
+            (lhs_val & rhs_val, lhs_sz.max(rhs_sz), lhs_fixme || rhs_fixme)
+        },
+        Expr::Or((lhs, rhs)) => {
+            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands);
+            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands);
+            (lhs_val | rhs_val, lhs_sz.max(rhs_sz), lhs_fixme || rhs_fixme)
+        },
+        Expr::Lshift((lhs, rhs)) => {
+            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands);
+            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands);
+            (lhs_val << rhs_val, lhs_sz.max(rhs_sz), lhs_fixme || rhs_fixme)
+        },
+        Expr::Rshift((lhs, rhs)) => {
+            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands);
+            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands);
+            (lhs_val >> rhs_val, lhs_sz.max(rhs_sz), lhs_fixme || rhs_fixme)
+        },
+        Expr::Not(op) => {
+            let (val, sz, fixme) = evaluate_expr(&**op, ctx, operands);
+            (!val, sz, fixme)
+        },
         Expr::Field(Field::Context(ctx_field)) => {
             // FIXME: Use BitVec for context. Use end_byte.
             let idx = (ctx_field.start_bit / 32) as usize;
@@ -1958,6 +2085,14 @@ fn resolve_operands<'a>(
                 matched_ops.push(MatchedSymbol::Literal((val as i64, num_bytes)));
             },
             Some(Expr::Add(_)) => {
+                let (val, sz, fixme) = evaluate_expr(operand.expr.as_ref().unwrap(), ctx, &matched_ops);
+                matched_ops.push(MatchedSymbol::Literal((val, sz)));
+
+                if fixme {
+                    fixups.push(matched_ops.len() - 1);
+                }
+            },
+            Some(Expr::Lshift(_)) => {
                 let (val, sz, fixme) = evaluate_expr(operand.expr.as_ref().unwrap(), ctx, &matched_ops);
                 matched_ops.push(MatchedSymbol::Literal((val, sz)));
 

@@ -41,12 +41,14 @@ pub fn do_get_request(url: &str) -> String {
     sync_fetch(url)
 }
 
-const FILE_BYTES: &[u8] = include_bytes!("/Users/samlerner/Projects/ideco_PUBLIC/test_cases/simple_linked_list");
+// const FILE_BYTES: &[u8] = include_bytes!("/Users/samlerner/Projects/ideco_PUBLIC/test_cases/simple_linked_list");
+const FILE_BYTES: &[u8] = &[0x1, 0xa9, 0x46, 0xf9];
 
 #[wasm_bindgen]
 pub fn bytes() -> Vec<u8> {
     // FILE_BYTES[0x3f20..0x3f95].to_vec()
-    FILE_BYTES[0x3dc0..0x3eb3].to_vec()
+    // FILE_BYTES[0x3dc0..0x3eb3].to_vec()
+    FILE_BYTES.to_vec()
 }
 
 pub struct WasmContext {
