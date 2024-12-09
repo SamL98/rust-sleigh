@@ -16,6 +16,14 @@ export function generate_guid() {
     return (S4()+S4()+"-"+S4()+"-"+S4()+"-"+S4()+"-"+S4()+S4()+S4());
 }
 
+export function append_child(elem, child) {
+    elem.appendChild(child);
+}
+
+export function remove_child(elem, child) {
+    elem.removeChild(child);
+}
+
 export function create_div(children) {
     let div = document.createElement('div');
     children.forEach(child => div.appendChild(child));

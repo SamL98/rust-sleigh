@@ -6,6 +6,10 @@ function highlightSelectedDecisionNode() {
     let dtView = document.getElementById('decision-tree');
 
     if (dtView !== undefined && dtView !== null) {
+        document.querySelectorAll('.selected').forEach(e => {
+            e.classList.remove("selected")
+        });
+
         let path = dtView.getAttribute('path').split(',').map((e) => parseInt(e));
         let nodeView = dtView;
 
@@ -84,23 +88,25 @@ class App {
     }
 
     setInstructionIdx(insnIdx) {
-        this.insnIdx = insnIdx;
-        this.insn = this.insnStates[this.insnIdx]['insn'];
-        this.numEvents = this.insnStates[this.insnIdx]['num_events'];
-        this.setEventIdx(0);
+        if (insnIdx != this.insnIdx) {
+            this.insnIdx = insnIdx;
+            this.insn = this.insnStates[this.insnIdx]['insn'];
+            this.numEvents = this.insnStates[this.insnIdx]['num_events'];
+            this.setEventIdx(0);
+            console.log(this.numEvents + ' events for instruction');
+        }
     }
 
     setEventIdx(eventIdx) {
-        this.eventIdx = eventIdx;
+        if (eventIdx != this.eventIdx) {
+            console.log('Event ' + eventIdx);
+            this.eventIdx = eventIdx;
 
-        const wordView = document.getElementById('event-view');
-        wordView.innerHTML = ''
+            let state = this.insnStates[this.insnIdx];
+            state.render_event(this.eventIdx, this.sleighCtx);
 
-        let state = this.insnStates[this.insnIdx];
-        let eventView = state.render_event(this.eventIdx, this.sleighCtx);
-        wordView.appendChild(eventView);
-
-        highlightSelectedDecisionNode();
+            highlightSelectedDecisionNode();
+        }
     };
 
     editBytes() {

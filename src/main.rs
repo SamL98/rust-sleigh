@@ -19,7 +19,8 @@ use std::collections::{HashMap, HashSet};
 
 fn main() {
     let contents = read_file("AARCH64.sla");
-    let lang = SleighLanguage::create("x86", "x86:LE:64:default", &contents);
+    // let lang = SleighLanguage::create("x86", "x86:LE:64:default", &contents);
+    let lang = SleighLanguage::create("AARCH64", "AARCH64:LE:64:v8A", &contents);
     // let insn_table = get_table(insn_table_id, &symbols);
 
     // Create a bit vector for the entire register space.

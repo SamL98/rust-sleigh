@@ -151,10 +151,10 @@ pub struct Value {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Varlist {
-    name: String,
-    scope: u32,
-    field: Field,
-    vars: Vec<Option<u32>>,
+    pub name: String,
+    pub scope: u32,
+    pub field: Field,
+    pub vars: Vec<Option<u32>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -1647,6 +1647,7 @@ pub enum ResolverEvent {
         path: Vec<usize>,
     },
     Var {
+        sym: u32,
         var: u32,
         start: usize,
         end: usize,
@@ -1875,6 +1876,7 @@ fn resolve_constructor<'a>(
 }
 
 fn resolve_varlist<'a>(
+    sym_idx: u32,
     words: &Vec<u8>,
     varlist: &'a Varlist,
     symbols: &'a HashMap<u32, Symbol>,
@@ -1899,6 +1901,7 @@ fn resolve_varlist<'a>(
             let var = &symbols[&var_idx];
 
             debug.log(ResolverEvent::Var {
+                sym: sym_idx,
                 var: var_idx,
                 start: 32 - (token.end_bit + 1) as usize,
                 end: 33 - token.start_bit as usize,
@@ -2166,7 +2169,7 @@ pub fn resolve_symbol<'a>(
             }
         },
         SymbolBody::Varlist(varlist) => {
-            resolve_varlist(words, varlist, symbols, ctx, debug)
+            resolve_varlist(sym.id, words, varlist, symbols, ctx, debug)
         },
         SymbolBody::Valuemap(valuemap) => {
             resolve_valuemap(words, valuemap, symbols, ctx, debug)

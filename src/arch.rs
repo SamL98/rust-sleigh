@@ -34,7 +34,8 @@ pub fn read_file(path: PathBuf, root: &Path) -> String {
     {
         use super::do_get_request;
         let rel = path.strip_prefix(root).unwrap().to_str().unwrap();
-        let url = format!("http://localhost:8000/Processors/x86/data/languages/{}", rel);
+        // let url = format!("http://localhost:8000/Processors/x86/data/languages/{}", rel);
+        let url = format!("http://localhost:8000/Processors/AARCH64/data/languages/{}", rel);
         do_get_request(url.as_str())
     }
 
@@ -165,7 +166,7 @@ pub fn get_language(arch_name: &str, language_id: &str) -> Option<Language> {
                                     .join("languages");
 
     // TODO: Make wasm search ldef paths.
-    let ldef_path = arch_path.join("x86.ldefs");
+    let ldef_path = arch_path.join(format!("{}.ldefs", arch_name));
     let ldef_contents = read_file(ldef_path, &arch_path);
 
     let ldef = Element::from_reader(ldef_contents.as_bytes()).unwrap();

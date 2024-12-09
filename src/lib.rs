@@ -1,5 +1,5 @@
 use wasm_bindgen::prelude::*;
-use web_sys::HtmlElement;
+use web_sys::{Element, HtmlElement};
 use console_error_panic_hook;
 
 mod arch;
@@ -22,6 +22,8 @@ extern {
 extern "C" {
     pub fn sync_fetch(url: &str) -> String;
     pub fn generate_guid() -> String;
+    pub fn append_child(parent: &Element, child: JsValue);
+    pub fn remove_child(parent: JsValue, child: JsValue);
     pub fn create_div(children: Vec<JsValue>) -> JsValue;
     pub fn create_span(text: &str) -> JsValue;
     pub fn create_p(text: &str) -> JsValue;
@@ -62,8 +64,9 @@ pub struct WasmContext {
 pub fn context() -> *mut WasmContext {
     init_panic_hook();
 
-    let contents = read_file("x86-64.sla");
-    let lang = SleighLanguage::create("x86", "x86:LE:64:default", &contents);
+    // let contents = read_file("x86-64.sla");
+    let contents = read_file("AARCH64.sla");
+    let lang = SleighLanguage::create("AARCH64", "AARCH64:LE:64:v8A", &contents);
 
     let mut reg_space: BitVec<u8, Msb0> = BitVec::with_capacity(lang.reg_space_size * 8);
     for _ in 0..(lang.reg_space_size * 8) {
@@ -219,6 +222,45 @@ fn render_dtree(table: &Subtable, dtree: &DecisionTree) -> JsValue {
     }
 }
 
+fn render_p(s: String, id: &str) -> JsValue {
+    let window = web_sys::window().unwrap();
+    let document = window.document().unwrap();
+
+    match document.get_element_by_id(id) {
+        Some(p) => {
+            p.set_inner_html(s.as_str());
+            p.into()
+        },
+        None => {
+            let p = create_p(s.as_str());
+            let _ = p.dyn_ref::<HtmlElement>().unwrap().set_id(id);
+            p
+        }
+    }
+}
+
+fn render_div(children: Vec<JsValue>, id: &str) -> JsValue {
+    let window = web_sys::window().unwrap();
+    let document = window.document().unwrap();
+
+    match document.get_element_by_id(id) {
+        Some(div) => {
+            div.set_inner_html("");
+
+            for child in children {
+                append_child(&div, child);
+            }
+
+            div.into()
+        },
+        None => {
+            let div = create_div(children);
+            let _ = div.dyn_ref::<HtmlElement>().unwrap().set_id(id);
+            div
+        }
+    }
+}
+
 fn render_word_view(word: u32, start: usize, end: usize, is_context: bool) -> JsValue {
     let hex_view = create_span(format!("{:0>8x}", word).as_str());
 
@@ -247,28 +289,37 @@ fn render_word_view(word: u32, start: usize, end: usize, is_context: bool) -> Js
         "Instruction"
     };
 
-    create_div(vec![
+    let content = vec![
         create_span(format!("Word ({}): ", context_str).as_str()),
         hex_view,
         create_span("    "),
         bin_view,
-    ])
+    ];
+
+    render_div(content, "word-view")
 }
 
 fn render_idx_view(idx: usize) -> JsValue {
-    create_p(format!("Index: {}", idx).as_str())
+    let index_str = format!("Index: {}", idx);
+    render_p(index_str, "index-view")
+}
+
+fn render_dtree_title(name: &str) -> JsValue {
+    let title_str = format!("Table: {}", name);
+    render_p(title_str, "decision-tree-title")
 }
 
 #[wasm_bindgen]
 impl WasmInstruction {
-    pub fn render_event(&self, idx: usize, wasm_ctx: *mut WasmContext) -> JsValue {
+    pub fn render_event(&self, idx: usize, wasm_ctx: *mut WasmContext) {
         let lang = unsafe { &(*wasm_ctx).lang };
         let events = unsafe { &(*self.debug).events };
 
-        // let window = web_sys::window().expect("should have a window in this context");
-        // let document = window.document().expect("window should have a document");
+        let window = web_sys::window().unwrap();
+        let document = window.document().unwrap();
+        let event_view = document.get_element_by_id("event-view").unwrap();
 
-        match &events[idx] {
+        let (html, event_type) = match &events[idx] {
             ResolverEvent::Bits {
                 sym: sym_idx,
                 is_context,
@@ -284,40 +335,96 @@ impl WasmInstruction {
 
                 let body_view = match &sym.body {
                     SymbolBody::Subtable(table) => {
-                        let title = create_p(format!("Table: {}", table.name).as_str());
+                        let title = render_dtree_title(table.name.as_str());
 
-                        let dt = render_dtree(table, &table.decision_tree);
+                        let dt = match document.get_element_by_id("decision-tree") {
+                            Some(div) => {
+                                let prev_table = div.get_attribute("table").unwrap_or("".to_string());
+
+                                if prev_table != table.name {
+                                    div.parent_node().map(|n| remove_child(n.into(), div.into()));
+                                    let dt = render_dtree(table, &table.decision_tree);
+                                    dt.dyn_ref::<HtmlElement>().unwrap().set_id("decision-tree");
+                                    dt
+                                } else {
+                                    div.into()
+                                }
+                            },
+                            None => {
+                                let dt = render_dtree(table, &table.decision_tree);
+                                dt.dyn_ref::<HtmlElement>().unwrap().set_id("decision-tree");
+                                dt
+                            },
+                        };
+
                         let dt_html = dt.dyn_ref::<HtmlElement>().unwrap();
-                        dt_html.set_id("decision-tree");
-                        let _ = dt_html.set_attribute("path", path.iter().map(|ix| format!("{}", ix)).collect::<Vec<String>>().join(",").as_str());
+                        let _ = dt_html.set_attribute(
+                            "path",
+                            path
+                                .iter()
+                                .map(|ix| format!("{}", ix))
+                                .collect::<Vec<String>>()
+                                .join(",")
+                                .as_str()
+                        );
+                        let _ = dt_html.set_attribute("table", table.name.as_str());
 
-                        create_div(vec![title, dt])
+                        render_div(vec![title, dt], "decision-tree-container")
                     },
                     _ => todo!(),
                 };
 
-                create_div(vec![word_view, idx_view, body_view])
+                (render_div(vec![word_view, idx_view, body_view], "decision-tree-event"), "bits")
             },
             ResolverEvent::Var {
+                sym: sym_idx,
                 var: var_idx,
                 start,
                 end,
                 word,
                 idx,
             } => {
+                let sym = &lang.symbols[sym_idx];
                 let var = &lang.symbols[var_idx];
 
                 let word_view = render_word_view(*word, *start, *end, false);
                 let idx_view = render_idx_view(*idx);
 
-                let body_view = match &var.body {
-                    SymbolBody::Varnode(vn) => {
-                        create_p(format!("{}", vn.name).as_str())
-                    },
-                    _ => todo!(),
-                };
+                let mut choices = vec![];
 
-                create_div(vec![word_view, idx_view, body_view])
+                if let SymbolBody::Varlist(varlist) = &sym.body {
+                    for (i, var) in varlist.vars.iter().enumerate() {
+                        let text = match var {
+                            Some(ix) => {
+                                match &lang.symbols[ix].body {
+                                    SymbolBody::Varnode(vn) => {
+                                        format!("{}", vn.name)
+                                    },
+                                    _ => todo!(),
+                                }
+                            },
+                            None => "_".to_string()
+                        };
+
+                        let choice = create_li(create_span(text.as_str()));
+
+                        if i == *idx {
+                            choice
+                                .dyn_ref::<HtmlElement>()
+                                .unwrap()
+                                .class_list()
+                                .add_1("selected")
+                                .unwrap();
+                        }
+
+                        choices.push(choice);
+                    }
+                }
+
+
+                let body_view = create_ul(choices);
+
+                (render_div(vec![word_view, idx_view, body_view], "var-event"), "var")
             },
             ResolverEvent::Val {
                 val,
@@ -327,9 +434,21 @@ impl WasmInstruction {
             } => {
                 let word_view = render_word_view(*word, *start, *end, false);
                 let body_view = create_p(format!("0x{:x}", val).as_str());
-                create_div(vec![word_view, body_view])
+                (render_div(vec![word_view, body_view], "val-event"), "val")
             },
+        };
+
+        if let Some(t) = event_view.get_attribute("event-type") {
+            if t != event_type {
+                event_view.set_inner_html("");
+                let _ = append_child(&event_view, html.into());
+            }
+        } else {
+            event_view.set_inner_html("");
+            let _ = append_child(&event_view, html.into());
         }
+
+        let _ = event_view.set_attribute("event-type", event_type);
     }
 }
 
