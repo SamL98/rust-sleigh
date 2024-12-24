@@ -44,7 +44,8 @@ pub fn do_get_request(url: &str) -> String {
 }
 
 // const FILE_BYTES: &[u8] = include_bytes!("/Users/samlerner/Projects/ideco_PUBLIC/test_cases/simple_linked_list");
-const FILE_BYTES: &[u8] = &[0x1, 0xa9, 0x46, 0xf9];
+// const FILE_BYTES: &[u8] = &[0x1, 0xa9, 0x46, 0xf9];
+const FILE_BYTES: &[u8] = &[0xe1, 0x03, 0x18, 0xaa];
 
 #[wasm_bindgen]
 pub fn bytes() -> Vec<u8> {
@@ -87,7 +88,8 @@ pub fn context() -> *mut WasmContext {
     Box::into_raw(Box::new(WasmContext {
         lang: lang,
         ctx: ctx,
-        addr: 0x100003dc0,
+        // addr: 0x100003dc0,
+        addr: 0x1000064d4,
         offset: 0,
     }))
 }

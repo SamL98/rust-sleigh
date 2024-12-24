@@ -63,11 +63,16 @@ fn main() {
     // let orig_pc = 0x100003f20;
 
     // let buf = &raw_bytes[0x3dc0..0x3eb3];
-    let buf = [0x1, 0xa9, 0x46, 0xf9];
-    let orig_pc = 0x100003dc0;
+    // let buf = [0x1, 0xa9, 0x46, 0xf9];
+    // let orig_pc = 0x100003dc0;
+
+    let buf = [0xb4, 0xc9, 0x02, 0x94];
+    let orig_pc = 0x1000064dc;
+
+    // let buf = [0xe1, 0x03, 0x18, 0xaa];
+    // let orig_pc = 0x1000064d4;
         
     let mut bits_consumed = 0;
-
     let mut ctx = read_ctx(&lang.context_reg, &reg_space);
 
     while bits_consumed < buf.len() * 8 {
@@ -89,6 +94,7 @@ fn main() {
         ).unwrap();
 
         bits_consumed += num_bits;
+        bits_consumed += lang.bit_align - (lang.bit_align % num_bits);
         // println!("\nInstruction took {} bits", num_bits);
 
         // println!("{} {}", num_bits, bits_consumed);

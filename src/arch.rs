@@ -35,7 +35,7 @@ pub fn read_file(path: PathBuf, root: &Path) -> String {
         use super::do_get_request;
         let rel = path.strip_prefix(root).unwrap().to_str().unwrap();
         // let url = format!("http://localhost:8000/Processors/x86/data/languages/{}", rel);
-        let url = format!("http://localhost:8000/Processors/AARCH64/data/languages/{}", rel);
+        let url = format!("http://localhost:9090/Processors/AARCH64/data/languages/{}", rel);
         do_get_request(url.as_str())
     }
 

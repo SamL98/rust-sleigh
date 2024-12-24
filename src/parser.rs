@@ -29,7 +29,7 @@ use {
 };
 
 static SLEIGH_PATH: &'static str =
-    "/Users/sam/ghidra_10.3_PUBLIC/Ghidra/Processors/AARCH64/data/languages";
+    "/Users/samlerner/ghidra_10.3_PUBLIC/Ghidra/Processors/AARCH64/data/languages";
 
 pub type Res<T, U> = IResult<T, U, Error<T>>;
 
@@ -300,6 +300,7 @@ pub struct Constructor {
     pub print_commands: Option<Vec<PrintCommand>>,
     pub context_ops: Vec<ContextOp>,
     pub template: Option<ConstructorTemplate>,
+    pub line: (usize, usize),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -958,14 +959,19 @@ fn constructor(input: &str) -> Res<&str, Constructor> {
         //println!("constructor {:?}", res.1);
         let (_, attrs) = attrs(res.0).finish().unwrap();
         //println!("{:?}", attrs);
+
+        // println!("{}", attrs[3].1);
+        let mut iter = attrs[3].1.split(":");
+
         let constructor = Constructor {
             parent: u32hex(attrs[0].1),
             first: i32dec(attrs[1].1),
             length: u32dec(attrs[2].1),
-            operands: res.1 .0.unwrap_or_default(),
-            print_commands: res.1 .1,
-            context_ops: res.1 .2.unwrap_or_default(),
-            template: res.1 .3,
+            operands: res.1.0.unwrap_or_default(),
+            print_commands: res.1.1,
+            context_ops: res.1.2.unwrap_or_default(),
+            template: res.1.3,
+            line: (u64dec(iter.nth(0).unwrap()) as usize, u64dec(iter.nth(0).unwrap()) as usize),
         };
         (next, constructor)
     });
@@ -1626,7 +1632,7 @@ pub fn read_file(filename: &str) -> String {
     #[cfg(target_arch = "wasm32")]
     {
         use super::do_get_request;
-        let url = format!("http://localhost:8000/Processors/AARCH64/data/languages/{}", filename);
+        let url = format!("http://localhost:9090/Processors/AARCH64/data/languages/{}", filename);
         do_get_request(url.as_str())
     }
 
@@ -1864,6 +1870,7 @@ fn resolve_constructor<'a>(
                         //     matched_constructor: c,
                         // });
 
+                        // println!("{}:{}", ct.line.0, ct.line.1);
                         return Some((ct, bits_consumed as usize));
                     }
                 }
@@ -1894,8 +1901,8 @@ fn resolve_varlist<'a>(
                 token_word |= words[sb + i] as u32;
             }
 
-            let start = token.start_bit;
-            let size = token.end_bit - start + 1;
+            let start = token.start_bit - token.start_byte * 8;
+            let size = token.end_bit - token.start_bit + 1;
             let idx = ((token_word >> start) & ((1 << size) - 1)) as usize;
             let var_idx = varlist.vars[idx].unwrap();
             let var = &symbols[&var_idx];
@@ -1955,13 +1962,17 @@ fn resolve_valuemap<'a>(
     }
 }
 
+enum FixupType {
+    Start, End,
+}
+
 fn evaluate_expr(
     expr: &Expr,
     ctx: &Vec<u32>,
     operands: &Vec<MatchedSymbol>,
-) -> (i64, usize, bool) {
+) -> (i64, usize, Option<FixupType>) {
     match expr {
-        Expr::Const(val) => (*val, 8, false), // FIXME
+        Expr::Const(val) => (*val, 8, None), // FIXME
         Expr::Operand(op_expr) if (op_expr.idx as usize) < operands.len() => {
             if let MatchedSymbol::Literal((val, sz)) = &operands[op_expr.idx as usize] {
                 let signed_val = match *sz {
@@ -1972,7 +1983,7 @@ fn evaluate_expr(
                     _ => *val,
                 };
 
-                (signed_val, *sz, false)
+                (signed_val, *sz, None)
             } else {
                 panic!();
             }
@@ -1980,42 +1991,47 @@ fn evaluate_expr(
         Expr::Xor((lhs, rhs)) => {
             let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands);
             let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands);
-            (lhs_val ^ rhs_val, lhs_sz.max(rhs_sz), lhs_fixme || rhs_fixme)
+            (lhs_val ^ rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
         },
         Expr::Add((lhs, rhs)) => {
             let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands);
             let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands);
-            (lhs_val + rhs_val, lhs_sz.max(rhs_sz), lhs_fixme || rhs_fixme)
+            (lhs_val + rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
         },
         Expr::Sub((lhs, rhs)) => {
             let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands);
             let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands);
-            (lhs_val - rhs_val, lhs_sz.max(rhs_sz), lhs_fixme || rhs_fixme)
+            (lhs_val - rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
+        },
+        Expr::Mult((lhs, rhs)) => {
+            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands);
+            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands);
+            (lhs_val * rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
         },
         Expr::And((lhs, rhs)) => {
             let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands);
             let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands);
-            (lhs_val & rhs_val, lhs_sz.max(rhs_sz), lhs_fixme || rhs_fixme)
+            (lhs_val & rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
         },
         Expr::And((lhs, rhs)) => {
             let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands);
             let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands);
-            (lhs_val & rhs_val, lhs_sz.max(rhs_sz), lhs_fixme || rhs_fixme)
+            (lhs_val & rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
         },
         Expr::Or((lhs, rhs)) => {
             let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands);
             let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands);
-            (lhs_val | rhs_val, lhs_sz.max(rhs_sz), lhs_fixme || rhs_fixme)
+            (lhs_val | rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
         },
         Expr::Lshift((lhs, rhs)) => {
             let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands);
             let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands);
-            (lhs_val << rhs_val, lhs_sz.max(rhs_sz), lhs_fixme || rhs_fixme)
+            (lhs_val << rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
         },
         Expr::Rshift((lhs, rhs)) => {
             let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands);
             let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands);
-            (lhs_val >> rhs_val, lhs_sz.max(rhs_sz), lhs_fixme || rhs_fixme)
+            (lhs_val >> rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
         },
         Expr::Not(op) => {
             let (val, sz, fixme) = evaluate_expr(&**op, ctx, operands);
@@ -2028,10 +2044,13 @@ fn evaluate_expr(
             let size = ctx_field.end_bit - ctx_field.start_bit + 1;
             let bit_start = 32 - (ctx_field.start_bit + size);
             let rv = ((ctx_word >> bit_start) & ((1 << size) - 1)) as i64;
-            (rv, (size / 8) as usize, false)
+            (rv, (size / 8) as usize, None)
+        },
+        Expr::Start => {
+            (0, 8, Some(FixupType::Start))
         },
         Expr::End => {
-            (0, 8, true)
+            (0, 8, Some(FixupType::End))
         },
         _ => todo!("{:?}", expr),
     }
@@ -2044,7 +2063,7 @@ fn resolve_operands<'a>(
     symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
     debug: &mut ResolverDebug,
-) -> (Vec<MatchedSymbol<'a>>, Vec<usize>, usize) {
+) -> (Vec<MatchedSymbol<'a>>, Vec<(usize, FixupType)>, usize) {
     let mut matched_ops = vec![];
     let mut fixups = vec![];
     let mut bit_end: usize = 0;
@@ -2088,19 +2107,19 @@ fn resolve_operands<'a>(
                 matched_ops.push(MatchedSymbol::Literal((val as i64, num_bytes)));
             },
             Some(Expr::Add(_)) => {
-                let (val, sz, fixme) = evaluate_expr(operand.expr.as_ref().unwrap(), ctx, &matched_ops);
+                let (val, sz, fixup_type) = evaluate_expr(operand.expr.as_ref().unwrap(), ctx, &matched_ops);
                 matched_ops.push(MatchedSymbol::Literal((val, sz)));
 
-                if fixme {
-                    fixups.push(matched_ops.len() - 1);
+                if let Some(t) = fixup_type {
+                    fixups.push((matched_ops.len() - 1, t));
                 }
             },
             Some(Expr::Lshift(_)) => {
-                let (val, sz, fixme) = evaluate_expr(operand.expr.as_ref().unwrap(), ctx, &matched_ops);
+                let (val, sz, fixup_type) = evaluate_expr(operand.expr.as_ref().unwrap(), ctx, &matched_ops);
                 matched_ops.push(MatchedSymbol::Literal((val, sz)));
 
-                if fixme {
-                    fixups.push(matched_ops.len() - 1);
+                if let Some(t) = fixup_type {
+                    fixups.push((matched_ops.len() - 1, t));
                 }
             },
             None => {
@@ -2156,9 +2175,12 @@ pub fn resolve_symbol<'a>(
                     let (mut operands, fixups, ops_bit_end) = resolve_operands(words, pc, ct, symbols, ctx, debug);
                     let bit_len = bit_end.max(ops_bit_end);
 
-                    for idx in fixups {
+                    for (idx, t) in fixups {
                         if let MatchedSymbol::Literal((val, sz)) = operands[idx].clone() {
-                            let new_val = val + (pc as usize + bit_len / 8) as i64;
+                            let new_val = match t {
+                                FixupType::Start => val + pc as i64,
+                                FixupType::End => val + (pc as usize + bit_len / 8) as i64,
+                            };
                             operands[idx] = MatchedSymbol::Literal((new_val, sz));
                         }
                     }
@@ -2236,7 +2258,7 @@ fn build_value<'a>(
             VarnodeValue::Op(&varnodes[ix])
         },
         ConstTemplate::Relative(_idx) => todo!(),
-        ConstTemplate::Start => todo!(),
+        ConstTemplate::Start => VarnodeValue::Int(pc),
         ConstTemplate::Next => VarnodeValue::Int(pc + (bit_len / 8) as u64),
         ConstTemplate::CurSpace => todo!(),
         ConstTemplate::CurSpaceSize => todo!(),
@@ -2590,6 +2612,7 @@ pub fn build_text(matched_sym: &MatchedSymbol) -> String {
 
 pub struct SleighLanguage {
     pub language: Language,
+    pub bit_align: usize,
     pub symbols: HashMap<u32, Symbol>,
     pub spaces: HashMap<String, u64>,
     pub _varnodes: HashMap<String, VarnodeSym>,
@@ -2646,6 +2669,7 @@ impl SleighLanguage {
 
         SleighLanguage {
             language: lang,
+            bit_align: (sla.align * 8) as usize,
             symbols: symbols,
             spaces: spaces,
             _varnodes: varnodes,
