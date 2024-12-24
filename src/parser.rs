@@ -2037,6 +2037,10 @@ fn evaluate_expr(
             let (val, sz, fixme) = evaluate_expr(&**op, ctx, operands);
             (!val, sz, fixme)
         },
+        Expr::Minus(op) => {
+            let (val, sz, fixme) = evaluate_expr(&**op, ctx, operands);
+            (-val, sz, fixme)
+        },
         Expr::Field(Field::Context(ctx_field)) => {
             // FIXME: Use BitVec for context. Use end_byte.
             let idx = (ctx_field.start_bit / 32) as usize;
@@ -2097,7 +2101,11 @@ fn resolve_operands<'a>(
 
                 let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
                 matched_ops.push(MatchedSymbol::Literal((val, num_bytes)));
-                bit_end = bit_end.max(((bit_end as u32) / 8 * 8 + expr.start_byte * 8 + size) as usize);
+                let prev_bit_end = bit_end;
+                let byte_start = (bit_end + (expr.start_byte as usize)) / 8; // FIXME
+                // bit_end = bit_end.max(((bit_end as u32) / 8 * 8 + expr.start_byte * 8 + size) as usize);
+                bit_end = bit_end.max(byte_start * 8 + size as usize);
+                // println!("bit end is now {} {:?}, was {}", bit_end, expr, prev_bit_end);
             },
             Some(Expr::Field(Field::Context(expr))) => {
                 let size = expr.end_bit - expr.start_bit + 1;
@@ -2106,15 +2114,7 @@ fn resolve_operands<'a>(
                 let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
                 matched_ops.push(MatchedSymbol::Literal((val as i64, num_bytes)));
             },
-            Some(Expr::Add(_)) => {
-                let (val, sz, fixup_type) = evaluate_expr(operand.expr.as_ref().unwrap(), ctx, &matched_ops);
-                matched_ops.push(MatchedSymbol::Literal((val, sz)));
-
-                if let Some(t) = fixup_type {
-                    fixups.push((matched_ops.len() - 1, t));
-                }
-            },
-            Some(Expr::Lshift(_)) => {
+            Some(Expr::Add(_) | Expr::And(_) | Expr::Lshift(_) | Expr::Rshift(_)) => {
                 let (val, sz, fixup_type) = evaluate_expr(operand.expr.as_ref().unwrap(), ctx, &matched_ops);
                 matched_ops.push(MatchedSymbol::Literal((val, sz)));
 
