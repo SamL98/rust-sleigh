@@ -82,8 +82,6 @@ fn main() {
     let ctx = read_reg(&lang.context_reg, &reg_space);
 
     while bits_consumed < buf.len() * 8 {
-        let tmp_buf: Vec<u8> = buf[bits_consumed / 8..].to_vec();
-
         let pc = Address {
             space: "ram".to_owned(),
             offset: (orig_pc + bits_consumed / 8) as u64,
@@ -93,7 +91,7 @@ fn main() {
         // println!("{} {:?}", bits_consumed, &buf[b..(b+4)]);
 
         let num_bits = match resolve_symbol(
-            &tmp_buf,
+            &buf[bits_consumed / 8..],
             pc.offset,
             &lang.symbols[&lang.insn_table_id],
             &lang.symbols,
@@ -110,7 +108,7 @@ fn main() {
                 }
 
                 let asm = build_text(&matched_symbol);
-                println!("0x{:x}: {}", pc.offset, asm);
+                // println!("0x{:x}: {}", pc.offset, asm);
 
                 let (_pcodeops, _) = build_sym(
                     &matched_symbol,
