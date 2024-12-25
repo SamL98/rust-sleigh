@@ -6,16 +6,12 @@ mod utils;
 extern crate bitvec;
 extern crate nom;
 
-use crate::arch::get_language;
 use crate::parser::*;
 use crate::sleigh::types::Address;
 
 use bitvec::prelude::*;
 
-use std::io::{self, Read, Seek};
 use std::fs;
-
-use std::collections::{HashMap, HashSet};
 
 fn main() {
     let contents = read_file("AARCH64.sla");
@@ -79,54 +75,61 @@ fn main() {
     let buf = &FILE_BYTES[0x52b8..0xb7e38];
     let orig_pc = 0x1000052b8;
 
+    // let buf = &FILE_BYTES[0xa33f0..0xb7e38];
+    // let orig_pc = 0x1000a33f0;
+
     let mut bits_consumed = 0;
-    let mut ctx = read_ctx(&lang.context_reg, &reg_space);
+    let ctx = read_reg(&lang.context_reg, &reg_space);
 
     while bits_consumed < buf.len() * 8 {
-        let mut tmp_buf: Vec<u8> = buf[bits_consumed / 8..].to_vec();
-        // tmp_buf[0] = tmp_buf[0].overflowing_shl((bits_consumed % 8) as u32).0;
+        let tmp_buf: Vec<u8> = buf[bits_consumed / 8..].to_vec();
 
         let pc = Address {
             space: "ram".to_owned(),
             offset: (orig_pc + bits_consumed / 8) as u64,
         };
 
-        // println!("{} {:?}", bits_consumed, &buf[..4]);
+        // let b = bits_consumed / 8;
+        // println!("{} {:?}", bits_consumed, &buf[b..(b+4)]);
 
-        let (matched_symbol, num_bits) = resolve_symbol(
+        let num_bits = match resolve_symbol(
             &tmp_buf,
             pc.offset,
             &lang.symbols[&lang.insn_table_id],
             &lang.symbols,
             &mut ctx.clone(),
+            &reg_space,
             &mut ResolverDebug::default(),
-        ).unwrap();
+        ) {
+            Some((matched_symbol, mut num_bits)) => {
+                // println!("{} {}", num_bits, bits_consumed);
+                // println!("{:#?}", matched_symbol);
 
-        bits_consumed += num_bits;
-        if lang.bit_align % num_bits != 0 { // TODO: bit-hacking.
-            bits_consumed += lang.bit_align - (lang.bit_align % num_bits);
-        }
+                if lang.bit_align % num_bits != 0 { // TODO: bit-hacking.
+                    num_bits += lang.bit_align % num_bits;
+                }
+
+                let asm = build_text(&matched_symbol);
+                println!("0x{:x}: {}", pc.offset, asm);
+
+                let (_pcodeops, _) = build_sym(
+                    &matched_symbol,
+                    &pc,
+                    num_bits,
+                    &lang.spaces,
+                    &lang.varnode_map,
+                    (false, 0),
+                );
+
+                // println!("{:#?}\n", pcodeops);
+                num_bits
+            },
+            None => {
+                lang.bit_align
+            }
+        };
+
         // println!("\nInstruction took {} bits", num_bits);
-
-        // println!("{} {}", num_bits, bits_consumed);
-        // println!("{:#?}", matched_symbol);
-
-        let asm = build_text(&matched_symbol);
-        println!("0x{:x}: {}", pc.offset, asm);
-
-        let (pcodeops, _) = build_sym(
-            &matched_symbol,
-            &pc,
-            num_bits,
-            &lang.spaces,
-            &lang.varnode_map,
-            (false, 0),
-        );
-
-        // if pc.offset == 0x100003e29 {
-        //     break
-        // }
-        
-        // println!("{:#?}\n", pcodeops);
+        bits_consumed += num_bits;
     }
 }

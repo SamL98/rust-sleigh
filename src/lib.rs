@@ -57,6 +57,7 @@ pub fn bytes() -> Vec<u8> {
 pub struct WasmContext {
     lang: SleighLanguage,
     ctx: Vec<u32>,
+    reg_space: BitVec<u8, Msb0>,
     addr: u64,
     offset: usize,
 }
@@ -83,11 +84,12 @@ pub fn context() -> *mut WasmContext {
         }
     }
 
-    let ctx = read_ctx(&lang.context_reg, &reg_space);
+    let ctx = read_reg(&lang.context_reg, &reg_space);
 
     Box::into_raw(Box::new(WasmContext {
         lang: lang,
         ctx: ctx,
+        reg_space: reg_space,
         // addr: 0x100003dc0,
         addr: 0x1000064d4,
         offset: 0,
@@ -116,6 +118,7 @@ pub fn disassemble_one(
     resolver_debug: &mut ResolverDebug,
 ) -> Instruction {
     let lang = unsafe { &(*ctx).lang };
+    let reg_space = unsafe { &(*ctx).reg_space };
     let ctx = unsafe { &(*ctx).ctx };
 
     let pc = Address {
@@ -129,6 +132,7 @@ pub fn disassemble_one(
         &lang.symbols[&lang.insn_table_id],
         &lang.symbols,
         &mut ctx.clone(),
+        &reg_space,
         resolver_debug,
     ).unwrap();
 
@@ -387,7 +391,7 @@ impl WasmInstruction {
                 idx,
             } => {
                 let sym = &lang.symbols[sym_idx];
-                let var = &lang.symbols[var_idx];
+                let _var = &lang.symbols[var_idx];
 
                 let word_view = render_word_view(*word, *start, *end, false);
                 let idx_view = render_idx_view(*idx);
