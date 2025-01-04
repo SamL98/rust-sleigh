@@ -144,7 +144,6 @@ pub fn disassemble_one(
         num_bits,
         &lang.spaces,
         &lang.varnode_map,
-        (false, 0),
     );
 
     Instruction {

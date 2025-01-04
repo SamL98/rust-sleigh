@@ -26,6 +26,14 @@ impl Varnode{
         self.space.as_str() == "const" && self.offset >> (self.size * 8 - 1) == 1
     }
 
+    pub fn is_ram(&self) -> bool {
+        self.space.as_str() == "ram"
+    }
+
+    pub fn is_const(&self) -> bool {
+        self.space.as_str() == "const"
+    }
+
     pub fn negate(&self) -> Varnode {
         let signed_off = match self.size {
             1 => -(self.offset as i8) as u64,

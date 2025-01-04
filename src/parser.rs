@@ -6,6 +6,7 @@ extern crate bitvec;
 extern crate nom;
 
 use super::arch::Language;
+// use super::patterns::PcodePattern;
 
 use nom::branch::*;
 use nom::bytes::complete::*;
@@ -2291,7 +2292,6 @@ fn build_value<'a>(
     pc: u64,
     bit_len: usize,
     varnodes: &'a Vec<Varnode>,
-    _debug: (bool, usize),
 ) -> VarnodeValue<'a> {
     match const_tpl {
         ConstTemplate::SpaceId(space) => VarnodeValue::String(space.clone()),
@@ -2317,7 +2317,6 @@ fn build_handle<'a>(
     varnodes: &'a Vec<Varnode>,
     spaces: &'a HashMap<String, u64>,
     varnode_map: &'a HashMap<(u64, u64), String>,
-    debug: (bool, usize),
 ) -> Varnode {
     let varnode = build_varnode(
         &handle_tpl.varnode_template,
@@ -2326,7 +2325,6 @@ fn build_handle<'a>(
         varnodes,
         spaces,
         varnode_map,
-        debug
     );
 
     varnode
@@ -2337,7 +2335,7 @@ fn build_handle<'a>(
     //         varnodes,
     //         spaces,
     //         varnode_map,
-    //         debug
+    //         pattern
     //     );
 
     //     Handle::Indirect((varnode, pointer))
@@ -2353,27 +2351,20 @@ fn build_varnode<'a>(
     varnodes: &'a Vec<Varnode>,
     spaces: &'a HashMap<String, u64>,
     varnode_map: &'a HashMap<(u64, u64), String>,
-    debug: (bool, usize),
 ) -> Varnode {
-    if debug.0 {
-        let indent = " ".repeat(debug.1 * 4);
-        println!("{}Building vnode: {}", indent, vnode_tpl);
-        println!("{}    varnodes: {:?}\n", indent, varnodes);
-    }
-
-    let space = match build_value(&vnode_tpl.space_template, pc, bit_len, varnodes, debug) {
+    let space = match build_value(&vnode_tpl.space_template, pc, bit_len, varnodes) {
         VarnodeValue::String(name) => name.clone(),
         VarnodeValue::Op(op) => op.space.clone(),
         _ => panic!(),
     };
 
-    let size = match build_value(&vnode_tpl.size_template, pc, bit_len, varnodes, debug) {
+    let size = match build_value(&vnode_tpl.size_template, pc, bit_len, varnodes) {
         VarnodeValue::Int(sz) => sz,
         VarnodeValue::Op(op) => op.size,
         _ => panic!(),
     };
 
-    let offset = match build_value(&vnode_tpl.offset_template, pc, bit_len, varnodes, debug) {
+    let offset = match build_value(&vnode_tpl.offset_template, pc, bit_len, varnodes) {
         VarnodeValue::Int(off) => off,
         VarnodeValue::Op(op) => {
             if space == "const" {
@@ -2411,14 +2402,7 @@ fn build_pcodeop<'a>(
     varnodes: &'a Vec<Varnode>,
     spaces: &'a HashMap<String, u64>,
     varnode_map: &'a HashMap<(u64, u64), String>,
-    debug: (bool, usize),
 ) -> PcodeOp {
-    if debug.0 {
-        let indent = " ".repeat(debug.1 * 4);
-        println!("{}Building op: {}", indent, op_tpl);
-        println!("{}    varnodes: {:?}\n", indent, varnodes);
-    }
-
     let pc = seq.pc.offset;
 
     let op = PcodeOp {
@@ -2427,12 +2411,12 @@ fn build_pcodeop<'a>(
         inputs: op_tpl
             .inputs
             .iter()
-            .map(|tpl| build_varnode(&tpl, pc, bit_len, varnodes, spaces, varnode_map, debug))
+            .map(|tpl| build_varnode(&tpl, pc, bit_len, varnodes, spaces, varnode_map))
             .collect(),
         output: op_tpl
             .output
             .as_ref()
-            .map(|tpl| build_varnode(&tpl, pc, bit_len, varnodes, spaces, varnode_map, debug)),
+            .map(|tpl| build_varnode(&tpl, pc, bit_len, varnodes, spaces, varnode_map)),
     };
 
     if op.opcode == OpCode::Copy && op.output.as_ref().map(|o| o.space == "ram").unwrap_or(false) {
@@ -2499,7 +2483,6 @@ pub fn build_sym<'a>(
     bit_len: usize,
     spaces: &'a HashMap<String, u64>,
     varnode_map: &'a HashMap<(u64, u64), String>,
-    debug: (bool, usize),
 ) -> (Vec<PcodeOp>, Option<Varnode>) {
     let mut built_pcodeops = vec![];
     let mut built_varnodes = vec![];
@@ -2539,7 +2522,7 @@ pub fn build_sym<'a>(
 
                 op_handle = Some(varnode);
             } else if let MatchedSymbol::Constructor(_) = op {
-                (op_ops, op_handle) = build_sym(op, pc, bit_len, spaces, varnode_map, (debug.0, debug.1 + 1));
+                (op_ops, op_handle) = build_sym(op, pc, bit_len, spaces, varnode_map);
             }
 
             op_pcodeops.push(op_ops);
@@ -2581,7 +2564,6 @@ pub fn build_sym<'a>(
                         &built_varnodes,
                         spaces,
                         varnode_map,
-                        debug,
                     );
                     built_pcodeops.push(pcodeop)
                 }
@@ -2598,7 +2580,6 @@ pub fn build_sym<'a>(
                         &built_varnodes,
                         spaces,
                         varnode_map,
-                        debug
                 );
 
                 handle = Some(my_handle);

@@ -78,9 +78,9 @@ pub enum OpCode {
     PopCount,
 }
 
-impl fmt::Display for OpCode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let opstr = match self {
+impl OpCode {
+    fn to_string(&self) -> String {
+        match self {
             &OpCode::Copy => "Copy",
             &OpCode::Load => "Load",
             &OpCode::Store => "Store",
@@ -152,8 +152,19 @@ impl fmt::Display for OpCode {
             &OpCode::Insert => "Insert",
             &OpCode::Extract => "Extract",
             &OpCode::PopCount => "PopCount",
-        };
-        write!(f, "{}", opstr)
+        }.to_string()
+    }
+}
+
+impl fmt::Debug for OpCode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.to_string())
+    }
+}
+
+impl fmt::Display for OpCode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.to_string())
     }
 }
 
