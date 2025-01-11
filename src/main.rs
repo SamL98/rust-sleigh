@@ -1,6 +1,5 @@
 mod arch;
 mod parser;
-mod patterns;
 mod sleigh;
 mod utils;
 
