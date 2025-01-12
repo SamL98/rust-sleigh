@@ -2297,13 +2297,13 @@ pub struct Handle {
 
 impl Handle {
     fn needs_resolving(&self) -> bool {
-        !(self.exported.offset == 0 || self.indirect.offset == 0)
+        self.exported.offset != 0 || self.indirect.offset != 0
     }
 }
 
 impl fmt::Display for Handle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.needs_resolving() {
+        if !self.needs_resolving() {
             write!(f, "{}", self.varnode)
         } else {
             write!(f, "*({}){}", self.indirect, self.varnode)
@@ -2399,7 +2399,8 @@ fn build_handle<'a>(
             indirect: ind.clone(),
         };
 
-        if handle.needs_resolving() {
+        // println!("{} {} {}", vn, ex, ind);
+        if handle.needs_resolving() && ex.space != "const" {
             PcodeObject::Handle(handle)
         } else {
             PcodeObject::Varnode(vn.clone())
@@ -2419,18 +2420,47 @@ fn build_varnode<'a>(
 ) -> PcodeObject {
     // match (&vnode_tpl.space_template, &vnode_tpl.offset_template, &vnode_tpl.size_template) {
     //     (ConstTemplate::Handle(h1), ConstTemplate::Handle(h2), ConstTemplate::Handle(h3)) if h1 == h2 && h2 == h3 => {
-    match &vnode_tpl.offset_template {
-        ConstTemplate::Handle(h2) => {
-            return objs[*h2 as usize].clone();
-        },
-        _ => ()
-    };
 
-    let space = match build_value(&vnode_tpl.space_template, pc, bit_len, objs) {
-        VarnodeValue::String(name) => name.clone(),
-        VarnodeValue::Op(op) => op.space.clone(),
-        VarnodeValue::Int(0) => "DUMMY".to_string(),
-        _ => panic!(),
+    let (space, offset) = match &vnode_tpl.offset_template {
+        ConstTemplate::Handle(h2) => {
+            match &objs[*h2 as usize] {
+                PcodeObject::Varnode(vn) => (vn.space.clone(), vn.offset),
+                PcodeObject::Handle(h) if h.exported.offset == 0 && h.indirect.offset != 0 => (h.exported.space.clone(), h.varnode.offset),
+                PcodeObject::Handle(h) if !h.needs_resolving() => (h.varnode.space.clone(), h.varnode.offset),
+                _ => {
+                    // FIXME: Make this nicer.
+                    return objs[*h2 as usize].clone();
+                }
+            }
+        },
+        _ =>  {
+            let space = match build_value(&vnode_tpl.space_template, pc, bit_len, objs) {
+                VarnodeValue::String(name) => name.clone(),
+                VarnodeValue::Op(op) => op.space.clone(),
+                VarnodeValue::Int(0) => "DUMMY".to_string(),
+                _ => panic!(),
+            };
+
+            let offset = match build_value(&vnode_tpl.offset_template, pc, bit_len, objs) {
+                VarnodeValue::Int(off) => off,
+                VarnodeValue::Op(op) => {
+                    if space == "const" {
+                        match op.size {
+                            1 => ((op.offset as i8) as i64) as u64,
+                            2 => ((op.offset as i16) as i64) as u64,
+                            4 => ((op.offset as i32) as i64) as u64,
+                            8 => ((op.offset as i64) as i64) as u64,
+                            _ => op.offset,
+                        }
+                    } else {
+                        op.offset
+                    }
+                },
+                VarnodeValue::String(name) => spaces[&name],
+            };
+
+            (space, offset)
+        }
     };
 
     let size = match build_value(&vnode_tpl.size_template, pc, bit_len, objs) {
@@ -2439,23 +2469,6 @@ fn build_varnode<'a>(
         _ => panic!(),
     };
 
-    let offset = match build_value(&vnode_tpl.offset_template, pc, bit_len, objs) {
-        VarnodeValue::Int(off) => off,
-        VarnodeValue::Op(op) => {
-            if space == "const" {
-                match op.size {
-                    1 => ((op.offset as i8) as i64) as u64,
-                    2 => ((op.offset as i16) as i64) as u64,
-                    4 => ((op.offset as i32) as i64) as u64,
-                    8 => ((op.offset as i64) as i64) as u64,
-                    _ => op.offset,
-                }
-            } else {
-                op.offset
-            }
-        },
-        VarnodeValue::String(name) => spaces[&name],
-    };
 
     let name = match space.as_str() {
         "register" => varnode_map.get(&(offset, size)).map(|x| x.to_string()),
@@ -2517,16 +2530,17 @@ fn build_pcodeop<'a>(
             match build_varnode(&tpl, pc, bit_len, objs, spaces, varnode_map) {
                 PcodeObject::Handle(output_handle) => {
                     if output_handle.needs_resolving() {
+                        // println!("{} {} {}", output_handle.varnode, output_handle.exported, output_handle.indirect);
                         ops.push(PcodeOp {
                             seq: seq.clone(),
                             opcode: OpCode::Copy,
                             inputs: inputs.clone(),
-                            output: Some(output_handle.varnode.clone()),
+                            output: Some(output_handle.indirect.clone()),
                         });
 
                         seq = seq.next();
                         opcode = OpCode::Store;
-                        inputs = vec![Varnode::dummy(), output_handle.indirect.clone(), output_handle.varnode.clone()];
+                        inputs = vec![Varnode::dummy(), output_handle.exported.clone(), output_handle.indirect.clone()];
                         None
                     } else {
                         Some(output_handle.varnode.clone())
