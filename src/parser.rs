@@ -2720,8 +2720,16 @@ pub fn _build_text(matched_sym: &MatchedSymbol, text: &mut String) {
                 text.push_str(&vnode.name);
             }
         },
-        MatchedSymbol::Literal((val, _)) => {
-            text.push_str(format!("0x{:x}", val).as_str());
+        MatchedSymbol::Literal((val, sz)) => {
+            let (v, sign_str) = match sz {
+                1 if (*val >> 7) != 0 => ((*val ^ 0xff) as u64 + 1, "-"),
+                2 if (*val >> 15) != 0 => ((*val ^ 0xffff) as u64 + 1, "-"),
+                4 if (*val >> 31) != 0 => ((*val ^ 0xffffffff) as u64 + 1, "-"),
+                8 if (*val >> 63) != 0 => ((*val ^ 0xffffffffffffffffu64 as i64) as u64 + 1, "-"),
+                _ => (*val as u64, ""),
+            };
+
+            text.push_str(format!("{}0x{:x}", sign_str, v).as_str());
         },
         MatchedSymbol::String(s) => {
             text.push_str(&s);
