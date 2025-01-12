@@ -2574,7 +2574,7 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
 
         for (i, input) in inputs.iter_mut().enumerate() {
             if !(i == 1 && *opcode == OpCode::SubPiece) && !(i == 1 && matches!(*opcode, OpCode::IntLeft | OpCode::IntRight | OpCode::IntSRight)) {
-                if input.space == "const" && input.size > 0 && *opcode != OpCode::IntSub {
+                if input.space == "const" && input.size > 0 && input.size <= 8 && *opcode != OpCode::IntSub {
                     let shift = 64 - input.size * 8;
                     input.offset = (((input.offset << shift) as i64) >> shift) as u64;
 
