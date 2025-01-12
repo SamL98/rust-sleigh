@@ -2407,7 +2407,10 @@ fn build_handle<'a>(
             indirect: ind.clone(),
         };
 
-        // println!("{} {} {}", vn, ex, ind);
+        // if vn.space == "ram" {
+        //     println!("{:?} {} {} {}", handle_tpl, vn, ex, ind);
+        // }
+
         if handle.needs_resolving() && ex.space != "const" {
             PcodeObject::Handle(handle)
         } else {
@@ -2455,7 +2458,18 @@ fn build_varnode<'a>(
                         vn.space.clone()
                     };
 
-                    (space, vn.offset, size)
+                    let mut offset = vn.offset;
+
+                    // TODO: Figure out if 4-byte moves into 8-byte register sign extends or zero extends.
+                    if &space == "const" && size > vn.size {
+                        let shift = 64 - vn.size * 8;
+                        offset = (((offset << shift) as i64) >> shift) as u64;
+
+                        let shift = 64 - size * 8;
+                        offset = (offset << shift) >> shift;
+                    }
+
+                    (space, offset, size)
                 },
                 PcodeObject::Handle(h) if h.exported.space != "register" && 
                     h.exported.offset == 0 && 
@@ -2478,7 +2492,7 @@ fn build_varnode<'a>(
             (spc, off, sz)
         },
         _ =>  {
-            let space = match build_value(&vnode_tpl.space_template, pc, bit_len, objs, varnode_map) {
+            let mut space = match build_value(&vnode_tpl.space_template, pc, bit_len, objs, varnode_map) {
                 VarnodeValue::String(name) => name.clone(),
                 VarnodeValue::Op(op) => op.space.clone(),
                 VarnodeValue::Int(0) => "DUMMY".to_string(),
@@ -2506,6 +2520,10 @@ fn build_varnode<'a>(
             let size = match build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map) {
                 VarnodeValue::Int(sz) => sz,
                 VarnodeValue::Op(op) => op.size,
+                VarnodeValue::String(s) if s == "unique" => { // FIXME
+                    space = "unique".to_string();
+                    8
+                },
                 _ => panic!("Unknown size value for {}: {:?}", vnode_tpl, build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map)),
             };
 
@@ -2555,7 +2573,7 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
         }
 
         for (i, input) in inputs.iter_mut().enumerate() {
-            if !(i == 1 && *opcode == OpCode::SubPiece) && !(i == 1 && *opcode == OpCode::IntLeft) {
+            if !(i == 1 && *opcode == OpCode::SubPiece) && !(i == 1 && matches!(*opcode, OpCode::IntLeft | OpCode::IntRight | OpCode::IntSRight)) {
                 if input.space == "const" && input.size > 0 && *opcode != OpCode::IntSub {
                     let shift = 64 - input.size * 8;
                     input.offset = (((input.offset << shift) as i64) >> shift) as u64;
@@ -2620,6 +2638,11 @@ fn build_pcodeop<'a>(
                         } else {
                             let mut src = input_handle.varnode.clone();
                             src.size = 8; // FIXME
+                            src.space = input_handle.exported.space.clone();
+
+                            // if &src.space == "ram" {
+                            //     println!("{:?}", input_handle);
+                            // }
 
                             ops.push(PcodeOp {
                                 seq: seq.clone(),
@@ -2664,7 +2687,12 @@ fn build_pcodeop<'a>(
 
                         seq = seq.next();
                         opcode = OpCode::Store;
-                        inputs = vec![Varnode::dummy(), output_handle.exported.clone(), output_handle.indirect.clone()];
+
+                        let src = output_handle.indirect.clone();
+                        let mut dst = output_handle.exported.clone();
+                        // dst.size = src.size;
+
+                        inputs = vec![Varnode::dummy(), dst, src];
                         None
                     } else {
                         Some(output_handle.varnode.clone())
@@ -2824,19 +2852,19 @@ pub fn build_sym<'a>(
     ops
 }
 
-fn _build_cmd_text(cmd: &PrintCommand, operands: &Vec<MatchedSymbol>, text: &mut String) {
+fn _build_cmd_text(cmd: &PrintCommand, operands: &Vec<MatchedSymbol>, text: &mut String, ops: &Vec<PcodeOp>) {
     match cmd {
-        PrintCommand::Op(op_idx) => _build_text(&operands[*op_idx as usize], text),
+        PrintCommand::Op(op_idx) => _build_text(&operands[*op_idx as usize], text, ops),
         PrintCommand::Piece(piece) => text.push_str(piece),
     }
 }
 
-pub fn _build_text(matched_sym: &MatchedSymbol, text: &mut String) {
+pub fn _build_text(matched_sym: &MatchedSymbol, text: &mut String, ops: &Vec<PcodeOp>) {
     match &matched_sym {
         MatchedSymbol::Constructor((ct, operands)) => {
             if let Some(cmds) = &ct.print_commands {
                 for cmd in cmds {
-                    _build_cmd_text(cmd, &operands, text);
+                    _build_cmd_text(cmd, &operands, text, ops);
                 }
             }
         },
@@ -2846,18 +2874,29 @@ pub fn _build_text(matched_sym: &MatchedSymbol, text: &mut String) {
             }
         },
         MatchedSymbol::Literal((val, sz)) => {
-            // let (v, sign_str) = if text.ends_with(" + ") { // HACK
-            let (v, sign_str) = if true {
-                match sz {
-                    1 if (*val >> 7) != 0 => ((*val ^ 0xff) as u64 + 1, "-"),
-                    2 if (*val >> 15) != 0 => ((*val ^ 0xffff) as u64 + 1, "-"),
-                    4 if (*val >> 31) != 0 => ((*val ^ 0xffffffff) as u64 + 1, "-"),
-                    8 if (*val >> 63) != 0 => ((*val ^ 0xffffffffffffffffu64 as i64) as u64 + 1, "-"),
-                    _ => (*val as u64, ""),
-                }
-            } else {
-                (*val as u64, "")
+            let mut v = *val as u64;
+            let mut sign_str = "";
+
+            let (neg_v, is_neg) = match sz {
+                1 if (*val >> 7) != 0 => ((*val ^ 0xff) as u64 + 1, true),
+                2 if (*val >> 15) != 0 => ((*val ^ 0xffff) as u64 + 1, true),
+                4 if (*val >> 31) != 0 => ((*val ^ 0xffffffff) as u64 + 1, true),
+                8 if (*val >> 63) != 0 => ((*val ^ 0xffffffffffffffffu64 as i64) as u64 + 1, true),
+                _ => (*val as u64, false),
             };
+
+            for op in ops {
+                if matches!(op.opcode, OpCode::IntSub) && op.inputs[1].space == "const" && op.inputs[1].offset > 0 && op.inputs[1].offset == neg_v && is_neg {
+                    v = neg_v;
+                    sign_str = "-";
+                    break;
+                }
+            }
+
+            if *sz == 8 && is_neg {
+                v = neg_v;
+                sign_str = "-";
+            }
 
             text.push_str(format!("{}0x{:x}", sign_str, v).as_str());
         },
@@ -2867,9 +2906,9 @@ pub fn _build_text(matched_sym: &MatchedSymbol, text: &mut String) {
     }
 }
 
-pub fn build_text(matched_sym: &MatchedSymbol) -> String {
+pub fn build_text(matched_sym: &MatchedSymbol, ops: &Vec<PcodeOp>) -> String {
     let mut text = String::new();
-    _build_text(matched_sym, &mut text);
+    _build_text(matched_sym, &mut text, ops);
     text
 }
 

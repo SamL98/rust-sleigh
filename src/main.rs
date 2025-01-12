@@ -58,7 +58,7 @@ fn main() {
     let buf = &FILE_BYTES[0xe070..0x1cd72e5];
     let orig_pc = 0x10000e070;
 
-    // let a = 0x100010964;
+    // let a = 0x10000e456;
     // let buf = &buf[(a - orig_pc)..(a - orig_pc + 0x10)];
     // let orig_pc = a;
 
@@ -99,8 +99,6 @@ fn main() {
                     num_bits += num_bits - (num_bits % lang.bit_align);
                 }
 
-                let asm = build_text(&matched_symbol);
-
                 let pcodeops = build_sym(
                     &matched_symbol,
                     &pc,
@@ -108,6 +106,8 @@ fn main() {
                     &lang.spaces,
                     &lang.varnode_map,
                 );
+
+                let asm = build_text(&matched_symbol, &pcodeops);
 
                 // println!("0x{:x} {}: {}", pc.offset, asm, num_bits);
 

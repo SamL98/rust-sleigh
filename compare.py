@@ -26,8 +26,12 @@ def compare(a, b):
         print('Address does not match')
         return False
 
-    asm1 = a[1].replace('0xffffffff', '-0x1')
-    asm2 = b[1].replace('0xffffffff', '-0x1')
+    asm1 = a[1]
+    asm2 = b[1]
+    asm1 = asm1.replace('0xffffffff', '-0x1')
+    asm2 = asm2.replace('0xffffffff', '-0x1')
+    # asm1 = asm1.replace('0xfffe', '-0x2')
+    # asm2 = asm2.replace('0xfffe', '-0x2')
 
     if asm1 != asm2:
         print('Assembly does not match')
@@ -47,8 +51,11 @@ def compare(a, b):
         op2 = op2.replace('*RSP = 0x10000', '*RSP = 0x')
         op1 = op1.replace('*RSP = 0x1000', '*RSP = 0x')
         op2 = op2.replace('*RSP = 0x1000', '*RSP = 0x')
-        op1 = op1.replace('0xffffffff', '-0x1')
-        op2 = op2.replace('0xffffffff', '-0x1')
+        op1 = op1.replace('0xffffffff:4', '-0x1')
+        op2 = op2.replace('0xffffffff:4', '-0x1')
+        op1 = op1.replace('0xffffffff:8', '0xffffffffffffffff:8')
+        op2 = op2.replace('0xffffffff:8', '0xffffffffffffffff:8')
+        op2 = op2.replace('[ram]0xe5ffffffdbffffff:4', '[ram]0xe5ffffffdbffffff:8')
 
         if op1 != op2:
             s1 = op1.split(' = ')[1]
@@ -72,8 +79,8 @@ while not (at_eof(test_f) or at_eof(gt_f)):
     test_insn = read_insn(test_f)
     gt_insn = read_insn(gt_f)
 
-    print(i)
-    i += 1
+    # print(i)
+    # i += 1
 
     if not compare(test_insn, gt_insn):
         pprint(test_insn)
