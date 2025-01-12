@@ -77,6 +77,21 @@ pub enum OpCode {
 }
 
 impl OpCode {
+    pub fn is_conditional(&self) -> bool {
+        use OpCode::*;
+        matches!(self, 
+            IntEqual |
+            IntNotEqual |
+            IntSLess |
+            IntSLessEqual |
+            IntLess |
+            IntLessEqual |
+            IntCarry |
+            IntSCarry |
+            IntSBorrow
+        )
+    }
+
     fn to_string(&self) -> String {
         match self {
             &OpCode::Copy => "Copy",

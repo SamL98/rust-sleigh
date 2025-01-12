@@ -99,6 +99,10 @@ def compare(a, b):
         op2 = op2.replace('[ram]0xe5ffffffdbffffff:4', '[ram]0xe5ffffffdbffffff:8')
 
         if op1 != op2:
+            if '=' not in op1 or '=' not in op2:
+                print('Op %d does not match' % i)
+                return False
+
             s1 = op1.split(' = ')[1]
             s2 = op2.split(' = ')[1]
 

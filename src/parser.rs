@@ -2571,28 +2571,49 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
     if !matches!(*opcode, OpCode::Store | OpCode::Call | OpCode::CallInd | OpCode::CallOther | OpCode::SubPiece) {
         let output_size = output.as_ref().map(|o| o.size).unwrap_or(0);
 
-        let mut max_sz = inputs.iter().map(|i| i.size).max().unwrap();
+        // let mut max_sz = inputs.iter().map(|i| i.size).max().unwrap();
+        let mut sz = 0;
 
-        if !matches!(*opcode, OpCode::Load | OpCode::IntSext | OpCode::IntZext) {
-            max_sz = max_sz.max(output_size);
+        for input in inputs.iter() {
+            if input.space == "register" {
+                sz = input.size;
+                break;
+            }
+        }
+
+        if sz == 0 {
+            sz = inputs.iter().map(|i| i.size).max().unwrap();
+        }
+
+        if !matches!(*opcode, OpCode::Load | OpCode::IntSext | OpCode::IntZext) && !opcode.is_conditional() {
+            // max_sz = max_sz.max(output_size);
+            if output.as_ref().map(|o| o.space == "register").unwrap_or(false) {
+                sz = output_size;
+            }
+
+            if sz == 0 {
+                sz = sz.max(output_size);
+            }
         }
 
         for (i, input) in inputs.iter_mut().enumerate() {
-            if !(i == 1 && *opcode == OpCode::SubPiece) && !(i == 1 && matches!(*opcode, OpCode::IntLeft | OpCode::IntRight | OpCode::IntSRight)) {
+            if !(i == 1 && *opcode == OpCode::SubPiece) && 
+               !(i == 0 && *opcode == OpCode::CBranch) && 
+                !(i == 1 && matches!(*opcode, OpCode::IntLeft | OpCode::IntRight | OpCode::IntSRight)) {
                 if input.space == "const" && input.size > 0 && input.size <= 8 && *opcode != OpCode::IntSub && *opcode != OpCode::IntAdd {
                     let shift = 64 - input.size * 8;
                     input.offset = (((input.offset << shift) as i64) >> shift) as u64;
 
-                    let shift = 64 - max_sz * 8;
-                    input.offset = (input.offset << shift) >> shift;
+                    let shift = 64 - sz * 8;
+                    input.offset = input.offset.overflowing_shl(shift as u32).0.overflowing_shr(shift as u32).0;
                 }
 
-                input.size = max_sz;
+                input.size = sz;
             }
         }
 
         if matches!(*opcode, OpCode::IntAdd | OpCode::IntSub | OpCode::IntMult | OpCode::IntDiv) {
-            output.as_mut().unwrap().size = max_sz;
+            output.as_mut().unwrap().size = sz;
         }
 
         if *opcode == OpCode::CBranch && inputs[1].size > 1 {
