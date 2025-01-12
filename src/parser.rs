@@ -1695,7 +1695,7 @@ fn match_ctx_pattern_block(block: &PatternBlock, words: &Vec<u32>) -> bool {
 
 fn match_insn_pattern_block(block: &PatternBlock, words: &[u8]) -> bool {
     for (i, mask_word) in block.masks.iter().enumerate() {
-        let word = get_word(words, (block.offset as usize) + i * 4);
+        let word = get_word(words, (block.offset as usize) + i * 4, 4) as u32;
         // println!("Matching instruction pattern: {:?}", block);
         if (word & mask_word.mask) != mask_word.val {
             return false;
@@ -1752,45 +1752,29 @@ pub fn read_reg(
 //     }
 // }
 
-fn get_word(words: &[u8], start: usize) -> u32 {
-    let mut word: u32 = 0;
+fn get_word(words: &[u8], start: usize, size: usize) -> u64 {
+    let mut word: u64 = 0;
 
-    if words.len() > start {
-        word |= (words[start] as u32) << 24;
-    }
+    for i in 0..size {
+        if start + i >= words.len() {
+            break;
+        }
 
-    if words.len() > start + 1 {
-        word |= (words[start+1] as u32) << 16;
-    }
-
-    if words.len() > start + 2 {
-        word |= (words[start+2] as u32) << 8;
-    }
-
-    if words.len() > start + 3 {
-        word |= words[start+3] as u32;
+        word = (word << 8) | (words[start + i] as u64);
     }
 
     word
 }
 
-fn get_word_le(words: &[u8], start: usize) -> u32 {
-    let mut word: u32 = 0;
+fn get_word_le(words: &[u8], start: usize, size: usize) -> u64 {
+    let mut word: u64 = 0;
 
-    if words.len() > start {
-        word |= words[start] as u32;
-    }
+    for i in 0..size {
+        if start + i >= words.len() {
+            break;
+        }
 
-    if words.len() > start + 1 {
-        word |= (words[start+1] as u32) << 8;
-    }
-
-    if words.len() > start + 2 {
-        word |= (words[start+2] as u32) << 16;
-    }
-
-    if words.len() > start + 3 {
-        word |= (words[start+3] as u32) << 24;
+        word |= (words[start + i] as u64) << (i * 8);
     }
 
     word
@@ -1823,7 +1807,7 @@ fn resolve_constructor<'a>(
                 let bit_start = 32 - (start + size);
 
                 if !is_context {
-                    let word = get_word(words, 0);
+                    let word = get_word(words, 0, 4) as u32;
                     let idx = ((word >> bit_start) & ((1 << size) - 1)) as usize;
                     path.push(idx);
 
@@ -2127,17 +2111,18 @@ fn resolve_operands<'a>(
             Some(Expr::Field(Field::Token(expr))) => {
                 // TODO: Handle shift field.
                 let size = expr.end_bit - expr.start_bit + 1;
+                let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
 
                 // TODO: Figure out if this is right. I'm just guessing.
                 let word = if !expr.big_endian {
-                    get_word_le(words, bit_end / 8 + expr.start_byte as usize)
+                    get_word_le(words, bit_end / 8 + expr.start_byte as usize, num_bytes)
                 } else {
-                    get_word(words, bit_end / 8 + expr.start_byte as usize)
+                    get_word(words, bit_end / 8 + expr.start_byte as usize, num_bytes)
                 };
 
-                let val = ((word >> expr.start_bit) & (((1_u64 << size) - 1) as u32)) as i64;
+                let mask = 0xffffffffffffffff_u64 >> ((8 - num_bytes) * 8);
+                let val = ((word >> expr.start_bit) & mask) as i64;
 
-                let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
                 matched_ops.push(MatchedSymbol::Literal((val, num_bytes)));
                 // let prev_bit_end = bit_end;
                 let byte_start = (bit_end + (expr.start_byte as usize)) / 8; // FIXME
@@ -2192,8 +2177,6 @@ fn resolve_operands<'a>(
 
                 match resolve_symbol(&words[base..], pc + base as u64, op_sym, symbols, ctx, reg_space, debug) {
                     Some((matched_sym, sub_bit_end)) => {
-                        // println!("{} {:x}", bit_end, get_word(words, bit_end / 8));
-
                         let new_bit_end = bit_end.max((base * 8) as usize + sub_bit_end);
                         matched_ops.push(matched_sym);
                         // println!("-- bit end is now {}, was {} {:?} {}", new_bit_end, bit_end, operand, sub_bit_end);
@@ -2425,7 +2408,9 @@ fn build_varnode<'a>(
         ConstTemplate::Handle(h2) => {
             match &objs[*h2 as usize] {
                 PcodeObject::Varnode(vn) => (vn.space.clone(), vn.offset, vn.size),
-                PcodeObject::Handle(h) if h.exported.offset == 0 && h.indirect.offset != 0 => (h.exported.space.clone(), h.varnode.offset, h.exported.size),
+                PcodeObject::Handle(h) if h.exported.space != "register" && 
+                    h.exported.offset == 0 && 
+                    h.indirect.offset != 0 => (h.exported.space.clone(), h.varnode.offset, h.exported.size), // FIXME
                 PcodeObject::Handle(h) if !h.needs_resolving() => (h.varnode.space.clone(), h.varnode.offset, h.varnode.size),
                 _ => {
                     // FIXME: Make this nicer.
@@ -2462,7 +2447,7 @@ fn build_varnode<'a>(
             let size = match build_value(&vnode_tpl.size_template, pc, bit_len, objs) {
                 VarnodeValue::Int(sz) => sz,
                 VarnodeValue::Op(op) => op.size,
-                _ => panic!(),
+                _ => panic!("Unknown size value for {}: {:?}", vnode_tpl, build_value(&vnode_tpl.size_template, pc, bit_len, objs)),
             };
 
             (space, offset, size)
@@ -2473,13 +2458,6 @@ fn build_varnode<'a>(
         "register" => varnode_map.get(&(offset, size)).map(|x| x.to_string()),
         _ => None,
     };
-
-    // if true_size > 0 && space == "const" {
-    //     println!("{:x} {} {}", offset, size, offset >> ((size * 8) - 1));
-    // }
-    // if size > 0 && space == "const" && offset >> ((size * 8) - 1) != 0 {
-    //     offset = (offset ^ 0xffffffffffffffff) + 1;
-    // }
 
     PcodeObject::Varnode(Varnode {
         name: name,
@@ -2529,7 +2507,7 @@ fn build_pcodeop<'a>(
         })
         .collect();
 
-    let output = op_tpl
+    let mut output = op_tpl
         .output
         .as_ref()
         .map(|tpl| {
@@ -2565,10 +2543,21 @@ fn build_pcodeop<'a>(
         inputs[1] = inputs[1].negate();
     }
 
-    let max_sz = inputs.iter().map(|i| i.size).max().unwrap();
+    if opcode != OpCode::Store {
+        let output_size = output.as_ref().map(|o| o.size).unwrap_or(0);
 
-    for input in inputs.iter_mut() {
-        input.size = max_sz;
+        let mut max_sz = inputs.iter().map(|i| i.size).max().unwrap();
+        max_sz = max_sz.max(output_size);
+
+        for (i, input) in inputs.iter_mut().enumerate() {
+            if !(i == 1 && opcode == OpCode::SubPiece) {
+                input.size = max_sz;
+            }
+        }
+
+        if opcode == OpCode::SubPiece && output_size > inputs[1].size {
+            output = Some(output.unwrap().subpiece(inputs[1].offset, inputs[1].size, varnode_map));
+        }
     }
 
     let op = PcodeOp {

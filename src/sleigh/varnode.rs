@@ -5,6 +5,7 @@ use super::types::{
 
 // use std::cmp::{PartialEq, Eq};
 // use std::hash::{Hash, Hasher};
+use std::collections::HashMap;
 use std::clone::Clone;
 use std::fmt;
 
@@ -54,19 +55,32 @@ impl Varnode{
     }
 
     pub fn negate(&self) -> Varnode {
-        let signed_off = match self.size {
-            1 => -(self.offset as i8) as u64,
-            2 => -(self.offset as i16) as u64,
-            4 => -(self.offset as i32) as u64,
-            8 => -(self.offset as i64) as u64,
-            _ => self.offset,
-        };
+        let shift = 64 - self.size * 8;
+        let off = (((self.offset << shift) as i64) >> shift) as u64; // sign-extend.
+        let signed_off = (off ^ 0xffffffffffffffff) + 1;
 
         Varnode {
             name: self.name.clone(),
             space: self.space.clone(),
             offset: signed_off,
             size: self.size,
+        }
+    }
+
+    pub fn subpiece(&self, addend: u64, new_size: u64, varnode_map: &HashMap<(u64, u64), String>) -> Self {
+        let new_offset = self.offset + addend;
+
+        let new_name = if self.space == "register" {
+            varnode_map.get(&(new_offset, new_size)).cloned()
+        } else {
+            None
+        };
+
+        Varnode {
+            name: new_name,
+            space: self.space.clone(),
+            offset: new_offset,
+            size: new_size,
         }
     }
 }
