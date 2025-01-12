@@ -2541,7 +2541,7 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
 
         let mut max_sz = inputs.iter().map(|i| i.size).max().unwrap();
 
-        if *opcode != OpCode::Load {
+        if !matches!(*opcode, OpCode::Load | OpCode::IntSext | OpCode::IntZext) {
             max_sz = max_sz.max(output_size);
         }
 
