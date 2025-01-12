@@ -2531,12 +2531,19 @@ fn build_varnode<'a>(
 fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option<Varnode>, varnode_map: &HashMap<(u64, u64), String>) {
     // TODO: Add more cases.
     // println!("{} {:?}", opcode, inputs);
-    if *opcode == OpCode::IntAdd && inputs[1].is_negative() {
-        *opcode = OpCode::IntSub;
-        inputs[1] = inputs[1].negate();
+    if *opcode == OpCode::IntAdd {
+        if inputs[1].is_negative() {
+            *opcode = OpCode::IntSub;
+            inputs[1] = inputs[1].negate();
+        } else if inputs[0].is_negative() {
+            *opcode = OpCode::IntSub;
+            let c = inputs[0].clone();
+            inputs[0] = inputs[1].clone();
+            inputs[1] = c.negate();
+        }
     }
 
-    if *opcode != OpCode::Store {
+    if !matches!(*opcode, OpCode::Store | OpCode::Call | OpCode::CallInd | OpCode::CallOther | OpCode::SubPiece) {
         let output_size = output.as_ref().map(|o| o.size).unwrap_or(0);
 
         let mut max_sz = inputs.iter().map(|i| i.size).max().unwrap();
@@ -2546,9 +2553,13 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
         }
 
         for (i, input) in inputs.iter_mut().enumerate() {
-            if !(i == 1 && *opcode == OpCode::SubPiece) {
+            if !(i == 1 && *opcode == OpCode::SubPiece) && !(i == 1 && *opcode == OpCode::IntLeft) {
                 input.size = max_sz;
             }
+        }
+
+        if matches!(*opcode, OpCode::IntAdd | OpCode::IntSub | OpCode::IntMult | OpCode::IntDiv) {
+            output.as_mut().unwrap().size = max_sz;
         }
 
         if *opcode == OpCode::CBranch && inputs[1].size > 1 {
@@ -2558,6 +2569,13 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
         if *opcode == OpCode::SubPiece && output_size > inputs[1].size {
             *output = Some(output.as_ref().unwrap().subpiece(0, inputs[1].size, varnode_map));
         }
+    } else if *opcode == OpCode::Store {
+        inputs[1].size = 8; // FIXME
+    }
+
+    // HACK, FIXME
+    if *opcode == OpCode::Load {
+        inputs[1].size = 8;
     }
 }
 
@@ -2590,10 +2608,13 @@ fn build_pcodeop<'a>(
                                 size: input_handle.indirect.size,
                             }
                         } else {
+                            let mut src = input_handle.varnode.clone();
+                            src.size = 8; // FIXME
+
                             ops.push(PcodeOp {
                                 seq: seq.clone(),
                                 opcode: OpCode::Load,
-                                inputs: vec![Varnode::dummy(), input_handle.varnode.clone()],
+                                inputs: vec![Varnode::dummy(), src],
                                 output: Some(input_handle.indirect.clone()),
                             });
 
