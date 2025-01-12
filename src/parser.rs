@@ -2421,12 +2421,12 @@ fn build_varnode<'a>(
     // match (&vnode_tpl.space_template, &vnode_tpl.offset_template, &vnode_tpl.size_template) {
     //     (ConstTemplate::Handle(h1), ConstTemplate::Handle(h2), ConstTemplate::Handle(h3)) if h1 == h2 && h2 == h3 => {
 
-    let (space, offset) = match &vnode_tpl.offset_template {
+    let (space, mut offset, size) = match &vnode_tpl.offset_template {
         ConstTemplate::Handle(h2) => {
             match &objs[*h2 as usize] {
-                PcodeObject::Varnode(vn) => (vn.space.clone(), vn.offset),
-                PcodeObject::Handle(h) if h.exported.offset == 0 && h.indirect.offset != 0 => (h.exported.space.clone(), h.varnode.offset),
-                PcodeObject::Handle(h) if !h.needs_resolving() => (h.varnode.space.clone(), h.varnode.offset),
+                PcodeObject::Varnode(vn) => (vn.space.clone(), vn.offset, vn.size),
+                PcodeObject::Handle(h) if h.exported.offset == 0 && h.indirect.offset != 0 => (h.exported.space.clone(), h.varnode.offset, h.exported.size),
+                PcodeObject::Handle(h) if !h.needs_resolving() => (h.varnode.space.clone(), h.varnode.offset, h.varnode.size),
                 _ => {
                     // FIXME: Make this nicer.
                     return objs[*h2 as usize].clone();
@@ -2459,21 +2459,27 @@ fn build_varnode<'a>(
                 VarnodeValue::String(name) => spaces[&name],
             };
 
-            (space, offset)
+            let size = match build_value(&vnode_tpl.size_template, pc, bit_len, objs) {
+                VarnodeValue::Int(sz) => sz,
+                VarnodeValue::Op(op) => op.size,
+                _ => panic!(),
+            };
+
+            (space, offset, size)
         }
     };
-
-    let size = match build_value(&vnode_tpl.size_template, pc, bit_len, objs) {
-        VarnodeValue::Int(sz) => sz,
-        VarnodeValue::Op(op) => op.size,
-        _ => panic!(),
-    };
-
 
     let name = match space.as_str() {
         "register" => varnode_map.get(&(offset, size)).map(|x| x.to_string()),
         _ => None,
     };
+
+    // if true_size > 0 && space == "const" {
+    //     println!("{:x} {} {}", offset, size, offset >> ((size * 8) - 1));
+    // }
+    // if size > 0 && space == "const" && offset >> ((size * 8) - 1) != 0 {
+    //     offset = (offset ^ 0xffffffffffffffff) + 1;
+    // }
 
     PcodeObject::Varnode(Varnode {
         name: name,
@@ -2554,10 +2560,15 @@ fn build_pcodeop<'a>(
         }).flatten();
 
     // TODO: Add more cases.
-    if opcode == OpCode::IntAdd && inputs[0].is_negative() {
-        println!("{}", inputs[0]);
+    if opcode == OpCode::IntAdd && inputs[1].is_negative() {
         opcode = OpCode::IntSub;
-        inputs[0] = inputs[0].negate();
+        inputs[1] = inputs[1].negate();
+    }
+
+    let max_sz = inputs.iter().map(|i| i.size).max().unwrap();
+
+    for input in inputs.iter_mut() {
+        input.size = max_sz;
     }
 
     let op = PcodeOp {

@@ -33,7 +33,16 @@ impl Varnode{
     }
 
     pub fn is_negative(&self) -> bool {
-        self.space.as_str() == "const" && self.offset >> (self.size * 8 - 1) == 1
+        // println!("{:x} {} {}", self.offset, self.size, self.offset >> ((self.size * 8) - 1));
+        self.space.as_str() == "const" && self.offset >> ((self.size * 8) - 1) != 0
+
+        // match self.size {
+        //     1 if (*val >> 7) != 0 => ((*val ^ 0xff) as u64 + 1, "-"),
+        //     2 if (*val >> 15) != 0 => ((*val ^ 0xffff) as u64 + 1, "-"),
+        //     4 if (*val >> 31) != 0 => ((*val ^ 0xffffffff) as u64 + 1, "-"),
+        //     8 if (*val >> 63) != 0 => ((*val ^ 0xffffffffffffffffu64 as i64) as u64 + 1, "-"),
+        //     _ => (*val as u64, ""),
+        // }
     }
 
     pub fn is_ram(&self) -> bool {
