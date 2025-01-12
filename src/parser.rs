@@ -2325,6 +2325,7 @@ fn build_value<'a>(
 
             match &objs[ix] {
                 PcodeObject::Varnode(vn) => VarnodeValue::Op(vn),
+                PcodeObject::Handle(h) if h.needs_resolving() => VarnodeValue::Op(&h.indirect),
                 PcodeObject::Handle(h) => VarnodeValue::Op(&h.varnode),
                 _ => panic!("{}", objs[ix])
             }
@@ -2401,8 +2402,7 @@ fn build_varnode<'a>(
     spaces: &'a HashMap<String, u64>,
     varnode_map: &'a HashMap<(u64, u64), String>,
 ) -> PcodeObject {
-    // match (&vnode_tpl.space_template, &vnode_tpl.offset_template, &vnode_tpl.size_template) {
-    //     (ConstTemplate::Handle(h1), ConstTemplate::Handle(h2), ConstTemplate::Handle(h3)) if h1 == h2 && h2 == h3 => {
+    // println!("{} {:?}", vnode_tpl, objs);
 
     let (space, mut offset, size) = match &vnode_tpl.offset_template {
         ConstTemplate::Handle(h2) => {
@@ -2467,6 +2467,31 @@ fn build_varnode<'a>(
     })
 }
 
+fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option<Varnode>, varnode_map: &HashMap<(u64, u64), String>) {
+    // TODO: Add more cases.
+    if *opcode == OpCode::IntAdd && inputs[1].is_negative() {
+        *opcode = OpCode::IntSub;
+        inputs[1] = inputs[1].negate();
+    }
+
+    if *opcode != OpCode::Store {
+        let output_size = output.as_ref().map(|o| o.size).unwrap_or(0);
+
+        let mut max_sz = inputs.iter().map(|i| i.size).max().unwrap();
+        max_sz = max_sz.max(output_size);
+
+        for (i, input) in inputs.iter_mut().enumerate() {
+            if !(i == 1 && *opcode == OpCode::SubPiece) {
+                input.size = max_sz;
+            }
+        }
+
+        if *opcode == OpCode::SubPiece && output_size > inputs[1].size {
+            *output = Some(output.as_ref().unwrap().subpiece(inputs[1].offset, inputs[1].size, varnode_map));
+        }
+    }
+}
+
 fn build_pcodeop<'a>(
     mut seq: SeqNum,
     bit_len: usize,
@@ -2478,6 +2503,8 @@ fn build_pcodeop<'a>(
     let pc = seq.pc.offset;
     let mut opcode = OpCode::from_str(op_tpl.code.as_str());
     let mut ops = vec![];
+
+    // println!("{}", op_tpl);
 
     let mut inputs: Vec<Varnode> = op_tpl
         .inputs
@@ -2507,6 +2534,8 @@ fn build_pcodeop<'a>(
         })
         .collect();
 
+    // println!("{:?}", inputs);
+
     let mut output = op_tpl
         .output
         .as_ref()
@@ -2514,12 +2543,14 @@ fn build_pcodeop<'a>(
             match build_varnode(&tpl, pc, bit_len, objs, spaces, varnode_map) {
                 PcodeObject::Handle(output_handle) => {
                     if output_handle.needs_resolving() {
-                        // println!("{} {} {}", output_handle.varnode, output_handle.exported, output_handle.indirect);
+                        let mut output = Some(output_handle.indirect.clone());
+                        fix_sizes(&mut opcode, &mut inputs, &mut output, varnode_map);
+
                         ops.push(PcodeOp {
                             seq: seq.clone(),
-                            opcode: OpCode::Copy,
+                            opcode: opcode,
                             inputs: inputs.clone(),
-                            output: Some(output_handle.indirect.clone()),
+                            output: output,
                         });
 
                         seq = seq.next();
@@ -2537,28 +2568,7 @@ fn build_pcodeop<'a>(
             }
         }).flatten();
 
-    // TODO: Add more cases.
-    if opcode == OpCode::IntAdd && inputs[1].is_negative() {
-        opcode = OpCode::IntSub;
-        inputs[1] = inputs[1].negate();
-    }
-
-    if opcode != OpCode::Store {
-        let output_size = output.as_ref().map(|o| o.size).unwrap_or(0);
-
-        let mut max_sz = inputs.iter().map(|i| i.size).max().unwrap();
-        max_sz = max_sz.max(output_size);
-
-        for (i, input) in inputs.iter_mut().enumerate() {
-            if !(i == 1 && opcode == OpCode::SubPiece) {
-                input.size = max_sz;
-            }
-        }
-
-        if opcode == OpCode::SubPiece && output_size > inputs[1].size {
-            output = Some(output.unwrap().subpiece(inputs[1].offset, inputs[1].size, varnode_map));
-        }
-    }
+    fix_sizes(&mut opcode, &mut inputs, &mut output, varnode_map);
 
     let op = PcodeOp {
         seq: seq,

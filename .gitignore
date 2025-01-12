@@ -6,3 +6,5 @@ test*
 foo
 /Processors/
 /pkg/
+*.svg
+profile.json
