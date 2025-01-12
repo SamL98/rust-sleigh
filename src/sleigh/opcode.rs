@@ -74,6 +74,7 @@ pub enum OpCode {
     Insert,
     Extract,
     PopCount,
+    Label,
 }
 
 impl OpCode {
@@ -165,6 +166,7 @@ impl OpCode {
             &OpCode::Insert => "Insert",
             &OpCode::Extract => "Extract",
             &OpCode::PopCount => "PopCount",
+            &OpCode::Label => "Label",
         }.to_string()
     }
 }
@@ -255,6 +257,7 @@ impl OpCode {
             "INSERT" => OpCode::Insert,
             "EXTRACT" => OpCode::Extract,
             "POPCOUNT" => OpCode::PopCount,
+            "LABEL" => OpCode::Label,
             _ => panic!("{}", s)
         }
     }

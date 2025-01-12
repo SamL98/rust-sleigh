@@ -8,14 +8,11 @@ extern crate nom;
 
 use crate::parser::*;
 use crate::sleigh::types::Address;
-use crate::sleigh::opcode::OpCode;
+// use crate::sleigh::opcode::OpCode;
 
 use bitvec::prelude::*;
 
-use std::collections::HashMap;
-use std::string::FromUtf8Error;
-use std::env;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::Write;
 use std::time::Instant;
 
@@ -58,9 +55,9 @@ fn main() {
     let buf = &FILE_BYTES[0xe070..0x1cd72e5];
     let orig_pc = 0x10000e070;
 
-    // let a = 0x10002308a;
-    // let buf = &buf[(a - orig_pc)..(a - orig_pc + 0x10)];
-    // let orig_pc = a;
+    let a = 0x100029bcf;
+    let buf = &buf[(a - orig_pc)..(a - orig_pc + 0x10)];
+    let orig_pc = a;
 
     // let buf = &FILE_BYTES[0xa33f0..0xb7e38];
     // let orig_pc = 0x1000a33f0;
@@ -115,10 +112,10 @@ fn main() {
                 //     println!("    {}", op);
                 // }
 
-                writeln!(file, "0x{:x} ~~ {} ~~ {} ~~ {}", pc.offset, asm, num_bits / 8, pcodeops.len());
+                let _ = writeln!(file, "0x{:x} ~~ {} ~~ {} ~~ {}", pc.offset, asm, num_bits / 8, pcodeops.len());
 
                 for op in &pcodeops {
-                    writeln!(file, "    {}", op);
+                    let _ = writeln!(file, "    {}", op);
                 }
 
                 num_bits
@@ -132,5 +129,5 @@ fn main() {
         bits_consumed += num_bits;
     }
 
-    // println!("Took {}s to complete", start.elapsed().as_secs());
+    println!("Took {}s to complete", start.elapsed().as_secs());
 }

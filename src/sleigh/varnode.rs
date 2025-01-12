@@ -46,13 +46,13 @@ impl Varnode{
         // }
     }
 
-    pub fn is_ram(&self) -> bool {
-        self.space.as_str() == "ram"
-    }
+    // pub fn is_ram(&self) -> bool {
+    //     self.space.as_str() == "ram"
+    // }
 
-    pub fn is_const(&self) -> bool {
-        self.space.as_str() == "const"
-    }
+    // pub fn is_const(&self) -> bool {
+    //     self.space.as_str() == "const"
+    // }
 
     pub fn negate(&self) -> Varnode {
         let shift = 64 - self.size * 8;

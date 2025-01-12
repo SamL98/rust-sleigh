@@ -8,8 +8,8 @@ use elementtree::Element;
 use {
     std::env,
     std::fs,
-    std::fs::File,
-    glob::glob,
+    // std::fs::File,
+    // glob::glob,
 };
 
 pub struct Prototype {
@@ -28,7 +28,7 @@ pub struct CompilerSpec {
     pub _prototypes: Vec<Prototype>
 }
 
-pub fn read_file(path: PathBuf, root: &Path) -> String {
+pub fn read_file(path: PathBuf, _root: &Path) -> String {
     fs::read_to_string(path.to_str().unwrap()).expect("Could not read file")
 }
 
@@ -137,8 +137,8 @@ impl Architecture {
 }*/
 
 pub fn get_language(arch_name: &str, language_id: &str) -> Option<Language> {
-    let mut ghidra_root_envvar = ".".to_string();
-    ghidra_root_envvar = env::var("GHIDRA_PATH").expect("$GHIDRA_PATH not set");
+    // let mut ghidra_root_envvar = ".".to_string();
+    let ghidra_root_envvar = env::var("GHIDRA_PATH").expect("$GHIDRA_PATH not set");
 
     let ghidra_root_path = Path::new(&ghidra_root_envvar);
 
