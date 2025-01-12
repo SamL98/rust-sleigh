@@ -385,7 +385,7 @@ impl fmt::Display for VarnodeTemplate {
         use ConstTemplate::*;
 
         match (&self.space_template, &self.offset_template, &self.size_template) {
-            (Handle(h1), Handle(h2), Handle(h3)) if h1 == h2 && h2 == h3 => {
+            (Handle((h1, _)), Handle((h2, _)), Handle((h3, _))) if h1 == h2 && h2 == h3 => {
                 write!(f, "Handle#{}", h1)
             },
             _ => {
@@ -396,10 +396,15 @@ impl fmt::Display for VarnodeTemplate {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub enum HandleExpr {
+    OffsetPlus(u32),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ConstTemplate {
     SpaceId(String),
     Val(u64),
-    Handle(u32),
+    Handle((u32, Option<HandleExpr>)),
     Relative(u32),
     Start,
     Next,
@@ -414,7 +419,7 @@ impl fmt::Display for ConstTemplate {
         match self {
             SpaceId(space) => write!(f, "{}", space),
             Val(val) => write!(f, "{:x}", val),
-            Handle(idx) => write!(f, "Handle#{}", idx),
+            Handle((idx, _)) => write!(f, "Handle#{}", idx),
             _ => write!(f, "{:?}", self)
         }
     }
@@ -786,7 +791,18 @@ fn const_template(input: &str) -> Res<&str, ConstTemplate> {
         let const_template = match attrs[0].1 {
             "spaceid" => ConstTemplate::SpaceId(attrs[1].1.to_string()),
             "real" => ConstTemplate::Val(u64hex(attrs[1].1)),
-            "handle" => ConstTemplate::Handle(u32dec(attrs[1].1)),
+            "handle" => {
+                let expr = if attrs.len() > 2 && attrs[2].0 == "s" {
+                    match attrs[2].1 {
+                        "offset_plus" => Some(HandleExpr::OffsetPlus(u32hex(attrs[3].1) & 0xff)),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+
+                ConstTemplate::Handle((u32dec(attrs[1].1), expr))
+            },
             "relative" => ConstTemplate::Relative(u32hex(attrs[1].1)),
             "start" => ConstTemplate::Start,
             "next" => ConstTemplate::Next,
@@ -974,8 +990,8 @@ fn constructor(input: &str) -> Res<&str, Constructor> {
             line: (u64dec(iter.nth(0).unwrap()) as usize, u64dec(iter.nth(0).unwrap()) as usize),
         };
 
-        // if constructor.line.0 == 0 && constructor.line.1 == 739 {
-        //     println!("{}", &input[..1000]);
+        // if constructor.line.0 == 0 && constructor.line.1 == 8255 {
+        //     println!("{}", &input[..2000]);
         // }
 
         (next, constructor)
@@ -2265,10 +2281,10 @@ fn get_operand<'a>(id: &u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Operand {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum VarnodeValue<'a> {
+pub enum VarnodeValue {
     String(String),
     Int(u64),
-    Op(&'a Varnode),
+    Op(Varnode),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -2316,19 +2332,27 @@ fn build_value<'a>(
     pc: u64,
     bit_len: usize,
     objs: &'a Vec<PcodeObject>,
-) -> VarnodeValue<'a> {
+    varnode_map: &'a HashMap<(u64, u64), String>,
+) -> VarnodeValue {
     match const_tpl {
         ConstTemplate::SpaceId(space) => VarnodeValue::String(space.clone()),
         ConstTemplate::Val(val) => VarnodeValue::Int(*val),
-        ConstTemplate::Handle(idx) => {
+        ConstTemplate::Handle((idx, expr)) => {
             let ix = *idx as usize;
 
-            match &objs[ix] {
-                PcodeObject::Varnode(vn) => VarnodeValue::Op(vn),
-                PcodeObject::Handle(h) if h.needs_resolving() => VarnodeValue::Op(&h.indirect),
-                PcodeObject::Handle(h) => VarnodeValue::Op(&h.varnode),
+            let mut vn = match &objs[ix] {
+                PcodeObject::Varnode(vn) => vn.clone(),
+                PcodeObject::Handle(h) if h.needs_resolving() => h.indirect.clone(),
+                PcodeObject::Handle(h) => h.varnode.clone(),
                 _ => panic!("{}", objs[ix])
-            }
+            };
+
+            match expr {
+                Some(HandleExpr::OffsetPlus(addend)) => vn = vn.subpiece(*addend as u64, vn.size, varnode_map),
+                _ => ()
+            };
+
+            VarnodeValue::Op(vn)
         },
         // For now just use the const index for intra-pcode branching.
         // I think this is right but we'll see.
@@ -2402,12 +2426,22 @@ fn build_varnode<'a>(
     spaces: &'a HashMap<String, u64>,
     varnode_map: &'a HashMap<(u64, u64), String>,
 ) -> PcodeObject {
-    // println!("{} {:?}", vnode_tpl, objs);
-
     let (space, mut offset, size) = match &vnode_tpl.offset_template {
-        ConstTemplate::Handle(h2) => {
-            match &objs[*h2 as usize] {
-                PcodeObject::Varnode(vn) => (vn.space.clone(), vn.offset, vn.size),
+        ConstTemplate::Handle((h2, expr)) => {
+            let (spc, mut off, sz) = match &objs[*h2 as usize] {
+                PcodeObject::Varnode(vn) => {
+                    let size = if !matches!(vnode_tpl.space_template, ConstTemplate::Handle(_)) {
+                        vn.size
+                    } else {
+                        match build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map) {
+                            VarnodeValue::Int(sz) => sz,
+                            VarnodeValue::Op(op) => op.size,
+                            _ => panic!("Unknown size value for {}", vnode_tpl),
+                        }
+                    };
+
+                    (vn.space.clone(), vn.offset, size)
+                },
                 PcodeObject::Handle(h) if h.exported.space != "register" && 
                     h.exported.offset == 0 && 
                     h.indirect.offset != 0 => (h.exported.space.clone(), h.varnode.offset, h.exported.size), // FIXME
@@ -2416,17 +2450,27 @@ fn build_varnode<'a>(
                     // FIXME: Make this nicer.
                     return objs[*h2 as usize].clone();
                 }
-            }
+            };
+
+            match expr {
+                Some(HandleExpr::OffsetPlus(addend)) => {
+                    // println!("{} {}", vnode_tpl, sz);
+                    off += *addend as u64
+                },
+                _ => ()
+            };
+
+            (spc, off, sz)
         },
         _ =>  {
-            let space = match build_value(&vnode_tpl.space_template, pc, bit_len, objs) {
+            let space = match build_value(&vnode_tpl.space_template, pc, bit_len, objs, varnode_map) {
                 VarnodeValue::String(name) => name.clone(),
                 VarnodeValue::Op(op) => op.space.clone(),
                 VarnodeValue::Int(0) => "DUMMY".to_string(),
                 _ => panic!(),
             };
 
-            let offset = match build_value(&vnode_tpl.offset_template, pc, bit_len, objs) {
+            let offset = match build_value(&vnode_tpl.offset_template, pc, bit_len, objs, varnode_map) {
                 VarnodeValue::Int(off) => off,
                 VarnodeValue::Op(op) => {
                     if space == "const" {
@@ -2444,15 +2488,17 @@ fn build_varnode<'a>(
                 VarnodeValue::String(name) => spaces[&name],
             };
 
-            let size = match build_value(&vnode_tpl.size_template, pc, bit_len, objs) {
+            let size = match build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map) {
                 VarnodeValue::Int(sz) => sz,
                 VarnodeValue::Op(op) => op.size,
-                _ => panic!("Unknown size value for {}: {:?}", vnode_tpl, build_value(&vnode_tpl.size_template, pc, bit_len, objs)),
+                _ => panic!("Unknown size value for {}: {:?}", vnode_tpl, build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map)),
             };
 
             (space, offset, size)
         }
     };
+
+    // println!("{} {:?} {} {:x} {}", vnode_tpl, objs, space, offset, size);
 
     let name = match space.as_str() {
         "register" => varnode_map.get(&(offset, size)).map(|x| x.to_string()),
@@ -2469,6 +2515,7 @@ fn build_varnode<'a>(
 
 fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option<Varnode>, varnode_map: &HashMap<(u64, u64), String>) {
     // TODO: Add more cases.
+    // println!("{} {:?}", opcode, inputs);
     if *opcode == OpCode::IntAdd && inputs[1].is_negative() {
         *opcode = OpCode::IntSub;
         inputs[1] = inputs[1].negate();
@@ -2478,7 +2525,10 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
         let output_size = output.as_ref().map(|o| o.size).unwrap_or(0);
 
         let mut max_sz = inputs.iter().map(|i| i.size).max().unwrap();
-        max_sz = max_sz.max(output_size);
+
+        if *opcode != OpCode::Load {
+            max_sz = max_sz.max(output_size);
+        }
 
         for (i, input) in inputs.iter_mut().enumerate() {
             if !(i == 1 && *opcode == OpCode::SubPiece) {
@@ -2491,7 +2541,7 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
         }
 
         if *opcode == OpCode::SubPiece && output_size > inputs[1].size {
-            *output = Some(output.as_ref().unwrap().subpiece(inputs[1].offset, inputs[1].size, varnode_map));
+            *output = Some(output.as_ref().unwrap().subpiece(0, inputs[1].size, varnode_map));
         }
     }
 }
@@ -2508,7 +2558,7 @@ fn build_pcodeop<'a>(
     let mut opcode = OpCode::from_str(op_tpl.code.as_str());
     let mut ops = vec![];
 
-    // println!("{}", op_tpl);
+    // println!("{} {:?}", op_tpl, objs);
 
     let mut inputs: Vec<Varnode> = op_tpl
         .inputs
@@ -2690,7 +2740,7 @@ pub fn _build_sym<'a>(
                     }),
                 );
 
-                // println!("{} {} {:?}", handle_template, my_handle, built_pcodeops);
+                // println!("{} {} {:?}", handle_template, my_handle, built_objects);
                 handle = Some(my_handle);
             }
         }
