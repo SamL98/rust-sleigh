@@ -1,3 +1,5 @@
+import struct as st
+import math
 import os
 
 test_f = open('insns.txt')
@@ -21,6 +23,37 @@ def read_insn(f):
 
     return (addr, asm, length, ops)
 
+def fix_signs(a):
+    nums = []
+    i = 0
+
+    while '0x' in a[i:]:
+        s = a[i:].index('0x') + i
+        e = s + 2
+
+        while e < len(a) and (a[e].isdigit() or a[e] in 'abcdef'):
+            e += 1
+
+        d = int(a[s:e], 16)
+        L = e - (s + 2)
+        if L % 2 != 0:
+            L += 1
+
+        l = int(math.ceil(math.log2(L))) - 1
+        fmts = ['B', 'H', 'I', 'Q']
+
+        if l < len(fmts):
+            fmt = fmts[l]
+            n = st.unpack('<' + fmt.lower(), st.pack('<' + fmt, d))[0]
+            nums.append((d, n))
+
+        i = e
+
+    for (n1, n2) in nums:
+        a = a.replace(hex(n1), hex(n2))
+
+    return a
+
 def compare(a, b):
     if a[0] != b[0]:
         print('Address does not match')
@@ -28,8 +61,14 @@ def compare(a, b):
 
     asm1 = a[1]
     asm2 = b[1]
-    asm1 = asm1.replace('0xffffffff', '-0x1')
-    asm2 = asm2.replace('0xffffffff', '-0x1')
+    asm1 = fix_signs(asm1)
+    asm2 = fix_signs(asm2)
+    # asm1 = asm1.replace('0xffffffffffffffff', '-0x1')
+    # asm2 = asm2.replace('0xffffffffffffffff', '-0x1')
+    # asm1 = asm1.replace('0xffffffff', '-0x1')
+    # asm2 = asm2.replace('0xffffffff', '-0x1')
+    # asm1 = asm1.replace('0xff', '-0x1')
+    # asm2 = asm2.replace('0xff', '-0x1')
     # asm1 = asm1.replace('0xfffe', '-0x2')
     # asm2 = asm2.replace('0xfffe', '-0x2')
 
@@ -51,6 +90,8 @@ def compare(a, b):
         op2 = op2.replace('*RSP = 0x10000', '*RSP = 0x')
         op1 = op1.replace('*RSP = 0x1000', '*RSP = 0x')
         op2 = op2.replace('*RSP = 0x1000', '*RSP = 0x')
+        op1 = op1.replace('0xff:1', '-0x1')
+        op2 = op2.replace('0xff:1', '-0x1')
         op1 = op1.replace('0xffffffff:4', '-0x1')
         op2 = op2.replace('0xffffffff:4', '-0x1')
         op1 = op1.replace('0xffffffff:8', '0xffffffffffffffff:8')
@@ -62,7 +103,7 @@ def compare(a, b):
             s2 = op2.split(' = ')[1]
 
             # TODO: Make this a better check/workaround.
-            if not('-' in s1 and '+' in s2):
+            if not (('-' in s1 and '+' in s2) or ('+' in s1 and '-' in s2)):
                 print('Op %d does not match' % i)
                 return False
 

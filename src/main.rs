@@ -58,7 +58,7 @@ fn main() {
     let buf = &FILE_BYTES[0xe070..0x1cd72e5];
     let orig_pc = 0x10000e070;
 
-    // let a = 0x10000e456;
+    // let a = 0x10001c82a;
     // let buf = &buf[(a - orig_pc)..(a - orig_pc + 0x10)];
     // let orig_pc = a;
 

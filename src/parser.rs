@@ -2559,6 +2559,11 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
             inputs[0] = inputs[1].clone();
             inputs[1] = c.negate();
         }
+    } else if *opcode == OpCode::IntSub {
+        if inputs[1].is_negative() {
+            *opcode = OpCode::IntAdd;
+            inputs[1] = inputs[1].negate();
+        } 
     }
 
     // println!("{} {:?}", opcode, inputs);
@@ -2574,7 +2579,7 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
 
         for (i, input) in inputs.iter_mut().enumerate() {
             if !(i == 1 && *opcode == OpCode::SubPiece) && !(i == 1 && matches!(*opcode, OpCode::IntLeft | OpCode::IntRight | OpCode::IntSRight)) {
-                if input.space == "const" && input.size > 0 && input.size <= 8 && *opcode != OpCode::IntSub {
+                if input.space == "const" && input.size > 0 && input.size <= 8 && *opcode != OpCode::IntSub && *opcode != OpCode::IntAdd {
                     let shift = 64 - input.size * 8;
                     input.offset = (((input.offset << shift) as i64) >> shift) as u64;
 
@@ -2889,11 +2894,20 @@ pub fn _build_text(matched_sym: &MatchedSymbol, text: &mut String, ops: &Vec<Pco
                 _ => (*val as u64, false),
             };
 
+            let shift = 64 - (*sz as usize) * 8;
+            let sext_v = (((v << shift) as i64) >> shift) as u64;
+
             for op in ops {
                 if matches!(op.opcode, OpCode::IntSub) && op.inputs[1].space == "const" && op.inputs[1].offset > 0 && op.inputs[1].offset == neg_v && is_neg {
                     v = neg_v;
                     sign_str = "-";
                     break;
+                } else if matches!(op.opcode, OpCode::IntSBorrow) && op.inputs[1].space == "const" && op.inputs[1].offset > 0 && is_neg {
+                    if op.inputs[1].offset == (sext_v >> (64 - op.inputs[1].size * 8)) {
+                        v = neg_v;
+                        sign_str = "-";
+                        break;
+                    }
                 }
             }
 
