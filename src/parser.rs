@@ -2486,6 +2486,10 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
             }
         }
 
+        if *opcode == OpCode::CBranch && inputs[1].size > 1 {
+            inputs[1].size = 1;
+        }
+
         if *opcode == OpCode::SubPiece && output_size > inputs[1].size {
             *output = Some(output.as_ref().unwrap().subpiece(inputs[1].offset, inputs[1].size, varnode_map));
         }
