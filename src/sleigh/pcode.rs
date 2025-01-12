@@ -1,4 +1,3 @@
-use wasm_bindgen::prelude::*;
 use super::types::{
     // SeqNum, 
     // Varnode, 
@@ -85,7 +84,7 @@ impl PcodeOp {
             &OpCode::IntLeft => self.fmt_binary("<<"),
             &OpCode::IntLessEqual => self.fmt_binary("<="),
             &OpCode::IntMult => self.fmt_binary("*"),
-            &OpCode::IntNegate => self.fmt_binary("~"),
+            &OpCode::IntNegate => self.fmt_unary("~"),
             &OpCode::IntNotEqual => self.fmt_binary("!="),
             &OpCode::IntOr => self.fmt_binary("|"),
             &OpCode::IntRem => self.fmt_binary("%"),
@@ -99,6 +98,8 @@ impl PcodeOp {
             &OpCode::BoolNegate => self.fmt_unary("!"),
             &OpCode::FloatNeg => self.fmt_unary("f-"),
             &OpCode::Int2Comp => self.fmt_unary("-"),
+            &OpCode::SubPiece => format!("({})({})", self.inputs[0], self.inputs[1]),
+            &OpCode::CallOther => self.fmt_func("callother"),
             _ => panic!("Don't know how to format {}!", self.opcode)
         }
     }
@@ -111,7 +112,6 @@ impl PcodeOp {
     }
 }
 
-#[wasm_bindgen]
 impl PcodeOp {
     pub fn to_string(&self) -> String {
         format!("{}{}", self.fmt_output(), self.fmt_inputs())
@@ -119,6 +119,12 @@ impl PcodeOp {
 }
 
 impl fmt::Debug for PcodeOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.to_string())
+    }
+}
+
+impl fmt::Display for PcodeOp {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.to_string())
     }

@@ -23,14 +23,13 @@ use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-#[cfg(not(target_arch = "wasm32"))]
 use {
     std::fs,
     std::fs::File,
 };
 
 static SLEIGH_PATH: &'static str =
-    "/Users/samlerner/ghidra_10.3_PUBLIC/Ghidra/Processors/AARCH64/data/languages";
+    "/Users/samlerner/ghidra_10.3_PUBLIC/Ghidra/Processors/x86/data/languages";
 
 pub type Res<T, U> = IResult<T, U, Error<T>>;
 
@@ -974,6 +973,11 @@ fn constructor(input: &str) -> Res<&str, Constructor> {
             template: res.1.3,
             line: (u64dec(iter.nth(0).unwrap()) as usize, u64dec(iter.nth(0).unwrap()) as usize),
         };
+
+        // if constructor.line.0 == 0 && constructor.line.1 == 739 {
+        //     println!("{}", &input[..1000]);
+        // }
+
         (next, constructor)
     });
 
@@ -1630,17 +1634,7 @@ fn string(input: &str) -> Res<&str, &str> {
 }
 
 pub fn read_file(filename: &str) -> String {
-    #[cfg(target_arch = "wasm32")]
-    {
-        use super::do_get_request;
-        let url = format!("http://localhost:9090/Processors/AARCH64/data/languages/{}", filename);
-        do_get_request(url.as_str())
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        fs::read_to_string(format!("{}/{}", SLEIGH_PATH, filename)).expect("Could not read file")
-    }
+    fs::read_to_string(format!("{}/{}", SLEIGH_PATH, filename)).expect("Could not read file")
 }
 
 #[derive(Clone)]
@@ -1817,6 +1811,10 @@ fn resolve_constructor<'a>(
     loop {
         match dtree {
             DecisionTree::NonLeaf((is_context, start, size, children)) => {
+                if children.len() == 0 {
+                    return None;
+                }
+
                 if *size == 0 && children.len() == 1 {
                     dtree = &children[0];
                     continue;
@@ -1840,6 +1838,7 @@ fn resolve_constructor<'a>(
 
                     dtree = &children[idx.min(children.len() - 1)];
                     bits_consumed = bits_consumed.max(start + size);
+                    // println!("insn {} {} {:x} {} {}", start, size, word, bit_start, idx);
                 } else {
                     let ctx_word = ctx[(*start as usize) / 32];
                     let idx = (ctx_word.overflowing_shr(bit_start).0 & ((1 << size) - 1)) as usize;
@@ -1855,11 +1854,13 @@ fn resolve_constructor<'a>(
                     });
 
                     dtree = &children[idx.min(children.len() - 1)];
+                    // println!("ctx {} {}", start, size);
                 }
             }
             DecisionTree::Leaf(pairs) => {
                 for (ct_id, pattern) in pairs {
                     let ct = &table.constructors[*ct_id as usize];
+                    // println!("{:?} {:?}", pattern, words);
 
                     if match_pattern(pattern, &words, &ctx) {
                         // debug.log(ResolverEvent {
@@ -1872,8 +1873,9 @@ fn resolve_constructor<'a>(
                         //     matched_constructor: c,
                         // });
 
-                        // println!("{}:{}", ct.line.0, ct.line.1);
-                        return Some((ct, bits_consumed as usize));
+                        // println!("{}:{}, {}", ct.line.0, ct.line.1, bits_consumed);
+                        // return Some((ct, bits_consumed as usize));
+                        return Some((ct, (ct.length * 8) as usize));
                     }
                 }
 
@@ -1892,6 +1894,7 @@ fn resolve_varlist<'a>(
     _ctx: &mut Vec<u32>,
     debug: &mut ResolverDebug,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
+    // println!("{:?}", varlist);
     match &varlist.field {
         Field::Token(token) => {
             let num_bytes = (token.end_byte - token.start_byte + 1) as usize;
@@ -2116,6 +2119,7 @@ fn resolve_operands<'a>(
 
     for op_idx in &ct.operands {
         let operand = get_operand(&op_idx, &symbols);
+        // println!("{:?}", operand);
 
         match &operand.expr {
             Some(Expr::Field(Field::Token(expr))) => {
@@ -2159,6 +2163,10 @@ fn resolve_operands<'a>(
                     fixups.push((matched_ops.len() - 1, t));
                 }
             },
+            Some(Expr::Const(val)) => {
+                // TODO: Fix size.
+                matched_ops.push(MatchedSymbol::Literal((*val, 8)));
+            }
             None => {
                 let op_sym = &symbols[&operand.subsym];
 
@@ -2168,6 +2176,7 @@ fn resolve_operands<'a>(
                 } else {
                     bit_end / 8
                 };
+                // let base = bit_end / 8;
 
                 // Before recursively resolving a symbol, we first need to modify the context.
                 for op in &ct.context_ops {
@@ -2181,10 +2190,12 @@ fn resolve_operands<'a>(
 
                 match resolve_symbol(&words[base..], pc + base as u64, op_sym, symbols, ctx, reg_space, debug) {
                     Some((matched_sym, sub_bit_end)) => {
+                        // println!("{} {:x}", bit_end, get_word(words, bit_end / 8));
+
                         let new_bit_end = bit_end.max((base * 8) as usize + sub_bit_end);
                         matched_ops.push(matched_sym);
+                        // println!("-- bit end is now {}, was {} {:?} {}", new_bit_end, bit_end, operand, sub_bit_end);
                         bit_end = new_bit_end;
-                        // println!("-- bit end is now {}", bit_end);
                     },
                     None => ok = false,
                 };
@@ -2205,12 +2216,17 @@ pub fn resolve_symbol<'a>(
     reg_space: &BitVec<u8, Msb0>,
     debug: &mut ResolverDebug,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
+    // println!("{:?}", words);
     match &sym.body {
         SymbolBody::Subtable(table) => {
             match resolve_constructor(sym.id, words, table, symbols, ctx, debug) {
                 Some((ct, bit_end)) => {
+                    // println!("ct bit end: {}", bit_end);
+                    // let (mut operands, fixups, ops_bit_end, ok) = resolve_operands(&words[(bit_end / 8)..], pc, ct, symbols, ctx, reg_space, debug);
                     let (mut operands, fixups, ops_bit_end, ok) = resolve_operands(words, pc, ct, symbols, ctx, reg_space, debug);
                     let bit_len = bit_end.max(ops_bit_end);
+                    // let bit_len = bit_end + ops_bit_end;
+                    // println!("{} {}", bit_end, ops_bit_end);
 
                     for (idx, t) in fixups {
                         if let MatchedSymbol::Literal((val, sz)) = operands[idx].clone() {
@@ -2327,21 +2343,28 @@ fn build_handle<'a>(
         varnode_map,
     );
 
-    varnode
 
+    // FIXME FIXME FIXME
     // if matches!(handle_tpl.indirect_template.space_template, ConstTemplate::SpaceId(_)) {
     //     let pointer = build_varnode(
     //         &handle_tpl.indirect_template,
+    //         pc,
+    //         bit_len,
     //         varnodes,
     //         spaces,
     //         varnode_map,
-    //         pattern
+    //         curr_space,
     //     );
-
-    //     Handle::Indirect((varnode, pointer))
-    // } else {
-    //     Handle::Varnode(varnode)
-    // }
+    if let ConstTemplate::Handle(idx) = handle_tpl.exported_template.offset_template {
+        Varnode {
+            name: varnode.name.clone(),
+            space: varnodes[idx as usize].space.clone(),
+            offset: varnode.offset,
+            size: varnode.size,
+        }
+    } else {
+        varnode
+    }
 }
 
 fn build_varnode<'a>(

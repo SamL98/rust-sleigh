@@ -1,7 +1,5 @@
 use std::fmt;
-use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen]
 #[repr(u32)]
 #[derive(PartialEq, Eq, Hash, Copy, Clone)]
 pub enum OpCode {

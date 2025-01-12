@@ -1,4 +1,3 @@
-use wasm_bindgen::prelude::*;
 use super::types::Address;
 use std::fmt;
 
@@ -20,7 +19,6 @@ use std::fmt;
 //     }
 // }
 
-#[wasm_bindgen]
 impl Address {
     pub fn to_string(&self) -> String {
         format!("0x{:x}", self.offset)

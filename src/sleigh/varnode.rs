@@ -15,6 +15,7 @@ impl Varnode{
             None => match self.space.as_str() {
                 "unique" => format!("U{:x}:{}", self.offset, self.size),
                 "const" => format!("{:x}:{}", self.offset, self.size),
+                "register" => format!("{:x}:{}", self.offset, self.size), // FIXME
                 "ram" => format!("[ram]{:x}:{}", self.offset, self.size),
                 "DUMMY" => "DUMMY".to_string(),
                 _ => panic!()

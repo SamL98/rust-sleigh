@@ -5,7 +5,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use elementtree::Element;
 
-#[cfg(not(target_arch = "wasm32"))]
 use {
     std::env,
     std::fs,
@@ -30,19 +29,7 @@ pub struct CompilerSpec {
 }
 
 pub fn read_file(path: PathBuf, root: &Path) -> String {
-    #[cfg(target_arch = "wasm32")]
-    {
-        use super::do_get_request;
-        let rel = path.strip_prefix(root).unwrap().to_str().unwrap();
-        // let url = format!("http://localhost:8000/Processors/x86/data/languages/{}", rel);
-        let url = format!("http://localhost:9090/Processors/AARCH64/data/languages/{}", rel);
-        do_get_request(url.as_str())
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        fs::read_to_string(path.to_str().unwrap()).expect("Could not read file")
-    }
+    fs::read_to_string(path.to_str().unwrap()).expect("Could not read file")
 }
 
 /*impl CompilerSpec {
@@ -151,11 +138,7 @@ impl Architecture {
 
 pub fn get_language(arch_name: &str, language_id: &str) -> Option<Language> {
     let mut ghidra_root_envvar = ".".to_string();
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        ghidra_root_envvar = env::var("GHIDRA_PATH").expect("$GHIDRA_PATH not set");
-    }
+    ghidra_root_envvar = env::var("GHIDRA_PATH").expect("$GHIDRA_PATH not set");
 
     let ghidra_root_path = Path::new(&ghidra_root_envvar);
 
