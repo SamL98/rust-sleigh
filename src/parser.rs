@@ -2675,25 +2675,29 @@ fn build_pcodeop<'a>(
             match build_varnode(&tpl, pc, bit_len, objs, spaces, varnode_map) {
                 PcodeObject::Handle(output_handle) => {
                     if output_handle.needs_resolving() {
-                        let mut output = Some(output_handle.indirect.clone());
-                        fix_sizes(&mut opcode, &mut inputs, &mut output, varnode_map);
-
-                        ops.push(PcodeOp {
-                            seq: seq.clone(),
-                            opcode: opcode,
-                            inputs: inputs.clone(),
-                            output: output,
-                        });
-
-                        seq = seq.next();
-                        opcode = OpCode::Store;
-
                         let src = output_handle.indirect.clone();
                         let mut dst = output_handle.exported.clone();
-                        // dst.size = src.size;
+                        dst.size = src.size;
 
-                        inputs = vec![Varnode::dummy(), dst, src];
-                        None
+                        if &dst.space != "ram" {
+                            let mut output = Some(output_handle.indirect.clone());
+                            fix_sizes(&mut opcode, &mut inputs, &mut output, varnode_map);
+
+                            ops.push(PcodeOp {
+                                seq: seq.clone(),
+                                opcode: opcode,
+                                inputs: inputs.clone(),
+                                output: output,
+                            });
+
+                            seq = seq.next();
+                            opcode = OpCode::Store;
+
+                            inputs = vec![Varnode::dummy(), dst, src];
+                            None
+                        } else {
+                            Some(dst)
+                        }
                     } else {
                         Some(output_handle.varnode.clone())
                     }
