@@ -1909,21 +1909,23 @@ fn resolve_varlist<'a>(
             let start = token.start_bit - token.start_byte * 8;
             let size = token.end_bit - token.start_bit + 1;
             let idx = ((token_word >> start) & ((1 << size) - 1)) as usize;
-            let var_idx = varlist.vars[idx].unwrap();
-            let var = &symbols[&var_idx];
 
-            debug.log(ResolverEvent::Var {
-                sym: sym_idx,
-                var: var_idx,
-                start: 32 - (token.end_bit + 1) as usize,
-                end: 33 - token.start_bit as usize,
-                word: token_word,
-                idx: idx,
-            });
+            varlist.vars[idx].map(|var_idx| {
+                let var = &symbols[&var_idx];
 
-            // Not super sure if this size calculation is right but it seems to work.
-            let bit_end = (token.end_byte * 8 + (8 - (token.end_bit % 8) - 1) + size) as usize;
-            Some(((MatchedSymbol::Symbol(var)), bit_end))
+                debug.log(ResolverEvent::Var {
+                    sym: sym_idx,
+                    var: var_idx,
+                    start: 32 - (token.end_bit + 1) as usize,
+                    end: 33 - token.start_bit as usize,
+                    word: token_word,
+                    idx: idx,
+                });
+
+                // Not super sure if this size calculation is right but it seems to work.
+                let bit_end = (token.end_byte * 8 + (8 - (token.end_bit % 8) - 1) + size) as usize;
+                ((MatchedSymbol::Symbol(var)), bit_end)
+            })
         }
         _ => todo!(),
     }
@@ -2286,35 +2288,63 @@ pub enum VarnodeValue<'a> {
     Op(&'a Varnode),
 }
 
-// #[derive(Debug, PartialEq, Eq, Clone)]
-// pub enum Handle {
-//     Dummy,
-//     Varnode(Varnode),
-//     Indirect((Varnode, Varnode)),
-// }
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct Handle {
+    varnode: Varnode,
+    exported: Varnode,
+    indirect: Varnode,
+}
 
-// impl fmt::Display for Handle {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//         match self {
-//             Handle::Varnode(vn) => write!(f, "{}", vn),
-//             Handle::Indirect((vn1, vn2)) => write!(f, "[{}]({})", vn1, vn2),
-//             _ => write!(f, "DUMMY"),
-//         }
-//     }
-// }
+impl Handle {
+    fn needs_resolving(&self) -> bool {
+        !(self.exported.offset == 0 || self.indirect.offset == 0)
+    }
+}
+
+impl fmt::Display for Handle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.needs_resolving() {
+            write!(f, "{}", self.varnode)
+        } else {
+            write!(f, "*({}){}", self.indirect, self.varnode)
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum PcodeObject {
+    Dummy,
+    Varnode(Varnode),
+    Handle(Handle),
+}
+
+impl fmt::Display for PcodeObject {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PcodeObject::Dummy => write!(f, "DUMMY"),
+            PcodeObject::Varnode(vn) => write!(f, "{}", vn),
+            PcodeObject::Handle(h) => write!(f, "{}", h),
+        }
+    }
+}
 
 fn build_value<'a>(
     const_tpl: &'a ConstTemplate,
     pc: u64,
     bit_len: usize,
-    varnodes: &'a Vec<Varnode>,
+    objs: &'a Vec<PcodeObject>,
 ) -> VarnodeValue<'a> {
     match const_tpl {
         ConstTemplate::SpaceId(space) => VarnodeValue::String(space.clone()),
         ConstTemplate::Val(val) => VarnodeValue::Int(*val),
         ConstTemplate::Handle(idx) => {
             let ix = *idx as usize;
-            VarnodeValue::Op(&varnodes[ix])
+
+            match &objs[ix] {
+                PcodeObject::Varnode(vn) => VarnodeValue::Op(vn),
+                PcodeObject::Handle(h) => VarnodeValue::Op(&h.varnode),
+                _ => panic!("{}", objs[ix])
+            }
         },
         // For now just use the const index for intra-pcode branching.
         // I think this is right but we'll see.
@@ -2330,40 +2360,52 @@ fn build_handle<'a>(
     handle_tpl: &'a HandleTemplate,
     pc: u64,
     bit_len: usize,
-    varnodes: &'a Vec<Varnode>,
+    objs: &'a Vec<PcodeObject>,
     spaces: &'a HashMap<String, u64>,
     varnode_map: &'a HashMap<(u64, u64), String>,
-) -> Varnode {
+    seq: &SeqNum,
+) -> PcodeObject {
     let varnode = build_varnode(
         &handle_tpl.varnode_template,
         pc,
         bit_len,
-        varnodes,
+        objs,
         spaces,
         varnode_map,
     );
 
+    let exported = build_varnode(
+        &handle_tpl.exported_template,
+        pc,
+        bit_len,
+        objs,
+        spaces,
+        varnode_map,
+    );
 
-    // FIXME FIXME FIXME
-    // if matches!(handle_tpl.indirect_template.space_template, ConstTemplate::SpaceId(_)) {
-    //     let pointer = build_varnode(
-    //         &handle_tpl.indirect_template,
-    //         pc,
-    //         bit_len,
-    //         varnodes,
-    //         spaces,
-    //         varnode_map,
-    //         curr_space,
-    //     );
-    if let ConstTemplate::Handle(idx) = handle_tpl.exported_template.offset_template {
-        Varnode {
-            name: varnode.name.clone(),
-            space: varnodes[idx as usize].space.clone(),
-            offset: varnode.offset,
-            size: varnode.size,
+    let indirect = build_varnode(
+        &handle_tpl.indirect_template,
+        pc,
+        bit_len,
+        objs,
+        spaces,
+        varnode_map,
+    );
+
+    if let (PcodeObject::Varnode(vn), PcodeObject::Varnode(ex), PcodeObject::Varnode(ind)) = (&varnode, &exported, &indirect) {
+        let handle = Handle {
+            varnode: vn.clone(),
+            exported: ex.clone(),
+            indirect: ind.clone(),
+        };
+
+        if handle.needs_resolving() {
+            PcodeObject::Handle(handle)
+        } else {
+            PcodeObject::Varnode(vn.clone())
         }
     } else {
-        varnode
+        panic!("({}, {}, {})", varnode, exported, indirect);
     }
 }
 
@@ -2371,23 +2413,33 @@ fn build_varnode<'a>(
     vnode_tpl: &'a VarnodeTemplate,
     pc: u64,
     bit_len: usize,
-    varnodes: &'a Vec<Varnode>,
+    objs: &'a Vec<PcodeObject>,
     spaces: &'a HashMap<String, u64>,
     varnode_map: &'a HashMap<(u64, u64), String>,
-) -> Varnode {
-    let space = match build_value(&vnode_tpl.space_template, pc, bit_len, varnodes) {
+) -> PcodeObject {
+    // match (&vnode_tpl.space_template, &vnode_tpl.offset_template, &vnode_tpl.size_template) {
+    //     (ConstTemplate::Handle(h1), ConstTemplate::Handle(h2), ConstTemplate::Handle(h3)) if h1 == h2 && h2 == h3 => {
+    match &vnode_tpl.offset_template {
+        ConstTemplate::Handle(h2) => {
+            return objs[*h2 as usize].clone();
+        },
+        _ => ()
+    };
+
+    let space = match build_value(&vnode_tpl.space_template, pc, bit_len, objs) {
         VarnodeValue::String(name) => name.clone(),
         VarnodeValue::Op(op) => op.space.clone(),
+        VarnodeValue::Int(0) => "DUMMY".to_string(),
         _ => panic!(),
     };
 
-    let size = match build_value(&vnode_tpl.size_template, pc, bit_len, varnodes) {
+    let size = match build_value(&vnode_tpl.size_template, pc, bit_len, objs) {
         VarnodeValue::Int(sz) => sz,
         VarnodeValue::Op(op) => op.size,
         _ => panic!(),
     };
 
-    let offset = match build_value(&vnode_tpl.offset_template, pc, bit_len, varnodes) {
+    let offset = match build_value(&vnode_tpl.offset_template, pc, bit_len, objs) {
         VarnodeValue::Int(off) => off,
         VarnodeValue::Op(op) => {
             if space == "const" {
@@ -2410,105 +2462,104 @@ fn build_varnode<'a>(
         _ => None,
     };
 
-    Varnode {
+    PcodeObject::Varnode(Varnode {
         name: name,
         space: space.to_owned(),
         offset: offset,
         size: size,
-    }
+    })
 }
 
 fn build_pcodeop<'a>(
-    seq: SeqNum,
+    mut seq: SeqNum,
     bit_len: usize,
     op_tpl: &'a OpTemplate,
-    varnodes: &'a Vec<Varnode>,
+    objs: &'a Vec<PcodeObject>,
     spaces: &'a HashMap<String, u64>,
     varnode_map: &'a HashMap<(u64, u64), String>,
-) -> PcodeOp {
+) -> Vec<PcodeOp> {
     let pc = seq.pc.offset;
+    let mut opcode = OpCode::from_str(op_tpl.code.as_str());
+    let mut ops = vec![];
+
+    let mut inputs: Vec<Varnode> = op_tpl
+        .inputs
+        .iter()
+        .map(|tpl| {
+            match build_varnode(&tpl, pc, bit_len, objs, spaces, varnode_map) {
+                PcodeObject::Handle(input_handle) => {
+                    if input_handle.needs_resolving() {
+                        ops.push(PcodeOp {
+                            seq: seq.clone(),
+                            opcode: OpCode::Load,
+                            inputs: vec![Varnode::dummy(), input_handle.varnode.clone()],
+                            output: Some(input_handle.indirect.clone()),
+                        });
+
+                        seq = seq.next();
+                        input_handle.indirect.clone()
+                    } else {
+                        input_handle.varnode.clone()
+                    }
+                },
+                PcodeObject::Varnode(input_varnode) => {
+                    input_varnode.clone()
+                },
+                _ => Varnode::dummy(),
+            }
+        })
+        .collect();
+
+    let output = op_tpl
+        .output
+        .as_ref()
+        .map(|tpl| {
+            match build_varnode(&tpl, pc, bit_len, objs, spaces, varnode_map) {
+                PcodeObject::Handle(output_handle) => {
+                    if output_handle.needs_resolving() {
+                        ops.push(PcodeOp {
+                            seq: seq.clone(),
+                            opcode: OpCode::Copy,
+                            inputs: inputs.clone(),
+                            output: Some(output_handle.varnode.clone()),
+                        });
+
+                        seq = seq.next();
+                        opcode = OpCode::Store;
+                        inputs = vec![Varnode::dummy(), output_handle.indirect.clone(), output_handle.varnode.clone()];
+                        None
+                    } else {
+                        Some(output_handle.varnode.clone())
+                    }
+                },
+                PcodeObject::Varnode(output_vnode) => {
+                    Some(output_vnode.clone())
+                },
+                _ => Some(Varnode::dummy()),
+            }
+        }).flatten();
+
 
     let op = PcodeOp {
         seq: seq,
-        opcode: OpCode::from_str(op_tpl.code.as_str()),
-        inputs: op_tpl
-            .inputs
-            .iter()
-            .map(|tpl| build_varnode(&tpl, pc, bit_len, varnodes, spaces, varnode_map))
-            .collect(),
-        output: op_tpl
-            .output
-            .as_ref()
-            .map(|tpl| build_varnode(&tpl, pc, bit_len, varnodes, spaces, varnode_map)),
+        opcode: opcode,
+        inputs: inputs,
+        output: output,
     };
 
-    if op.opcode == OpCode::Copy && op.output.as_ref().map(|o| o.space == "ram").unwrap_or(false) {
-        let out = op.output.unwrap();
-
-        PcodeOp {
-            seq: op.seq,
-            opcode: OpCode::Store,
-            inputs: vec![
-                Varnode {
-                    name: None,
-                    space: "DUMMY".to_string(), // TODO: Figure out what to put here.
-                    offset: 0,
-                    size: 0,
-                },
-                // FIXME: It's probably not generally true that these are from the unique space
-                //        but fixing will require properly dealing with handles.
-                Varnode { 
-                    name: None,
-                    space: "unique".to_string(),
-                    offset: out.offset,
-                    size: out.size,
-                },
-                op.inputs[0].clone(),
-            ],
-            output: None,
-        }
-    } else if op.opcode == OpCode::Copy && op.inputs[0].space == "ram" {
-        PcodeOp {
-            seq: op.seq,
-            opcode: OpCode::Load,
-            inputs: vec![
-                Varnode {
-                    name: None,
-                    space: "DUMMY".to_string(), // TODO: Same thing.
-                    offset: 0,
-                    size: 0,
-                },
-                // FIXME: Same thing.
-                Varnode {
-                    name: None,
-                    space: "unique".to_string(),
-                    offset: op.inputs[0].offset,
-                    size: op.inputs[0].size,
-                }
-            ],
-            output: op.output,
-        }
-    } else if op.opcode == OpCode::IntAdd && op.inputs[1].is_negative() {
-        PcodeOp {
-            seq: op.seq,
-            opcode: OpCode::IntSub,
-            inputs: vec![op.inputs[0].clone(), op.inputs[1].negate()],
-            output: op.output.clone(),
-        }
-    } else {
-        op
-    }
+    ops.push(op);
+    ops
 }
 
-pub fn build_sym<'a>(
+pub fn _build_sym<'a>(
     matched_sym: &'a MatchedSymbol,
     pc: &Address,
     bit_len: usize,
     spaces: &'a HashMap<String, u64>,
     varnode_map: &'a HashMap<(u64, u64), String>,
-) -> (Vec<PcodeOp>, Option<Varnode>) {
+) -> (Vec<PcodeOp>, Option<PcodeObject>) {
     let mut built_pcodeops = vec![];
-    let mut built_varnodes = vec![];
+    let mut built_objects = vec![];
     let mut handle = None;
 
     let mut op_pcodeops = vec![];
@@ -2525,42 +2576,36 @@ pub fn build_sym<'a>(
                         _ => None,
                     };
 
-                    let varnode = Varnode {
+                    let varnode = PcodeObject::Varnode(Varnode {
                         name: name.map(|x| x.to_string()),
                         space: vnode.space.to_owned(),
                         offset: vnode.offset,
                         size: vnode.size,
-                    };
+                    });
 
                     op_handle = Some(varnode);
                 }
             }
             else if let MatchedSymbol::Literal((val, size)) = op {
-                let varnode = Varnode {
+                let varnode = PcodeObject::Varnode(Varnode {
                     name: None,
                     space: "const".to_owned(),
                     offset: *val as u64,
                     size: *size as u64,
-                };
+                });
 
                 op_handle = Some(varnode);
             } else if let MatchedSymbol::Constructor(_) = op {
-                (op_ops, op_handle) = build_sym(op, pc, bit_len, spaces, varnode_map);
+                (op_ops, op_handle) = _build_sym(op, pc, bit_len, spaces, varnode_map);
             }
 
             op_pcodeops.push(op_ops);
 
             if let Some(handle) = op_handle {
-                built_varnodes.push(handle);
+                built_objects.push(handle);
             } else {
                 // NOTE: We need a dummy handle for the operand indices to line up??
-                // built_varnodes.push(Handle::Dummy);
-                built_varnodes.push(Varnode {
-                    name: None,
-                    space: "DUMMY".to_string(),
-                    offset: 0,
-                    size: 0,
-                });
+                built_objects.push(PcodeObject::Dummy);
             }
         }
 
@@ -2577,18 +2622,19 @@ pub fn build_sym<'a>(
                     // println!("{}", op_template);
                     let seq = SeqNum {
                         pc: pc.to_owned(),
-                        uniq: built_pcodeops.len() as u32,
+                        uniq: built_pcodeops.len() as i32,
                         order: 0,
                     };
-                    let pcodeop = build_pcodeop(
+                    let mut pcodeops = build_pcodeop(
                         seq,
                         bit_len,
                         &op_template,
-                        &built_varnodes,
+                        &built_objects,
                         spaces,
                         varnode_map,
                     );
-                    built_pcodeops.push(pcodeop)
+                    
+                    built_pcodeops.append(&mut pcodeops);
                 }
             }
         }
@@ -2597,20 +2643,46 @@ pub fn build_sym<'a>(
         for stmt in &template.statements {
             if let ConsTemplate::Handle(handle_template) = stmt {
                 let my_handle = build_handle(
-                        &handle_template,
-                        pc.offset,
-                        bit_len,
-                        &built_varnodes,
-                        spaces,
-                        varnode_map,
+                    &handle_template,
+                    pc.offset,
+                    bit_len,
+                    &built_objects,
+                    spaces,
+                    varnode_map,
+                    built_pcodeops.last().map(|op| &op.seq).unwrap_or(&SeqNum {
+                        pc: pc.to_owned(),
+                        uniq: -1,
+                        order: 0,
+                    }),
                 );
 
+                // println!("{} {} {:?}", handle_template, my_handle, built_pcodeops);
                 handle = Some(my_handle);
             }
         }
     }
 
     (built_pcodeops, handle)
+}
+
+pub fn build_sym<'a>(
+    matched_sym: &'a MatchedSymbol,
+    pc: &Address,
+    bit_len: usize,
+    spaces: &'a HashMap<String, u64>,
+    varnode_map: &'a HashMap<(u64, u64), String>,
+) -> Vec<PcodeOp> {
+    let (mut ops, _) = _build_sym(matched_sym, pc, bit_len, spaces, varnode_map);
+
+    while let Some(op) = ops.last().as_ref() {
+        if op.opcode == OpCode::Load && op.output.as_ref().unwrap().space == "unique" {
+            let _ = ops.pop();
+        } else {
+            break;
+        }
+    }
+
+    ops
 }
 
 fn _build_cmd_text(cmd: &PrintCommand, operands: &Vec<MatchedSymbol>, text: &mut String) {

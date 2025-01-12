@@ -17,6 +17,7 @@ use std::string::FromUtf8Error;
 use std::env;
 use std::fs::{self, File};
 use std::io::Write;
+use std::time::Instant;
 
 // const FILE_BYTES: &[u8] = include_bytes!("/Users/samlerner/Projects/cracks/roots/Payload/Random Roots.app/Random Roots");
 const FILE_BYTES: &[u8] = include_bytes!("/Users/samlerner/Projects/cracks/scitools/understand_x64");
@@ -57,8 +58,9 @@ fn main() {
     let buf = &FILE_BYTES[0xe070..0x1cd72e5];
     let orig_pc = 0x10000e070;
 
-    let buf = &buf[(0x10002497c - orig_pc)..(0x10002497c - orig_pc + 0x10)];
-    let orig_pc = 0x10002497c;
+    // let a = 0x10000e084;
+    // let buf = &buf[(a - orig_pc)..(a - orig_pc + 4)];
+    // let orig_pc = a;
 
     // let buf = &FILE_BYTES[0xa33f0..0xb7e38];
     // let orig_pc = 0x1000a33f0;
@@ -67,6 +69,7 @@ fn main() {
     let mut bits_consumed = 0;
 
     let mut file = File::create("insns.txt").unwrap();
+    let start = Instant::now();
 
     while bits_consumed < buf.len() * 8 {
         let pc = Address {
@@ -98,7 +101,7 @@ fn main() {
 
                 let asm = build_text(&matched_symbol);
 
-                let (pcodeops, _) = build_sym(
+                let pcodeops = build_sym(
                     &matched_symbol,
                     &pc,
                     num_bits,
@@ -106,9 +109,13 @@ fn main() {
                     &lang.varnode_map,
                 );
 
-                println!("0x{:x} {}: {}", pc.offset, asm, num_bits);
+                // println!("0x{:x} {}: {}", pc.offset, asm, num_bits);
 
-                writeln!(file, "0x{:x}, {}, {}, {}", pc.offset, asm, num_bits / 8, pcodeops.len());
+                // for op in &pcodeops {
+                //     println!("    {}", op);
+                // }
+
+                writeln!(file, "0x{:x} ~~ {} ~~ {} ~~ {}", pc.offset, asm, num_bits / 8, pcodeops.len());
 
                 for op in &pcodeops {
                     writeln!(file, "    {}", op);
@@ -124,4 +131,6 @@ fn main() {
         // println!("\nInstruction took {} bits", num_bits);
         bits_consumed += num_bits;
     }
+
+    // println!("Took {}s to complete", start.elapsed().as_secs());
 }

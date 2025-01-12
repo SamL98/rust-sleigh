@@ -9,14 +9,23 @@ use std::clone::Clone;
 use std::fmt;
 
 impl Varnode{
+    pub fn dummy() -> Self {
+        Self {
+            name: None,
+            space: "DUMMY".to_string(),
+            offset: 0,
+            size: 0,
+        }
+    }
+
     fn to_string(&self) -> String {
         match &self.name {
             Some(name) => name.to_owned(),
             None => match self.space.as_str() {
                 "unique" => format!("U{:x}:{}", self.offset, self.size),
-                "const" => format!("{:x}:{}", self.offset, self.size),
-                "register" => format!("{:x}:{}", self.offset, self.size), // FIXME
-                "ram" => format!("[ram]{:x}:{}", self.offset, self.size),
+                "const" => format!("0x{:x}:{}", self.offset, self.size),
+                "register" => format!("R{:x}:{}", self.offset, self.size), // FIXME
+                "ram" => format!("[ram]0x{:x}:{}", self.offset, self.size),
                 "DUMMY" => "DUMMY".to_string(),
                 _ => panic!()
             }

@@ -11,7 +11,7 @@ pub struct Address {
 #[derive(Eq, PartialEq, Hash, Clone)]
 pub struct SeqNum {
     pub pc: Address,
-    pub uniq: u32,
+    pub uniq: i32,
     pub order: u32
 }
 
