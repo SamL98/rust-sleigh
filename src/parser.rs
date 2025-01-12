@@ -2543,6 +2543,8 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
         }
     }
 
+    // println!("{} {:?}", opcode, inputs);
+
     if !matches!(*opcode, OpCode::Store | OpCode::Call | OpCode::CallInd | OpCode::CallOther | OpCode::SubPiece) {
         let output_size = output.as_ref().map(|o| o.size).unwrap_or(0);
 
@@ -2554,6 +2556,14 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
 
         for (i, input) in inputs.iter_mut().enumerate() {
             if !(i == 1 && *opcode == OpCode::SubPiece) && !(i == 1 && *opcode == OpCode::IntLeft) {
+                if input.space == "const" && input.size > 0 && *opcode != OpCode::IntSub {
+                    let shift = 64 - input.size * 8;
+                    input.offset = (((input.offset << shift) as i64) >> shift) as u64;
+
+                    let shift = 64 - max_sz * 8;
+                    input.offset = (input.offset << shift) >> shift;
+                }
+
                 input.size = max_sz;
             }
         }
@@ -2836,7 +2846,8 @@ pub fn _build_text(matched_sym: &MatchedSymbol, text: &mut String) {
             }
         },
         MatchedSymbol::Literal((val, sz)) => {
-            let (v, sign_str) = if text.ends_with(" + ") { // HACK
+            // let (v, sign_str) = if text.ends_with(" + ") { // HACK
+            let (v, sign_str) = if true {
                 match sz {
                     1 if (*val >> 7) != 0 => ((*val ^ 0xff) as u64 + 1, "-"),
                     2 if (*val >> 15) != 0 => ((*val ^ 0xffff) as u64 + 1, "-"),
