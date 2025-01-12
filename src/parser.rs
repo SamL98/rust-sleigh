@@ -2426,8 +2426,12 @@ fn build_varnode<'a>(
     spaces: &'a HashMap<String, u64>,
     varnode_map: &'a HashMap<(u64, u64), String>,
 ) -> PcodeObject {
+    // println!("{} {:?}", vnode_tpl, objs);
+
     let (space, mut offset, size) = match &vnode_tpl.offset_template {
         ConstTemplate::Handle((h2, expr)) => {
+            // println!("{:?}", objs[*h2 as usize]);
+
             let (spc, mut off, sz) = match &objs[*h2 as usize] {
                 PcodeObject::Varnode(vn) => {
                     let size = if !matches!(vnode_tpl.space_template, ConstTemplate::Handle(_)) {
@@ -2440,7 +2444,18 @@ fn build_varnode<'a>(
                         }
                     };
 
-                    (vn.space.clone(), vn.offset, size)
+                    let space = if matches!(vnode_tpl.size_template, ConstTemplate::Handle(_)) && size == 0 {
+                        match build_value(&vnode_tpl.space_template, pc, bit_len, objs, varnode_map) {
+                            VarnodeValue::String(name) => name.clone(),
+                            VarnodeValue::Op(op) => op.space.clone(),
+                            VarnodeValue::Int(0) => "DUMMY".to_string(),
+                            _ => panic!(),
+                        }
+                    } else {
+                        vn.space.clone()
+                    };
+
+                    (space, vn.offset, size)
                 },
                 PcodeObject::Handle(h) if h.exported.space != "register" && 
                     h.exported.offset == 0 && 
@@ -2567,15 +2582,24 @@ fn build_pcodeop<'a>(
             match build_varnode(&tpl, pc, bit_len, objs, spaces, varnode_map) {
                 PcodeObject::Handle(input_handle) => {
                     if input_handle.needs_resolving() {
-                        ops.push(PcodeOp {
-                            seq: seq.clone(),
-                            opcode: OpCode::Load,
-                            inputs: vec![Varnode::dummy(), input_handle.varnode.clone()],
-                            output: Some(input_handle.indirect.clone()),
-                        });
+                        if input_handle.varnode.size == 0 {
+                            Varnode {
+                                name: input_handle.varnode.name.clone(),
+                                space: "ram".to_string(),
+                                offset: input_handle.varnode.offset,
+                                size: input_handle.indirect.size,
+                            }
+                        } else {
+                            ops.push(PcodeOp {
+                                seq: seq.clone(),
+                                opcode: OpCode::Load,
+                                inputs: vec![Varnode::dummy(), input_handle.varnode.clone()],
+                                output: Some(input_handle.indirect.clone()),
+                            });
 
-                        seq = seq.next();
-                        input_handle.indirect.clone()
+                            seq = seq.next();
+                            input_handle.indirect.clone()
+                        }
                     } else {
                         input_handle.varnode.clone()
                     }
@@ -2791,12 +2815,16 @@ pub fn _build_text(matched_sym: &MatchedSymbol, text: &mut String) {
             }
         },
         MatchedSymbol::Literal((val, sz)) => {
-            let (v, sign_str) = match sz {
-                1 if (*val >> 7) != 0 => ((*val ^ 0xff) as u64 + 1, "-"),
-                2 if (*val >> 15) != 0 => ((*val ^ 0xffff) as u64 + 1, "-"),
-                4 if (*val >> 31) != 0 => ((*val ^ 0xffffffff) as u64 + 1, "-"),
-                8 if (*val >> 63) != 0 => ((*val ^ 0xffffffffffffffffu64 as i64) as u64 + 1, "-"),
-                _ => (*val as u64, ""),
+            let (v, sign_str) = if text.ends_with(" + ") { // HACK
+                match sz {
+                    1 if (*val >> 7) != 0 => ((*val ^ 0xff) as u64 + 1, "-"),
+                    2 if (*val >> 15) != 0 => ((*val ^ 0xffff) as u64 + 1, "-"),
+                    4 if (*val >> 31) != 0 => ((*val ^ 0xffffffff) as u64 + 1, "-"),
+                    8 if (*val >> 63) != 0 => ((*val ^ 0xffffffffffffffffu64 as i64) as u64 + 1, "-"),
+                    _ => (*val as u64, ""),
+                }
+            } else {
+                (*val as u64, "")
             };
 
             text.push_str(format!("{}0x{:x}", sign_str, v).as_str());
