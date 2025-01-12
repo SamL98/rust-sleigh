@@ -2553,6 +2553,12 @@ fn build_pcodeop<'a>(
             }
         }).flatten();
 
+    // TODO: Add more cases.
+    if opcode == OpCode::IntAdd && inputs[0].is_negative() {
+        println!("{}", inputs[0]);
+        opcode = OpCode::IntSub;
+        inputs[0] = inputs[0].negate();
+    }
 
     let op = PcodeOp {
         seq: seq,
