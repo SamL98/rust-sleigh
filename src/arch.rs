@@ -138,7 +138,7 @@ impl Architecture {
 
 pub fn get_language(arch_name: &str, language_id: &str) -> Option<Language> {
     // let mut ghidra_root_envvar = ".".to_string();
-    let ghidra_root_envvar = env::var("GHIDRA_PATH").expect("$GHIDRA_PATH not set");
+    let ghidra_root_envvar = env::var("GHIDRA_PATH").unwrap_or("..".to_string());
 
     let ghidra_root_path = Path::new(&ghidra_root_envvar);
 
