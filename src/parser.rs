@@ -794,7 +794,7 @@ fn const_template(input: &str) -> Res<&str, ConstTemplate> {
             "handle" => {
                 let expr = if attrs.len() > 2 && attrs[2].0 == "s" {
                     match attrs[2].1 {
-                        "offset_plus" => Some(HandleExpr::OffsetPlus(u32hex(attrs[3].1) & 0xff)),
+                        "offset_plus" => Some(HandleExpr::OffsetPlus(u32hex(attrs[3].1) & 0xffff)),
                         _ => None,
                     }
                 } else {
@@ -2039,11 +2039,12 @@ fn resolve_operands<'a>(
 ) -> (Vec<(MatchedSymbol<'a>, Option<FixupType>)>, usize, bool) {
     let mut matched_ops = vec![];
     let mut bit_end: usize = 0;
+    let mut total_bit_end: usize = 0;
     let mut ok = true;
 
     for op_idx in &ct.operands {
         let operand = get_operand(&op_idx, &symbols);
-        // println!("{:?}", operand);
+        // println!("{:?} {} {:x?}", operand, bit_end, &words[..4]);
 
         match &operand.expr {
             Some(Expr::Field(Field::Token(expr))) => {
@@ -2064,8 +2065,10 @@ fn resolve_operands<'a>(
                 matched_ops.push((MatchedSymbol::Literal((val, num_bytes)), None));
                 // let prev_bit_end = bit_end;
                 let byte_start = (bit_end + (expr.start_byte as usize)) / 8; // FIXME
-                // bit_end = bit_end.max(((bit_end as u32) / 8 * 8 + expr.start_byte * 8 + size) as usize);
-                bit_end = bit_end.max(byte_start * 8 + size as usize);
+                // bit_end = bit_end.max(((size as usize) / 8 * 8 + byte_start * 8) as usize);
+                // bit_end = bit_end.max(byte_start * 8 + size as usize);
+                bit_end = bit_end.max(byte_start * 8);
+                total_bit_end = total_bit_end.max(byte_start * 8 + size as usize);
                 // println!("bit end is now {} {:?}, was {}", bit_end, expr, prev_bit_end);
             },
             Some(Expr::Field(Field::Context(expr))) => {
@@ -2113,8 +2116,12 @@ fn resolve_operands<'a>(
                     Some((matched_sym, sub_bit_end)) => {
                         let new_bit_end = bit_end.max((base * 8) as usize + sub_bit_end);
                         matched_ops.push((matched_sym, None));
-                        // println!("-- bit end is now {}, was {} {:?} {}", new_bit_end, bit_end, operand, sub_bit_end);
-                        bit_end = new_bit_end;
+                        // println!("-- bit end is now {}, was {} {:?} {} {}", new_bit_end, bit_end, operand, base, sub_bit_end);
+                        total_bit_end = new_bit_end;
+
+                        if operand.base == -1 {
+                            bit_end = total_bit_end;
+                        }
                     },
                     None => ok = false,
                 };
@@ -2123,7 +2130,7 @@ fn resolve_operands<'a>(
         }
     }
 
-    (matched_ops, bit_end, ok)
+    (matched_ops, bit_end.max(total_bit_end), ok)
 }
 
 pub fn _resolve_symbol<'a>(
@@ -2417,14 +2424,26 @@ fn build_varnode<'a>(
                         offset = (offset << shift) >> shift;
                     }
 
+                    // println!("5==> {} {:x} {}", space, offset, size);
                     (space, offset, size)
                 },
                 PcodeObject::Handle(h) if h.exported.space != "register" && 
                     h.exported.offset == 0 && 
-                    h.indirect.offset != 0 => (h.exported.space.clone(), h.varnode.offset, h.exported.size), // FIXME
-                PcodeObject::Handle(h) if !h.needs_resolving() => (h.varnode.space.clone(), h.varnode.offset, h.varnode.size),
+                    h.indirect.offset != 0 => {
+                    // println!("4==> {} {:x} {}", h.exported.space, h.varnode.offset, h.exported.size);
+                    (h.exported.space.clone(), h.varnode.offset, h.exported.size) // FIXME
+                }
+                PcodeObject::Handle(h) if !h.needs_resolving() => {
+                    // println!("3==> {} {:x} {}", h.varnode.space, h.varnode.offset, h.varnode.size);
+                    (h.varnode.space.clone(), h.varnode.offset, h.varnode.size)
+                },
+                PcodeObject::Handle(h) if h.varnode.size == 0 && h.exported.size == 0 && h.exported.space == "ram" => {
+                    // println!("2==> {} {:x} {}", h.exported.space, h.exported.offset, h.indirect.size);
+                    (h.exported.space.clone(), h.exported.offset, h.indirect.size)
+                },
                 _ => {
                     // FIXME: Make this nicer.
+                    // println!("==> {}", objs[*h2 as usize]);
                     return objs[*h2 as usize].clone();
                 }
             };
@@ -2623,10 +2642,6 @@ fn build_pcodeop<'a>(
                             src.size = 8; // FIXME
                             src.space = input_handle.exported.space.clone();
 
-                            // if &src.space == "ram" {
-                            //     println!("{:?}", input_handle);
-                            // }
-
                             ops.push(PcodeOp {
                                 seq: seq.clone(),
                                 opcode: OpCode::Load,
@@ -2672,6 +2687,11 @@ fn build_pcodeop<'a>(
                                 inputs: inputs.clone(),
                                 output: output,
                             });
+
+                            // HACK: I don't know what I'm doing, but I guess this is right.
+                            if output_handle.varnode.space == "ram" {
+                                dst.offset = output_handle.varnode.offset;
+                            }
 
                             seq = seq.next();
                             opcode = OpCode::Store;
