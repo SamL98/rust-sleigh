@@ -1,5 +1,4 @@
 use fxhash::{FxHashMap, FxHashSet};
-use libc::kCCDecodeError;
 
 use super::context::RegMap;
 use super::pcode::PcodeIface;
