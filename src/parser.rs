@@ -2360,7 +2360,7 @@ fn build_varnode<'a>(
 
             let (spc, mut off, sz) = match &objs[*h2 as usize] {
                 PcodeObject::Varnode(vn) => {
-                    let size = if !matches!(vnode_tpl.space_template, ConstTemplate::Handle(_)) {
+                    let mut size = if !matches!(vnode_tpl.space_template, ConstTemplate::Handle(_)) {//&& vn.space != "const" {
                         vn.size
                     } else {
                         match build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map) {
@@ -2381,10 +2381,18 @@ fn build_varnode<'a>(
                         vn.space.clone()
                     };
 
+                    if vn.space == "const" && size > 0 {
+                        size = match build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map) {
+                            VarnodeValue::Int(sz) => sz,
+                            VarnodeValue::Op(op) => op.size,
+                            _ => panic!("Unknown size value for {}", vnode_tpl),
+                        };
+                    }
+
                     let mut offset = vn.offset;
 
                     // TODO: Figure out if 4-byte moves into 8-byte register sign extends or zero extends.
-                    if &space == "const" && size > vn.size {
+                    if &space == "const" && size > vn.size {//&& vn.size > 0 && size <= 8 {
                         let shift = 64 - vn.size * 8;
                         offset = (((offset << shift) as i64) >> shift) as u64;
 

@@ -131,4 +131,5 @@ while not (at_eof(test_f) or at_eof(gt_f)):
         pprint(test_insn)
         print()
         pprint(gt_insn)
-        break
+        print()
+        # break
