@@ -28,8 +28,7 @@ use {
     // std::fs::File,
 };
 
-static SLEIGH_PATH: &'static str =
-    "/Users/samlerner/ghidra_10.3_PUBLIC/Ghidra/Processors/x86/data/languages";
+static SLEIGH_PATH: &'static str = "./Ghidra/Processors/x86/data/languages";
 
 pub type Res<T, U> = IResult<T, U, Error<T>>;
 
