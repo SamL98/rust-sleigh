@@ -3,7 +3,7 @@ project(csleigh)
 #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O0 -glldb")
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -glldb")
 # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wc++17-extensions")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wc++17-extensions -g")
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wc++17-extensions -g")
 
 option(BUILD_SHARED_LIBS "Build using shared libraries" ON)
 
