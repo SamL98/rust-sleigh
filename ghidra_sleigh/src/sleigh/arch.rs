@@ -279,7 +279,7 @@ impl Language {
 }
 
 pub fn get_context<'a>(arch_name: &'a str, language_id: &'a str, compiler_id: &'a str) -> Option<Context> {
-    let ghidra_root_envvar = env::var("GHIDRA_PATH").unwrap_or("../../..".to_string());
+    let ghidra_root_envvar = ".".to_string();
     let ghidra_root_path = Path::new(&ghidra_root_envvar);
 
     let arch_path = ghidra_root_path
