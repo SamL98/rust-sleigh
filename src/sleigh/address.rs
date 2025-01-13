@@ -23,6 +23,13 @@ impl Address {
     pub fn to_string(&self) -> String {
         format!("0x{:x}", self.offset)
     }
+
+    // pub fn adding(&self, addend: u64) -> Address {
+    //     return Address {
+    //         space: self.space.clone(),
+    //         offset: self.offset + addend
+    //     };
+    // }
 }
 
 impl fmt::Debug for Address {

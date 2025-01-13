@@ -2,9 +2,11 @@
 *.rkt
 *.lock
 .*.swp
+.*.swo
 test*
 foo
 /Processors/
 /pkg/
 *.svg
 profile.json
+/ghidra_sleigh/target/

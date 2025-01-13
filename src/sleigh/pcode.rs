@@ -44,7 +44,7 @@ impl PcodeOp {
                                                                   .collect::<Vec<String>>()
                                                                   .join(", ")),
             &OpCode::CBranch => format!("if ({}) goto {}", self.inputs[1], self.inputs[0]),
-            &OpCode::Return => format!("return {}", self.inputs[1..].iter()
+            &OpCode::Return => format!("return {}", self.inputs.iter()
                                                            .map(|x| format!("{}", x))
                                                            .collect::<Vec<String>>()
                                                            .join(", ")),

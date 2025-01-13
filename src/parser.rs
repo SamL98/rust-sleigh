@@ -2714,6 +2714,10 @@ fn build_pcodeop<'a>(
 
     fix_sizes(&mut opcode, &mut inputs, &mut output, varnode_map);
 
+    if opcode == OpCode::Return {
+        inputs.remove(0);
+    }
+
     let op = PcodeOp {
         seq: seq,
         opcode: opcode,
