@@ -13,3 +13,4 @@ bitvec = "1"
 glob = "0.3.1"
 elementtree = "1.2.3"
 lazy_static = "1.4.0"
+clap = { version = "4.5.26", features = ["derive"] }

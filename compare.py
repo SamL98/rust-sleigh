@@ -63,14 +63,6 @@ def compare(a, b):
     asm2 = b[1]
     asm1 = fix_signs(asm1)
     asm2 = fix_signs(asm2)
-    # asm1 = asm1.replace('0xffffffffffffffff', '-0x1')
-    # asm2 = asm2.replace('0xffffffffffffffff', '-0x1')
-    # asm1 = asm1.replace('0xffffffff', '-0x1')
-    # asm2 = asm2.replace('0xffffffff', '-0x1')
-    # asm1 = asm1.replace('0xff', '-0x1')
-    # asm2 = asm2.replace('0xff', '-0x1')
-    # asm1 = asm1.replace('0xfffe', '-0x2')
-    # asm2 = asm2.replace('0xfffe', '-0x2')
 
     if asm1 != asm2:
         print('Assembly does not match')

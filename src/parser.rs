@@ -486,19 +486,19 @@ fn to_bool(s: &str) -> bool {
     s.parse::<bool>().unwrap()
 }
 
-fn u32hex(s: &str) -> u32 {
+pub fn u32hex(s: &str) -> u32 {
     u32::from_str_radix(&s[2..], 16).unwrap()
 }
 
-fn u64hex(s: &str) -> u64 {
+pub fn u64hex(s: &str) -> u64 {
     u64::from_str_radix(&s[2..], 16).unwrap()
 }
 
-fn u64dec(s: &str) -> u64 {
+pub fn u64dec(s: &str) -> u64 {
     u64::from_str_radix(&s, 10).unwrap()
 }
 
-fn u32dec(s: &str) -> u32 {
+pub fn u32dec(s: &str) -> u32 {
     u32::from_str_radix(&s, 10).unwrap()
 }
 
@@ -1699,7 +1699,7 @@ fn match_pattern(pattern: &DecisionPattern, insn_words: &[u8], ctx_words: &Vec<u
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum MatchedSymbol<'a> {
-    Constructor((&'a Constructor, Vec<MatchedSymbol<'a>>)),
+    Constructor((&'a Constructor, Vec<(MatchedSymbol<'a>, Option<FixupType>)>)),
     Symbol(&'a Symbol),
     Literal((i64, usize)),
     String(&'a str),
@@ -1920,20 +1920,21 @@ fn resolve_valuemap<'a>(
     }
 }
 
-enum FixupType {
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum FixupType {
     Start, End,
 }
 
 fn evaluate_expr(
     expr: &Expr,
     ctx: &Vec<u32>,
-    operands: &Vec<MatchedSymbol>,
+    operands: &Vec<(MatchedSymbol, Option<FixupType>)>,
     reg_space: &BitVec<u8, Msb0>,
 ) -> (i64, usize, Option<FixupType>) {
     match expr {
         Expr::Const(val) => (*val, 8, None), // FIXME
         Expr::Operand(op_expr) if (op_expr.idx as usize) < operands.len() => {
-            let op = &operands[op_expr.idx as usize];
+            let op = &operands[op_expr.idx as usize].0;
 
             if let MatchedSymbol::Literal((val, sz)) = op {
                 let signed_val = match *sz {
@@ -2035,9 +2036,8 @@ fn resolve_operands<'a>(
     ctx: &mut Vec<u32>,
     reg_space: &BitVec<u8, Msb0>,
     debug: &mut ResolverDebug,
-) -> (Vec<MatchedSymbol<'a>>, Vec<(usize, FixupType)>, usize, bool) {
+) -> (Vec<(MatchedSymbol<'a>, Option<FixupType>)>, usize, bool) {
     let mut matched_ops = vec![];
-    let mut fixups = vec![];
     let mut bit_end: usize = 0;
     let mut ok = true;
 
@@ -2061,7 +2061,7 @@ fn resolve_operands<'a>(
                 let mask = 0xffffffffffffffff_u64 >> ((8 - num_bytes) * 8);
                 let val = ((word >> expr.start_bit) & mask) as i64;
 
-                matched_ops.push(MatchedSymbol::Literal((val, num_bytes)));
+                matched_ops.push((MatchedSymbol::Literal((val, num_bytes)), None));
                 // let prev_bit_end = bit_end;
                 let byte_start = (bit_end + (expr.start_byte as usize)) / 8; // FIXME
                 // bit_end = bit_end.max(((bit_end as u32) / 8 * 8 + expr.start_byte * 8 + size) as usize);
@@ -2073,7 +2073,7 @@ fn resolve_operands<'a>(
                 let bit_start = 32 - (expr.start_bit + size);
                 let val = (ctx[(expr.start_bit / 32) as usize] >> bit_start) & ((1 << size) - 1);
                 let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
-                matched_ops.push(MatchedSymbol::Literal((val as i64, num_bytes)));
+                matched_ops.push((MatchedSymbol::Literal((val as i64, num_bytes)), None));
             },
             Some(
                 Expr::Add(_) | Expr::And(_) |
@@ -2082,15 +2082,11 @@ fn resolve_operands<'a>(
                 Expr::Or(_) | Expr::Mult(_) | Expr::Minus(_)
             ) => {
                 let (val, sz, fixup_type) = evaluate_expr(operand.expr.as_ref().unwrap(), ctx, &matched_ops, reg_space);
-                matched_ops.push(MatchedSymbol::Literal((val, sz)));
-
-                if let Some(t) = fixup_type {
-                    fixups.push((matched_ops.len() - 1, t));
-                }
+                matched_ops.push((MatchedSymbol::Literal((val, sz)), fixup_type));
             },
             Some(Expr::Const(val)) => {
                 // TODO: Fix size.
-                matched_ops.push(MatchedSymbol::Literal((*val, 8)));
+                matched_ops.push((MatchedSymbol::Literal((*val, 8)), None));
             }
             None => {
                 let op_sym = &symbols[&operand.subsym];
@@ -2113,10 +2109,10 @@ fn resolve_operands<'a>(
                     ctx[op.i as usize] = (existing & !mask) | (v & mask);
                 }
 
-                match resolve_symbol(&words[base..], pc + base as u64, op_sym, symbols, ctx, reg_space, debug) {
+                match _resolve_symbol(&words[base..], pc + base as u64, op_sym, symbols, ctx, reg_space, debug) {
                     Some((matched_sym, sub_bit_end)) => {
                         let new_bit_end = bit_end.max((base * 8) as usize + sub_bit_end);
-                        matched_ops.push(matched_sym);
+                        matched_ops.push((matched_sym, None));
                         // println!("-- bit end is now {}, was {} {:?} {}", new_bit_end, bit_end, operand, sub_bit_end);
                         bit_end = new_bit_end;
                     },
@@ -2127,10 +2123,10 @@ fn resolve_operands<'a>(
         }
     }
 
-    (matched_ops, fixups, bit_end, ok)
+    (matched_ops, bit_end, ok)
 }
 
-pub fn resolve_symbol<'a>(
+pub fn _resolve_symbol<'a>(
     words: &[u8],
     pc: u64,
     sym: &'a Symbol,
@@ -2144,22 +2140,8 @@ pub fn resolve_symbol<'a>(
         SymbolBody::Subtable(table) => {
             match resolve_constructor(sym.id, words, table, symbols, ctx, debug) {
                 Some((ct, bit_end)) => {
-                    // println!("ct bit end: {}", bit_end);
-                    // let (mut operands, fixups, ops_bit_end, ok) = resolve_operands(&words[(bit_end / 8)..], pc, ct, symbols, ctx, reg_space, debug);
-                    let (mut operands, fixups, ops_bit_end, ok) = resolve_operands(words, pc, ct, symbols, ctx, reg_space, debug);
+                    let (operands, ops_bit_end, ok) = resolve_operands(words, pc, ct, symbols, ctx, reg_space, debug);
                     let bit_len = bit_end.max(ops_bit_end);
-                    // let bit_len = bit_end + ops_bit_end;
-                    // println!("{} {}", bit_end, ops_bit_end);
-
-                    for (idx, t) in fixups {
-                        if let MatchedSymbol::Literal((val, sz)) = operands[idx].clone() {
-                            let new_val = match t {
-                                FixupType::Start => val + pc as i64,
-                                FixupType::End => val + (pc as usize + bit_len / 8) as i64,
-                            };
-                            operands[idx] = MatchedSymbol::Literal((new_val, sz));
-                        }
-                    }
 
                     if ok {
                         Some((MatchedSymbol::Constructor((ct, operands)), bit_len))
@@ -2183,6 +2165,41 @@ pub fn resolve_symbol<'a>(
             resolve_nametab(words, nametab, symbols, ctx)
         },
         _ => todo!("{:?}", sym.body),
+    }
+}
+
+fn apply_fixups(matched_sym: &mut MatchedSymbol, fixup_type: &Option<FixupType>, pc: u64, bit_len: usize) {
+    match matched_sym {
+        MatchedSymbol::Constructor((_, operands)) => {
+            for (oper, t) in operands.iter_mut() {
+                apply_fixups(oper, t, pc, bit_len);
+            }
+        },
+        MatchedSymbol::Literal((val, _)) => {
+            *val = match fixup_type {
+                Some(FixupType::Start) => *val + pc as i64,
+                Some(FixupType::End) => *val + (pc as usize + bit_len / 8) as i64,
+                _ => *val,
+            };
+        },
+        _ => (),
+    }
+}
+
+pub fn resolve_symbol<'a>(
+    words: &[u8],
+    pc: u64,
+    sym: &'a Symbol,
+    symbols: &'a HashMap<u32, Symbol>,
+    ctx: &mut Vec<u32>,
+    reg_space: &BitVec<u8, Msb0>,
+    debug: &mut ResolverDebug,
+) -> Option<(MatchedSymbol<'a>, usize)> {
+    if let Some((mut matched_sym, bit_len)) = _resolve_symbol(words, pc, sym, symbols, ctx, reg_space, debug) {
+        apply_fixups(&mut matched_sym, &None, pc, bit_len);
+        Some((matched_sym, bit_len))
+    } else {
+        None
     }
 }
 
@@ -2517,7 +2534,7 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
             sz = inputs.iter().map(|i| i.size).max().unwrap();
         }
 
-        if !matches!(*opcode, OpCode::Load | OpCode::IntSext | OpCode::IntZext) && !opcode.is_conditional() {
+        if !matches!(*opcode, OpCode::Load | OpCode::IntSext | OpCode::IntZext | OpCode::FloatInt2Float) && !opcode.is_conditional() {
             // max_sz = max_sz.max(output_size);
             if output.as_ref().map(|o| o.space == "register").unwrap_or(false) {
                 sz = output_size;
@@ -2695,7 +2712,7 @@ pub fn _build_sym<'a>(
     let mut op_pcodeops = vec![];
 
     if let MatchedSymbol::Constructor((ct, operands)) = &matched_sym {
-        for (_i, op) in operands.iter().enumerate() {
+        for (_i, (op, _)) in operands.iter().enumerate() {
             let mut op_ops = vec![];
             let mut op_handle = None;
 
@@ -2848,9 +2865,9 @@ pub fn build_sym<'a>(
     ops
 }
 
-fn _build_cmd_text(cmd: &PrintCommand, operands: &Vec<MatchedSymbol>, text: &mut String, ops: &Vec<PcodeOp>) {
+fn _build_cmd_text(cmd: &PrintCommand, operands: &Vec<(MatchedSymbol, Option<FixupType>)>, text: &mut String, ops: &Vec<PcodeOp>) {
     match cmd {
-        PrintCommand::Op(op_idx) => _build_text(&operands[*op_idx as usize], text, ops),
+        PrintCommand::Op(op_idx) => _build_text(&operands[*op_idx as usize].0, text, ops),
         PrintCommand::Piece(piece) => text.push_str(piece),
     }
 }
