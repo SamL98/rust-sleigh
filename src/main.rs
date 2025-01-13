@@ -33,7 +33,7 @@ struct Args {
 }
 
 // const FILE_BYTES: &[u8] = include_bytes!("/Users/samlerner/Projects/cracks/roots/Payload/Random Roots.app/Random Roots");
-const FILE_BYTES: &[u8] = include_bytes!("/Users/samlerner/Projects/cracks/scitools/understand_x64");
+const FILE_BYTES: &[u8] = include_bytes!("../test_assets/understand_x64");
 
 struct Disassembler<'a> {
     args: Args,
