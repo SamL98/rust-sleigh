@@ -2531,7 +2531,14 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
         }
 
         if sz == 0 {
-            sz = inputs.iter().map(|i| i.size).max().unwrap();
+            // TODO: Cleanup.
+            // sz = inputs.iter().map(|i| i.size).max().unwrap();
+
+            for (i, input) in inputs.iter().enumerate() {
+                if !(matches!(*opcode, OpCode::IntLeft | OpCode::IntRight | OpCode::IntSRight) && i == 1) {
+                    sz = sz.max(input.size);
+                }
+            }
         }
 
         if !matches!(*opcode, OpCode::Load | OpCode::IntSext | OpCode::IntZext | OpCode::FloatInt2Float) && !opcode.is_conditional() {
