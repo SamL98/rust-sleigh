@@ -45,7 +45,9 @@ def fix_signs(a):
         if l < len(fmts):
             fmt = fmts[l]
             n = st.unpack('<' + fmt.lower(), st.pack('<' + fmt, d))[0]
-            nums.append((d, n))
+
+            if s > 0 and a[s - 1] != '-':
+                nums.append((d, n))
 
         i = e
 
@@ -82,6 +84,8 @@ def compare(a, b):
         op2 = op2.replace('*RSP = 0x10000', '*RSP = 0x')
         op1 = op1.replace('*RSP = 0x1000', '*RSP = 0x')
         op2 = op2.replace('*RSP = 0x1000', '*RSP = 0x')
+        op1 = op1.replace('*RSP = 0x100', '*RSP = 0x')
+        op2 = op2.replace('*RSP = 0x100', '*RSP = 0x')
         op1 = op1.replace('0xff:1', '-0x1')
         op2 = op2.replace('0xff:1', '-0x1')
         op1 = op1.replace('0xffffffff:4', '-0x1')

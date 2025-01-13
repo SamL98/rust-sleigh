@@ -2830,35 +2830,27 @@ pub fn build_sym<'a>(
         }
     }
 
-    let mut labels = vec![];
-    let mut label_idxs = vec![];
+    let mut labels: HashMap<SeqNum, u64> = HashMap::default();
+    let mut label_idxs: HashMap<u64, usize> = HashMap::default();
 
     for (i, op) in ops.iter().enumerate() {
         if op.opcode == OpCode::Label {
-            labels.push(ops[i + 1].seq.clone());
-            label_idxs.push(0);
+            labels.insert(ops[i + 1].seq.clone(), op.inputs[0].offset);
         }
     }
 
     ops.retain(|op| op.opcode != OpCode::Label);
 
-    let mut lbl_idx = 0;
-
     for (i, op) in ops.iter().enumerate() {
-        if lbl_idx >= label_idxs.len() {
-            break;
-        }
-
-        if &op.seq == &labels[lbl_idx] {
-            label_idxs[lbl_idx] = i;
-            lbl_idx += 1;
+        if let Some(lbl_idx) = labels.get(&op.seq) {
+            label_idxs.insert(*lbl_idx, i);
         }
     }
 
     for (i, op) in ops.iter_mut().enumerate() {
         if (op.opcode == OpCode::Branch || op.opcode == OpCode::CBranch) && op.inputs[0].space == "const" {
-            let lbl_idx = op.inputs[0].offset as usize;
-            op.inputs[0].offset = (label_idxs[lbl_idx] - i) as u64;
+            let lbl_idx = op.inputs[0].offset;
+            op.inputs[0].offset = ((label_idxs[&lbl_idx] as i64 - i as i64) as u32) as u64;
         }
     }
 
