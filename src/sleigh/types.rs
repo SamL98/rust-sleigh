@@ -15,10 +15,20 @@ pub struct SeqNum {
     pub order: u32
 }
 
+#[repr(u8)]
+#[derive(Eq, PartialEq, Hash, Copy, Clone, Debug)]
+pub enum AddressSpace {
+    Const,
+    Unique,
+    Register,
+    Ram,
+    Dummy,
+}
+
 #[derive(Eq, PartialEq, Hash, Clone)]
 pub struct Varnode {
     pub name: Option<String>,
-    pub space: String,
+    pub space: AddressSpace,
     pub offset: u64,
     pub size: u64
 }

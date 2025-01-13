@@ -69,9 +69,9 @@ impl<'a> Iterator for DisassemblyIter<'a> {
             offset: (self.orig_pc as usize + self.bits_consumed / 8) as u64,
         };
 
-        // if pc.offset % 0x1000 == 0 {
-        //     println!("0x{:x} / 0x{:x}", pc.offset - orig_pc, buf.len());
-        // }
+        if pc.offset % 0x1000 == 0 {
+            println!("0x{:x} / 0x{:x}", pc.offset - self.orig_pc, self.data.len());
+        }
 
         let (rv, num_bits) = match self.disasm.disassemble_one(&self.data[self.bits_consumed / 8..], pc, &mut self.ctx.clone()) {
             Some(insn) => {

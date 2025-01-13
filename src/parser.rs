@@ -1,6 +1,6 @@
 use crate::arch::get_language;
 use crate::sleigh::opcode::OpCode;
-use crate::sleigh::types::{Address, PcodeOp, SeqNum, Varnode};
+use crate::sleigh::types::{Address, AddressSpace, PcodeOp, SeqNum, Varnode};
 
 extern crate bitvec;
 extern crate nom;
@@ -136,7 +136,7 @@ pub struct SymbolHead {
 pub struct VarnodeSym {
     pub name: String,
     pub scope: u32,
-    pub space: String,
+    pub space: AddressSpace,
     pub offset: u64,
     pub size: u64,
 }
@@ -1248,7 +1248,7 @@ fn varnode_sym(input: &str) -> Res<&str, Symbol> {
         let varnode = VarnodeSym {
             name: attrs[0].1.to_string(),
             scope: u32hex(attrs[2].1),
-            space: attrs[3].1.to_string(),
+            space: AddressSpace::from_str(attrs[3].1),
             offset: u64hex(attrs[4].1),
             size: u64dec(attrs[5].1),
         };
@@ -2227,6 +2227,7 @@ fn get_operand<'a>(id: &u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Operand {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum VarnodeValue {
+    Space(AddressSpace),
     String(String),
     Int(u64),
     Rel(u64),
@@ -2305,7 +2306,7 @@ fn build_value<'a>(
         ConstTemplate::Relative(idx) => VarnodeValue::Rel(*idx as u64),
         ConstTemplate::Start => VarnodeValue::Int(pc),
         ConstTemplate::Next => VarnodeValue::Int(pc + (bit_len / 8) as u64),
-        ConstTemplate::CurSpace => VarnodeValue::String("ram".to_string()), // FIXME
+        ConstTemplate::CurSpace => VarnodeValue::Space(AddressSpace::Ram), // FIXME
         ConstTemplate::CurSpaceSize => VarnodeValue::Int(8), // FIXME
     }
 }
@@ -2353,11 +2354,11 @@ fn build_handle<'a>(
             indirect: ind.clone(),
         };
 
-        // if vn.space == "ram" {
+        // if vn.space == AddressSpace::Ram {
         //     println!("{:?} {} {} {}", handle_tpl, vn, ex, ind);
         // }
 
-        if handle.needs_resolving() && ex.space != "const" {
+        if handle.needs_resolving() && ex.space != AddressSpace::Const {
             PcodeObject::Handle(handle)
         } else {
             PcodeObject::Varnode(vn.clone())
@@ -2383,7 +2384,7 @@ fn build_varnode<'a>(
 
             let (spc, mut off, sz) = match &objs[*h2 as usize] {
                 PcodeObject::Varnode(vn) => {
-                    let mut size = if !matches!(vnode_tpl.space_template, ConstTemplate::Handle(_)) {//&& vn.space != "const" {
+                    let mut size = if !matches!(vnode_tpl.space_template, ConstTemplate::Handle(_)) {//&& vn.space != AddressSpace::Const {
                         vn.size
                     } else {
                         match build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map) {
@@ -2395,16 +2396,17 @@ fn build_varnode<'a>(
 
                     let space = if matches!(vnode_tpl.size_template, ConstTemplate::Handle(_)) && size == 0 {
                         match build_value(&vnode_tpl.space_template, pc, bit_len, objs, varnode_map) {
-                            VarnodeValue::String(name) => name.clone(),
+                            VarnodeValue::String(s) => AddressSpace::from_str(s.as_str()),
+                            VarnodeValue::Space(spc) => spc.clone(),
                             VarnodeValue::Op(op) => op.space.clone(),
-                            VarnodeValue::Int(0) => "DUMMY".to_string(),
+                            VarnodeValue::Int(0) => AddressSpace::Dummy,
                             _ => panic!(),
                         }
                     } else {
                         vn.space.clone()
                     };
 
-                    if vn.space == "const" && size > 0 {
+                    if vn.space == AddressSpace::Const && size > 0 {
                         size = match build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map) {
                             VarnodeValue::Int(sz) => sz,
                             VarnodeValue::Op(op) => op.size,
@@ -2415,7 +2417,7 @@ fn build_varnode<'a>(
                     let mut offset = vn.offset;
 
                     // TODO: Figure out if 4-byte moves into 8-byte register sign extends or zero extends.
-                    if &space == "const" && size > vn.size {//&& vn.size > 0 && size <= 8 {
+                    if space == AddressSpace::Const && size > vn.size {//&& vn.size > 0 && size <= 8 {
                         let shift = 64 - vn.size * 8;
                         offset = (((offset << shift) as i64) >> shift) as u64;
 
@@ -2426,7 +2428,7 @@ fn build_varnode<'a>(
                     // println!("5==> {} {:x} {}", space, offset, size);
                     (space, offset, size)
                 },
-                PcodeObject::Handle(h) if h.exported.space != "register" && 
+                PcodeObject::Handle(h) if h.exported.space != AddressSpace::Register && 
                     h.exported.offset == 0 && 
                     h.indirect.offset != 0 => {
                     // println!("4==> {} {:x} {}", h.exported.space, h.varnode.offset, h.exported.size);
@@ -2436,7 +2438,7 @@ fn build_varnode<'a>(
                     // println!("3==> {} {:x} {}", h.varnode.space, h.varnode.offset, h.varnode.size);
                     (h.varnode.space.clone(), h.varnode.offset, h.varnode.size)
                 },
-                PcodeObject::Handle(h) if h.varnode.size == 0 && h.exported.size == 0 && h.exported.space == "ram" => {
+                PcodeObject::Handle(h) if h.varnode.size == 0 && h.exported.size == 0 && h.exported.space == AddressSpace::Ram => {
                     // println!("2==> {} {:x} {}", h.exported.space, h.exported.offset, h.indirect.size);
                     (h.exported.space.clone(), h.exported.offset, h.indirect.size)
                 },
@@ -2459,16 +2461,17 @@ fn build_varnode<'a>(
         },
         _ =>  {
             let mut space = match build_value(&vnode_tpl.space_template, pc, bit_len, objs, varnode_map) {
-                VarnodeValue::String(name) => name.clone(),
+                VarnodeValue::String(name) => AddressSpace::from_str(name.as_str()),
+                VarnodeValue::Space(spc) => spc,
                 VarnodeValue::Op(op) => op.space.clone(),
-                VarnodeValue::Int(0) => "DUMMY".to_string(),
+                VarnodeValue::Int(0) => AddressSpace::Dummy,
                 _ => panic!(),
             };
 
             let offset = match build_value(&vnode_tpl.offset_template, pc, bit_len, objs, varnode_map) {
                 VarnodeValue::Int(off) => off,
                 VarnodeValue::Op(op) => {
-                    if space == "const" {
+                    if space == AddressSpace::Const {
                         match op.size {
                             1 => ((op.offset as i8) as i64) as u64,
                             2 => ((op.offset as i16) as i64) as u64,
@@ -2482,13 +2485,14 @@ fn build_varnode<'a>(
                 },
                 VarnodeValue::Rel(lbl_idx) => lbl_idx,
                 VarnodeValue::String(name) => spaces[&name],
+                _ => panic!(),
             };
 
             let size = match build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map) {
                 VarnodeValue::Int(sz) => sz,
                 VarnodeValue::Op(op) => op.size,
-                VarnodeValue::String(s) if s == "unique" => { // FIXME
-                    space = "unique".to_string();
+                VarnodeValue::String(s) if AddressSpace::from_str(s.as_str()) == AddressSpace::Unique => { // FIXME
+                    space = AddressSpace::Unique;
                     8
                 },
                 _ => panic!("Unknown size value for {}: {:?}", vnode_tpl, build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map)),
@@ -2500,8 +2504,8 @@ fn build_varnode<'a>(
 
     // println!("{} {:?} {} {:x} {}", vnode_tpl, objs, space, offset, size);
 
-    let name = match space.as_str() {
-        "register" => varnode_map.get(&(offset, size)).map(|x| x.to_string()),
+    let name = match space {
+        AddressSpace::Register => varnode_map.get(&(offset, size)).map(|x| x.to_string()),
         _ => None,
     };
 
@@ -2542,7 +2546,7 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
         let mut sz = 0;
 
         for input in inputs.iter() {
-            if input.space == "register" {
+            if input.space == AddressSpace::Register {
                 sz = input.size;
                 break;
             }
@@ -2561,7 +2565,7 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
 
         if !matches!(*opcode, OpCode::Load | OpCode::IntSext | OpCode::IntZext | OpCode::FloatInt2Float) && !opcode.is_conditional() {
             // max_sz = max_sz.max(output_size);
-            if output.as_ref().map(|o| o.space == "register").unwrap_or(false) {
+            if output.as_ref().map(|o| o.space == AddressSpace::Register).unwrap_or(false) {
                 sz = output_size;
             }
 
@@ -2574,7 +2578,7 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
             if !(i == 1 && *opcode == OpCode::SubPiece) && 
                !(i == 0 && *opcode == OpCode::CBranch) && 
                 !(i == 1 && matches!(*opcode, OpCode::IntLeft | OpCode::IntRight | OpCode::IntSRight)) {
-                if input.space == "const" && input.size > 0 && input.size <= 8 && *opcode != OpCode::IntSub && *opcode != OpCode::IntAdd {
+                if input.space == AddressSpace::Const && input.size > 0 && input.size <= 8 && *opcode != OpCode::IntSub && *opcode != OpCode::IntAdd {
                     let shift = 64 - input.size * 8;
                     input.offset = (((input.offset << shift) as i64) >> shift) as u64;
 
@@ -2632,7 +2636,7 @@ fn build_pcodeop<'a>(
                         if input_handle.varnode.size == 0 {
                             Varnode {
                                 name: input_handle.varnode.name.clone(),
-                                space: "ram".to_string(),
+                                space: AddressSpace::Ram,
                                 offset: input_handle.varnode.offset,
                                 size: input_handle.indirect.size,
                             }
@@ -2676,7 +2680,7 @@ fn build_pcodeop<'a>(
                         let mut dst = output_handle.exported.clone();
                         dst.size = src.size;
 
-                        if &dst.space != "ram" {
+                        if dst.space != AddressSpace::Ram {
                             let mut output = Some(output_handle.indirect.clone());
                             fix_sizes(&mut opcode, &mut inputs, &mut output, varnode_map);
 
@@ -2688,7 +2692,7 @@ fn build_pcodeop<'a>(
                             });
 
                             // HACK: I don't know what I'm doing, but I guess this is right.
-                            if output_handle.varnode.space == "ram" {
+                            if output_handle.varnode.space == AddressSpace::Ram {
                                 dst.offset = output_handle.varnode.offset;
                             }
 
@@ -2748,8 +2752,8 @@ pub fn _build_sym<'a>(
 
             if let MatchedSymbol::Symbol(sym) = op {
                 if let SymbolBody::Varnode(vnode) = &sym.body {
-                    let name = match vnode.space.as_str() {
-                        "register" => varnode_map.get(&(vnode.offset, vnode.size)),
+                    let name = match vnode.space {
+                        AddressSpace::Register => varnode_map.get(&(vnode.offset, vnode.size)),
                         _ => None,
                     };
 
@@ -2766,7 +2770,7 @@ pub fn _build_sym<'a>(
             else if let MatchedSymbol::Literal((val, size)) = op {
                 let varnode = PcodeObject::Varnode(Varnode {
                     name: None,
-                    space: "const".to_owned(),
+                    space: AddressSpace::Const.to_owned(),
                     offset: *val as u64,
                     size: *size as u64,
                 });
@@ -2853,7 +2857,7 @@ pub fn build_sym<'a>(
     let (mut ops, _) = _build_sym(matched_sym, pc, bit_len, spaces, varnode_map);
 
     while let Some(op) = ops.last().as_ref() {
-        if op.opcode == OpCode::Load && op.output.as_ref().unwrap().space == "unique" {
+        if op.opcode == OpCode::Load && op.output.as_ref().unwrap().space == AddressSpace::Unique {
             let _ = ops.pop();
         } else {
             break;
@@ -2878,7 +2882,7 @@ pub fn build_sym<'a>(
     }
 
     for (i, op) in ops.iter_mut().enumerate() {
-        if (op.opcode == OpCode::Branch || op.opcode == OpCode::CBranch) && op.inputs[0].space == "const" {
+        if (op.opcode == OpCode::Branch || op.opcode == OpCode::CBranch) && op.inputs[0].space == AddressSpace::Const {
             let lbl_idx = op.inputs[0].offset;
             op.inputs[0].offset = ((label_idxs[&lbl_idx] as i64 - i as i64) as u32) as u64;
         }
@@ -2924,11 +2928,11 @@ pub fn _build_text(matched_sym: &MatchedSymbol, text: &mut String, ops: &Vec<Pco
             let sext_v = (((v << shift) as i64) >> shift) as u64;
 
             for op in ops {
-                if matches!(op.opcode, OpCode::IntSub) && op.inputs[1].space == "const" && op.inputs[1].offset > 0 && op.inputs[1].offset == neg_v && is_neg {
+                if matches!(op.opcode, OpCode::IntSub) && op.inputs[1].space == AddressSpace::Const && op.inputs[1].offset > 0 && op.inputs[1].offset == neg_v && is_neg {
                     v = neg_v;
                     sign_str = "-";
                     break;
-                } else if matches!(op.opcode, OpCode::IntSBorrow) && op.inputs[1].space == "const" && op.inputs[1].offset > 0 && is_neg {
+                } else if matches!(op.opcode, OpCode::IntSBorrow) && op.inputs[1].space == AddressSpace::Const && op.inputs[1].offset > 0 && is_neg {
                     if op.inputs[1].offset == (sext_v >> (64 - op.inputs[1].size * 8)) {
                         v = neg_v;
                         sign_str = "-";
@@ -2996,7 +3000,7 @@ impl SleighLanguage {
                 SymbolBody::Varnode(varnode) => {
                     varnodes.insert(varnode.name.clone(), varnode.clone());
 
-                    if varnode.space == "register" {
+                    if varnode.space == AddressSpace::Register {
                         reg_space_size =
                             reg_space_size.max((varnode.offset + varnode.size) as usize);
                         varnode_map.insert((varnode.offset, varnode.size), varnode.name.clone());
