@@ -97,6 +97,8 @@ def compare(a, b):
         op1 = op1.replace('0xffffffff:8', '0xffffffffffffffff:8')
         op2 = op2.replace('0xffffffff:8', '0xffffffffffffffff:8')
         op2 = op2.replace('[ram]0xe5ffffffdbffffff:4', '[ram]0xe5ffffffdbffffff:8')
+        op1 = fix_signs(op1)
+        op2 = fix_signs(op2)
 
         if op1 != op2:
             if '=' not in op1 or '=' not in op2:
