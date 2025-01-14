@@ -1,6 +1,6 @@
 use crate::arch::get_language;
 use crate::sleigh::opcode::OpCode;
-use crate::sleigh::types::{Address, AddressSpace, PcodeOp, SeqNum, Varnode};
+use crate::sleigh::types::{Address, AddressSpace, PcodeOpInputs, PcodeOp, SeqNum, Varnode};
 
 extern crate bitvec;
 extern crate nom;
@@ -2516,7 +2516,7 @@ fn build_varnode<'a>(
     })
 }
 
-fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option<Varnode>, varnode_map: &HashMap<(u64, u64), String>) {
+fn fix_sizes(opcode: &mut OpCode, inputs: &mut PcodeOpInputs, output: &mut Option<Varnode>, varnode_map: &HashMap<(u64, u64), String>) {
     // TODO: Add more cases.
     // println!("{} {:?}", opcode, inputs);
     if *opcode == OpCode::IntAdd {
@@ -2573,7 +2573,9 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
             }
         }
 
-        for (i, input) in inputs.iter_mut().enumerate() {
+        for i in 0..inputs.len() {
+            let input = &mut inputs[i];
+
             if !(i == 1 && *opcode == OpCode::SubPiece) && 
                !(i == 0 && *opcode == OpCode::CBranch) && 
                 !(i == 1 && matches!(*opcode, OpCode::IntLeft | OpCode::IntRight | OpCode::IntSRight)) {
@@ -2625,9 +2627,13 @@ fn build_pcodeop<'a>(
     // println!("{} {:?}", op_tpl, objs);
     // println!("{}", op_tpl);
 
-    let mut inputs: Vec<Varnode> = op_tpl
-        .inputs
-        .iter()
+    let mut input_iter = op_tpl.inputs.iter();
+
+    if opcode == OpCode::Return {
+        let _ = input_iter.next();
+    }
+
+    let mut inputs: PcodeOpInputs = input_iter
         .map(|tpl| {
             match build_varnode(&tpl, pc, bit_len, objs, spaces, varnode_map) {
                 PcodeObject::Handle(input_handle) => {
@@ -2647,7 +2653,7 @@ fn build_pcodeop<'a>(
                             ops.push(PcodeOp {
                                 seq: seq.clone(),
                                 opcode: OpCode::Load,
-                                inputs: vec![Varnode::dummy(), src],
+                                inputs: PcodeOpInputs::Binary((Varnode::dummy(), src)),
                                 output: Some(input_handle.indirect.clone()),
                             });
 
@@ -2698,7 +2704,7 @@ fn build_pcodeop<'a>(
                             seq = seq.next();
                             opcode = OpCode::Store;
 
-                            inputs = vec![Varnode::dummy(), dst, src];
+                            inputs = PcodeOpInputs::Ternary((Varnode::dummy(), dst, src));
                             None
                         } else {
                             Some(dst)
@@ -2715,10 +2721,6 @@ fn build_pcodeop<'a>(
         }).flatten();
 
     fix_sizes(&mut opcode, &mut inputs, &mut output, varnode_map);
-
-    if opcode == OpCode::Return {
-        inputs.remove(0);
-    }
 
     let op = PcodeOp {
         seq: seq,

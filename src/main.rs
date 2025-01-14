@@ -213,7 +213,6 @@ mod tests {
         let data_addr: usize = 0x10000e070;
 
         let buf = &FILE_BYTES[data_off..(data_off + data_size)];
-        let orig_pc: u64 = 0x10000e070;
 
         // Create Ghidra context.
         let ghidra_ctx = get_context(buf, data_addr, data_size);

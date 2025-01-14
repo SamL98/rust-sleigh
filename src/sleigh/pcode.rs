@@ -1,7 +1,8 @@
 use super::types::{
     // SeqNum, 
-    // Varnode, 
+    Varnode, 
     PcodeOp, 
+    PcodeOpInputs, 
     // Context,
     // Address
 };
@@ -9,7 +10,114 @@ use super::opcode::OpCode;
 // use super::varnode::*;
 
 use std::fmt;
+use std::ops::{Index, IndexMut};
 // use std::mem;
+
+pub struct InputsIter<'a> {
+    inputs: &'a PcodeOpInputs,
+    idx: usize,
+}
+
+impl<'a> Iterator for InputsIter<'a> {
+    type Item = &'a Varnode;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx >= self.inputs.len() {
+            return None;
+        }
+
+        let vn = &self.inputs[self.idx];
+        self.idx += 1;
+        Some(vn)
+    }
+}
+
+impl Index<usize> for PcodeOpInputs {
+    type Output = Varnode;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        match &self {
+            PcodeOpInputs::Unary(vn) if index == 0 => vn,
+            PcodeOpInputs::Binary((lhs, _)) if index == 0 => lhs,
+            PcodeOpInputs::Binary((_, rhs)) if index == 1 => rhs,
+            PcodeOpInputs::Ternary((op1, _, _)) if index == 0 => op1,
+            PcodeOpInputs::Ternary((_, op2, _)) if index == 1 => op2,
+            PcodeOpInputs::Ternary((_, _, op3)) if index == 2 => op3,
+            PcodeOpInputs::Nary(inputs) => &inputs[index],
+            _ => panic!("Input index out of bounds: {} for inputs: {}", index, self),
+        }
+    }
+}
+
+impl IndexMut<usize> for PcodeOpInputs {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        match self {
+            PcodeOpInputs::Unary(vn) if index == 0 => vn,
+            PcodeOpInputs::Binary((lhs, _)) if index == 0 => lhs,
+            PcodeOpInputs::Binary((_, rhs)) if index == 1 => rhs,
+            PcodeOpInputs::Ternary((op1, _, _)) if index == 0 => op1,
+            PcodeOpInputs::Ternary((_, op2, _)) if index == 1 => op2,
+            PcodeOpInputs::Ternary((_, _, op3)) if index == 2 => op3,
+            PcodeOpInputs::Nary(inputs) => inputs.get_mut(index).unwrap(),
+            _ => panic!("Input index out of bounds: {}", index),
+        }
+    }
+}
+
+impl FromIterator<Varnode> for PcodeOpInputs {
+    fn from_iter<I: IntoIterator<Item=Varnode>>(iter: I) -> Self {
+        let mut iter = iter.into_iter();
+
+        if let Some(vn1) = iter.next() {
+            if let Some(vn2) = iter.next() {
+                if let Some(vn3) = iter.next() {
+                    if let Some(vn4) = iter.next() {
+                        let mut vns = vec![vn1, vn2, vn3, vn4];
+
+                        for vn in iter {
+                            vns.push(vn);
+                        }
+
+                        Self::Nary(vns)
+                    } else {
+                        Self::Ternary((vn1, vn2, vn3))
+                    }
+                } else {
+                    Self::Binary((vn1, vn2))
+                }
+            } else {
+                Self::Unary(vn1)
+            }
+        } else {
+            Self::Null
+        }
+    }
+}
+
+impl<'a> PcodeOpInputs {
+    pub fn iter(&'a self) -> InputsIter<'a> {
+        InputsIter {
+            inputs: self,
+            idx: 0,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match &self {
+            PcodeOpInputs::Null => 0,
+            PcodeOpInputs::Unary(_) => 1,
+            PcodeOpInputs::Binary(_) => 2,
+            PcodeOpInputs::Ternary(_) => 3,
+            PcodeOpInputs::Nary(inputs) => inputs.len(),
+        }
+    }
+}
+
+impl fmt::Display for PcodeOpInputs {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.iter().map(|i| format!("{}", i)).collect::<Vec<String>>().join(", "))
+    }
+}
 
 impl PcodeOp {
     fn fmt_unary(&self, opstr: &str) -> String {
@@ -38,11 +146,16 @@ impl PcodeOp {
                                                      .map(|x| format!("{}", x))
                                                      .collect::<Vec<String>>()
                                                      .join(", ")),
-            &OpCode::CallInd => format!("call(*({}), {})", self.inputs[0], 
-                                                           self.inputs[1..].iter()
-                                                                  .map(|x| format!("{}", x))
-                                                                  .collect::<Vec<String>>()
-                                                                  .join(", ")),
+            &OpCode::CallInd => {
+                let mut input_iter = self.inputs.iter();
+                let _ = input_iter.next();
+
+                format!("call(*({}), {})", self.inputs[0], 
+                    input_iter
+                        .map(|x| format!("{}", x))
+                        .collect::<Vec<String>>()
+                        .join(", "))
+            },
             &OpCode::CBranch => format!("if ({}) goto {}", self.inputs[1], self.inputs[0]),
             &OpCode::Return => format!("return {}", self.inputs.iter()
                                                            .map(|x| format!("{}", x))
@@ -129,47 +242,3 @@ impl fmt::Display for PcodeOp {
         write!(f, "{}", self.to_string())
     }
 }
-
-//pub trait PcodeIface {
-//    //fn new(ctx: &Context, op_c: *const csleigh_PcodeOp) -> PcodeOp;
-//}
-
-// impl PcodeIface for PcodeOp {
-//     /*fn new(ctx: &Context, op_c: *const csleigh_PcodeOp) -> PcodeOp {
-//         let addr_space_ptr = unsafe { (*op_c).seq.pc.space };
-//         let addr_space_str = get_addr_space_name(addr_space_ptr);
-
-//         let off = unsafe { (*op_c).seq.pc.off };
-//         let pc = Address { space: addr_space_str, offset: off };
-//         let opcode: OpCode = unsafe { mem::transmute((*op_c).opcode) };
-
-//         let mut inputs: Vec<Varnode> = Vec::new();
-//         let num_inputs = unsafe { (*op_c).num_inputs };
-
-//         for i in 0..(num_inputs as usize) {
-//             let input_c = unsafe { 
-//                 (*op_c).inputs.offset(i as isize)
-//             };
-//             inputs.push(Varnode::new(ctx, input_c));
-//         }
-
-//         let output = unsafe {
-//             if (*op_c).output.is_null() { 
-//                 None 
-//             } 
-//             else { 
-//                 Some(Varnode::new(ctx, (*op_c).output))
-//             }
-//         };
-
-//         let uniq = unsafe { (*op_c).seq.uniq };
-//         let order = unsafe { (*op_c).seq.order };
-
-//         return PcodeOp {
-//             seq: SeqNum { pc: pc, uniq: uniq, order: order },
-//             opcode: opcode,
-//             inputs: inputs,
-//             output: output
-//         };
-//     }*/
-// }
