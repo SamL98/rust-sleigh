@@ -62,8 +62,8 @@ impl Varnode{
 
     fn to_string(&self) -> String {
         match &self.name {
-            Some(name) => name.to_owned(),
-            None => match self.space {
+            Some(name) if name != "fixup_start" && name != "fixup_end" => name.to_owned(),
+            _ => match self.space {
                 AddressSpace::Unique => format!("U{:x}:{}", self.offset, self.size),
                 AddressSpace::Const => format!("0x{:x}:{}", self.offset, self.size),
                 AddressSpace::Register => format!("R{:x}:{}", self.offset, self.size), // FIXME
