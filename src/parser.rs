@@ -22,6 +22,7 @@ use bitvec::prelude::*;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::borrow::Cow;
 
 use {
     std::fs,
@@ -2226,12 +2227,12 @@ fn get_operand<'a>(id: &u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Operand {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum VarnodeValue {
+pub enum VarnodeValue<'a> {
     Space(AddressSpace),
-    String(String),
+    String(&'a String),
     Int(u64),
     Rel(u64),
-    Op(Varnode),
+    Op(Cow<'a, Varnode>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -2280,22 +2281,22 @@ fn build_value<'a>(
     bit_len: usize,
     objs: &'a [PcodeObject],
     varnode_map: &'a HashMap<(u64, u64), String>,
-) -> VarnodeValue {
+) -> VarnodeValue<'a> {
     match const_tpl {
-        ConstTemplate::SpaceId(space) => VarnodeValue::String(space.clone()),
+        ConstTemplate::SpaceId(space) => VarnodeValue::String(space),
         ConstTemplate::Val(val) => VarnodeValue::Int(*val),
         ConstTemplate::Handle((idx, expr)) => {
             let ix = *idx as usize;
 
-            let mut vn = match &objs[ix] {
-                PcodeObject::Varnode(vn) => vn.clone(),
-                PcodeObject::Handle(h) if h.needs_resolving() => h.indirect.clone(),
-                PcodeObject::Handle(h) => h.varnode.clone(),
+            let mut vn: Cow<'a, Varnode> = Cow::Borrowed(match &objs[ix] {
+                PcodeObject::Varnode(vn) => vn,
+                PcodeObject::Handle(h) if h.needs_resolving() => &h.indirect,
+                PcodeObject::Handle(h) => &h.varnode,
                 _ => panic!("{}", objs[ix])
-            };
+            });
 
             match expr {
-                Some(HandleExpr::OffsetPlus(addend)) => vn = vn.subpiece(*addend as u64, vn.size, varnode_map),
+                Some(HandleExpr::OffsetPlus(addend)) => vn = Cow::Owned(vn.subpiece(*addend as u64, vn.size, varnode_map)),
                 _ => ()
             };
 
@@ -2483,7 +2484,7 @@ fn build_varnode<'a>(
                     }
                 },
                 VarnodeValue::Rel(lbl_idx) => lbl_idx,
-                VarnodeValue::String(name) => spaces[&name],
+                VarnodeValue::String(name) => spaces[name],
                 _ => panic!(),
             };
 

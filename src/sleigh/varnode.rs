@@ -22,6 +22,18 @@ impl AddressSpace {
             _ => panic!("unknown space {}", s),
         }
     }
+
+    // pub fn try_from_str(s: &str) -> Option<Self> {
+    //     use AddressSpace::*;
+    //     match s {
+    //         "ram" => Some(Ram),
+    //         "register" => Some(Register),
+    //         "const" => Some(Const),
+    //         "unique" => Some(Unique),
+    //         "dummy" => Some(Dummy),
+    //         _ => None,
+    //     }
+    // }
 }
 
 impl fmt::Display for AddressSpace {
