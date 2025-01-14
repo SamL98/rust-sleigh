@@ -223,11 +223,19 @@ pub enum SymbolBody {
     Next2(SymbolHead),
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, Clone)]
 pub struct Symbol {
     pub id: u32,
     pub body: SymbolBody,
 }
+
+impl PartialEq for Symbol {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for Symbol {}
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Subtable {
@@ -291,7 +299,7 @@ pub enum Expr {
     Next2,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, Clone)]
 pub struct Constructor {
     pub parent: u32,
     pub first: i32,
@@ -302,6 +310,14 @@ pub struct Constructor {
     pub template: Option<ConstructorTemplate>,
     pub line: (usize, usize),
 }
+
+impl PartialEq for Constructor {
+    fn eq(&self, other: &Self) -> bool {
+        self.line == other.line
+    }
+}
+
+impl Eq for Constructor {}
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum PrintCommand {
