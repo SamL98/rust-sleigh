@@ -301,8 +301,8 @@ pub enum Expr {
 
 #[derive(Debug, Clone)]
 pub struct Constructor {
-    pub parent: u32,
-    pub first: i32,
+    pub _parent: u32,
+    pub _first: i32,
     pub length: u32,
     pub operands: Vec<u32>,
     pub print_commands: Option<Vec<PrintCommand>>,
@@ -996,8 +996,8 @@ fn constructor(input: &str) -> Res<&str, Constructor> {
         let mut iter = attrs[3].1.split(":");
 
         let constructor = Constructor {
-            parent: u32hex(attrs[0].1),
-            first: i32dec(attrs[1].1),
+            _parent: u32hex(attrs[0].1),
+            _first: i32dec(attrs[1].1),
             length: u32dec(attrs[2].1),
             operands: res.1.0.unwrap_or_default(),
             print_commands: res.1.1,
@@ -2532,7 +2532,7 @@ fn build_varnode<'a>(
             let (size, ft) = match build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map) {
                 (VarnodeValue::Int(sz), ft) => (sz, ft),
                 (VarnodeValue::Op(op), ft) => (op.size, ft),
-                (VarnodeValue::String(s), ft) if AddressSpace::from_str(s.as_str()) == AddressSpace::Unique => { // FIXME
+                (VarnodeValue::String(s), _) if AddressSpace::from_str(s.as_str()) == AddressSpace::Unique => { // FIXME
                     space = AddressSpace::Unique;
                     (8, None)
                 },
