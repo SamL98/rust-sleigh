@@ -2278,7 +2278,7 @@ fn build_value<'a>(
     const_tpl: &'a ConstTemplate,
     pc: u64,
     bit_len: usize,
-    objs: &'a Vec<PcodeObject>,
+    objs: &'a [PcodeObject],
     varnode_map: &'a HashMap<(u64, u64), String>,
 ) -> VarnodeValue {
     match const_tpl {
@@ -2315,7 +2315,7 @@ fn build_handle<'a>(
     handle_tpl: &'a HandleTemplate,
     pc: u64,
     bit_len: usize,
-    objs: &'a Vec<PcodeObject>,
+    objs: &'a [PcodeObject],
     spaces: &'a HashMap<String, u64>,
     varnode_map: &'a HashMap<(u64, u64), String>,
 ) -> PcodeObject {
@@ -2371,7 +2371,7 @@ fn build_varnode<'a>(
     vnode_tpl: &'a VarnodeTemplate,
     pc: u64,
     bit_len: usize,
-    objs: &'a Vec<PcodeObject>,
+    objs: &'a [PcodeObject],
     spaces: &'a HashMap<String, u64>,
     varnode_map: &'a HashMap<(u64, u64), String>,
 ) -> PcodeObject {
@@ -2614,7 +2614,7 @@ fn build_pcodeop<'a>(
     mut seq: SeqNum,
     bit_len: usize,
     op_tpl: &'a OpTemplate,
-    objs: &'a Vec<PcodeObject>,
+    objs: &'a [PcodeObject],
     spaces: &'a HashMap<String, u64>,
     varnode_map: &'a HashMap<(u64, u64), String>,
     ops: &mut Vec<PcodeOp>,
@@ -2737,12 +2737,13 @@ pub fn _build_sym<'a>(
     spaces: &'a HashMap<String, u64>,
     varnode_map: &'a HashMap<(u64, u64), String>,
     built_pcodeops: &mut Vec<PcodeOp>,
+    built_objects: &mut Vec<PcodeObject>,
     order: &mut Vec<usize>,
 ) -> (Option<PcodeObject>, usize, usize) {
-    let mut built_objects = vec![];
     let mut sub_op_ranges = vec![];
 
-    let start_idx = built_pcodeops.len();
+    let start_op_idx = built_pcodeops.len();
+    let start_obj_idx = built_objects.len();
     let mut handle = None;
 
     let mut built_op = false;
@@ -2782,7 +2783,9 @@ pub fn _build_sym<'a>(
 
                 op_handle = Some(varnode);
             } else if let MatchedSymbol::Constructor(_) = op {
-                (op_handle, sub_op_start, sub_op_size) = _build_sym(op, pc, bit_len, spaces, varnode_map, built_pcodeops, order);
+                let sub_obj_start = built_objects.len();
+                (op_handle, sub_op_start, sub_op_size) = _build_sym(op, pc, bit_len, spaces, varnode_map, built_pcodeops, built_objects, order);
+                built_objects.drain(sub_obj_start..built_objects.len());
             }
 
             sub_op_ranges.push((sub_op_start, sub_op_size));
@@ -2820,7 +2823,7 @@ pub fn _build_sym<'a>(
 
                     let seq = SeqNum {
                         pc: pc.to_owned(),
-                        uniq: (start_idx + num_ops) as i32,
+                        uniq: (start_op_idx + num_ops) as i32,
                         order: 0,
                     };
 
@@ -2828,7 +2831,7 @@ pub fn _build_sym<'a>(
                         seq,
                         bit_len,
                         &op_template,
-                        &built_objects,
+                        &built_objects[start_obj_idx..],
                         spaces,
                         varnode_map,
                         built_pcodeops,
@@ -2852,7 +2855,7 @@ pub fn _build_sym<'a>(
                     &handle_template,
                     pc.offset,
                     bit_len,
-                    &built_objects,
+                    &built_objects[start_obj_idx..],
                     spaces,
                     varnode_map,
                 );
@@ -2890,9 +2893,10 @@ pub fn build_sym<'a>(
     varnode_map: &'a HashMap<(u64, u64), String>,
 ) -> Vec<PcodeOp> {
     let mut ops = vec![];
+    let mut objs = vec![];
     let mut order = vec![];
 
-    let (_, ops_start, num_ops) = _build_sym(matched_sym, pc, bit_len, spaces, varnode_map, &mut ops, &mut order);
+    let (_, ops_start, num_ops) = _build_sym(matched_sym, pc, bit_len, spaces, varnode_map, &mut ops, &mut objs, &mut order);
 
     let _ = order.drain(0..ops_start);
     order.truncate(num_ops);
