@@ -10,11 +10,8 @@ use clap::Parser;
 
 use crate::parser::*;
 use crate::sleigh::types::{Address, Instruction};
-use crate::sleigh::opcode::OpCode;
 
 use bitvec::prelude::*;
-
-use std::time::Instant;
 
 fn parse_hex(s: &str) -> Result<u64, String> {
     Ok(u64hex(s))
@@ -156,8 +153,6 @@ impl<'a> Disassembler<'a> {
 
     pub fn disassemble(&'a self, buf: &'a [u8], orig_pc: u64) -> DisassemblyIter {
         let ctx = read_reg(&self.lang.context_reg, &self.reg_space);
-        let mut bits_consumed = 0;
-        let mut num_insns = 0;
 
         DisassemblyIter {
             disasm: self,
@@ -190,6 +185,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use crate::sleigh::opcode::OpCode;
     use super::*;
 
     use ghidra_sleigh::get_context;
@@ -219,7 +215,7 @@ mod tests {
 
         while let (Some(insn), Some(ghidra_insn)) = (disasm_iter.next(), ghidra_disasm_iter.next()) {
             if let (Some(insn), Some(ghidra_insn)) = (insn, ghidra_insn) {
-                // println!("0x{:x}: {} vs. {}", insn.address.offset, insn, ghidra_insn);
+                println!("0x{:x}: {} vs. {}", insn.address.offset, insn, ghidra_insn);
 
                 // TODO: Gradually increase this limit.
                 if insn.address.offset >= 0x100082706 {
@@ -241,7 +237,7 @@ mod tests {
                 assert_eq!(insn.ops.len(), ghidra_insn.ops.len());
 
                 for (op1, op2) in insn.ops.iter().zip(ghidra_insn.ops.iter()) {
-                    // println!("    {} vs. {}", op1, op2);
+                    println!("    {} vs. {}", op1, op2);
 
                     // TODO: Actually check for correctness.
                     match (op1.opcode, op2.opcode) {

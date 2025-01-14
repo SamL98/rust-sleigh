@@ -2318,7 +2318,6 @@ fn build_handle<'a>(
     objs: &'a Vec<PcodeObject>,
     spaces: &'a HashMap<String, u64>,
     varnode_map: &'a HashMap<(u64, u64), String>,
-    _seq: &SeqNum,
 ) -> PcodeObject {
     let varnode = build_varnode(
         &handle_tpl.varnode_template,
@@ -2618,10 +2617,10 @@ fn build_pcodeop<'a>(
     objs: &'a Vec<PcodeObject>,
     spaces: &'a HashMap<String, u64>,
     varnode_map: &'a HashMap<(u64, u64), String>,
-) -> Vec<PcodeOp> {
+    ops: &mut Vec<PcodeOp>,
+) {
     let pc = seq.pc.offset;
     let mut opcode = OpCode::from_str(op_tpl.code.as_str());
-    let mut ops = vec![];
 
     // println!("{} {:?}", op_tpl, objs);
     // println!("{}", op_tpl);
@@ -2729,7 +2728,6 @@ fn build_pcodeop<'a>(
     };
 
     ops.push(op);
-    ops
 }
 
 pub fn _build_sym<'a>(
@@ -2738,17 +2736,24 @@ pub fn _build_sym<'a>(
     bit_len: usize,
     spaces: &'a HashMap<String, u64>,
     varnode_map: &'a HashMap<(u64, u64), String>,
-) -> (Vec<PcodeOp>, Option<PcodeObject>) {
-    let mut built_pcodeops = vec![];
+    built_pcodeops: &mut Vec<PcodeOp>,
+    order: &mut Vec<usize>,
+) -> (Option<PcodeObject>, usize, usize) {
     let mut built_objects = vec![];
+    let mut sub_op_ranges = vec![];
+
+    let start_idx = built_pcodeops.len();
     let mut handle = None;
 
-    let mut op_pcodeops = vec![];
+    let mut built_op = false;
+    let mut ops_start = 0;
+    let mut num_ops = 0;
 
     if let MatchedSymbol::Constructor((ct, operands)) = &matched_sym {
         for (_i, (op, _)) in operands.iter().enumerate() {
-            let mut op_ops = vec![];
             let mut op_handle = None;
+            let mut sub_op_start = 0;
+            let mut sub_op_size = 0;
 
             if let MatchedSymbol::Symbol(sym) = op {
                 if let SymbolBody::Varnode(vnode) = &sym.body {
@@ -2777,10 +2782,10 @@ pub fn _build_sym<'a>(
 
                 op_handle = Some(varnode);
             } else if let MatchedSymbol::Constructor(_) = op {
-                (op_ops, op_handle) = _build_sym(op, pc, bit_len, spaces, varnode_map);
+                (op_handle, sub_op_start, sub_op_size) = _build_sym(op, pc, bit_len, spaces, varnode_map, built_pcodeops, order);
             }
 
-            op_pcodeops.push(op_ops);
+            sub_op_ranges.push((sub_op_start, sub_op_size));
 
             if let Some(handle) = op_handle {
                 built_objects.push(handle);
@@ -2794,29 +2799,48 @@ pub fn _build_sym<'a>(
 
         for stmt in &template.statements {
             if let ConsTemplate::Op(op_template) = stmt {
+                if !built_op {
+                    ops_start = order.len();
+                    built_op = true;
+                }
+
                 if op_template.code == "BUILD" {
                     if let ConstTemplate::Val(op_idx) = op_template.inputs[0].offset_template {
                         let idx = op_idx as usize;
-                        built_pcodeops.extend(op_pcodeops[idx].clone());
+                        let (start, sz) = sub_op_ranges[idx];
+
+                        for i in start..(start + sz) {
+                            order.push(order[i]);
+                        }
+
+                        num_ops += sz;
                     };
                 } else {
-                    // println!("{}", op_template);
+                    let start = built_pcodeops.len();
+
                     let seq = SeqNum {
                         pc: pc.to_owned(),
-                        uniq: built_pcodeops.len() as i32,
+                        uniq: (start_idx + num_ops) as i32,
                         order: 0,
                     };
 
-                    let mut pcodeops = build_pcodeop(
+                    build_pcodeop(
                         seq,
                         bit_len,
                         &op_template,
                         &built_objects,
                         spaces,
                         varnode_map,
+                        built_pcodeops,
                     );
 
-                    built_pcodeops.append(&mut pcodeops);
+                    let end = built_pcodeops.len();
+
+                    for i in start..end {
+                        order.push(i);
+                    }
+
+                    num_ops += end - start;
                 } 
             }
         }
@@ -2831,11 +2855,6 @@ pub fn _build_sym<'a>(
                     &built_objects,
                     spaces,
                     varnode_map,
-                    built_pcodeops.last().map(|op| &op.seq).unwrap_or(&SeqNum {
-                        pc: pc.to_owned(),
-                        uniq: -1,
-                        order: 0,
-                    }),
                 );
 
                 // println!("{} {} {:?}", handle_template, my_handle, built_objects);
@@ -2844,7 +2863,23 @@ pub fn _build_sym<'a>(
         }
     }
 
-    (built_pcodeops, handle)
+    (handle, ops_start, num_ops)
+}
+fn sort_by_indices<T>(data: &mut [T], mut indices: Vec<usize>) {
+    for idx in 0..data.len() {
+        if indices[idx] != idx {
+            let mut current_idx = idx;
+            loop {
+                let target_idx = indices[current_idx];
+                indices[current_idx] = current_idx;
+                if indices[target_idx] == target_idx {
+                    break;
+                }
+                data.swap(current_idx, target_idx);
+                current_idx = target_idx;
+            }
+        }
+    }
 }
 
 pub fn build_sym<'a>(
@@ -2854,7 +2889,15 @@ pub fn build_sym<'a>(
     spaces: &'a HashMap<String, u64>,
     varnode_map: &'a HashMap<(u64, u64), String>,
 ) -> Vec<PcodeOp> {
-    let (mut ops, _) = _build_sym(matched_sym, pc, bit_len, spaces, varnode_map);
+    let mut ops = vec![];
+    let mut order = vec![];
+
+    let (_, ops_start, num_ops) = _build_sym(matched_sym, pc, bit_len, spaces, varnode_map, &mut ops, &mut order);
+
+    let _ = order.drain(0..ops_start);
+    order.truncate(num_ops);
+
+    sort_by_indices(&mut ops, order);
 
     while let Some(op) = ops.last().as_ref() {
         if op.opcode == OpCode::Load && op.output.as_ref().unwrap().space == AddressSpace::Unique {

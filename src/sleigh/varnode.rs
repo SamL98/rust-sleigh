@@ -57,7 +57,6 @@ impl Varnode{
                 AddressSpace::Register => format!("R{:x}:{}", self.offset, self.size), // FIXME
                 AddressSpace::Ram => format!("[ram]0x{:x}:{}", self.offset, self.size),
                 AddressSpace::Dummy => "DUMMY".to_string(),
-                _ => panic!()
             }
         }
     }
