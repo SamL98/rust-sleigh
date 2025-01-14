@@ -2397,13 +2397,13 @@ fn build_varnode<'a>(
                     let space = if matches!(vnode_tpl.size_template, ConstTemplate::Handle(_)) && size == 0 {
                         match build_value(&vnode_tpl.space_template, pc, bit_len, objs, varnode_map) {
                             VarnodeValue::String(s) => AddressSpace::from_str(s.as_str()),
-                            VarnodeValue::Space(spc) => spc.clone(),
-                            VarnodeValue::Op(op) => op.space.clone(),
+                            VarnodeValue::Space(spc) => spc,
+                            VarnodeValue::Op(op) => op.space,
                             VarnodeValue::Int(0) => AddressSpace::Dummy,
                             _ => panic!(),
                         }
                     } else {
-                        vn.space.clone()
+                        vn.space
                     };
 
                     if vn.space == AddressSpace::Const && size > 0 {
@@ -2432,15 +2432,15 @@ fn build_varnode<'a>(
                     h.exported.offset == 0 && 
                     h.indirect.offset != 0 => {
                     // println!("4==> {} {:x} {}", h.exported.space, h.varnode.offset, h.exported.size);
-                    (h.exported.space.clone(), h.varnode.offset, h.exported.size) // FIXME
+                    (h.exported.space, h.varnode.offset, h.exported.size) // FIXME
                 }
                 PcodeObject::Handle(h) if !h.needs_resolving() => {
                     // println!("3==> {} {:x} {}", h.varnode.space, h.varnode.offset, h.varnode.size);
-                    (h.varnode.space.clone(), h.varnode.offset, h.varnode.size)
+                    (h.varnode.space, h.varnode.offset, h.varnode.size)
                 },
                 PcodeObject::Handle(h) if h.varnode.size == 0 && h.exported.size == 0 && h.exported.space == AddressSpace::Ram => {
                     // println!("2==> {} {:x} {}", h.exported.space, h.exported.offset, h.indirect.size);
-                    (h.exported.space.clone(), h.exported.offset, h.indirect.size)
+                    (h.exported.space, h.exported.offset, h.indirect.size)
                 },
                 _ => {
                     // FIXME: Make this nicer.
@@ -2463,7 +2463,7 @@ fn build_varnode<'a>(
             let mut space = match build_value(&vnode_tpl.space_template, pc, bit_len, objs, varnode_map) {
                 VarnodeValue::String(name) => AddressSpace::from_str(name.as_str()),
                 VarnodeValue::Space(spc) => spc,
-                VarnodeValue::Op(op) => op.space.clone(),
+                VarnodeValue::Op(op) => op.space,
                 VarnodeValue::Int(0) => AddressSpace::Dummy,
                 _ => panic!(),
             };
@@ -2641,7 +2641,7 @@ fn build_pcodeop<'a>(
                     if input_handle.needs_resolving() {
                         if input_handle.varnode.size == 0 {
                             Varnode {
-                                name: input_handle.varnode.name.clone(),
+                                name: None,
                                 space: AddressSpace::Ram,
                                 offset: input_handle.varnode.offset,
                                 size: input_handle.indirect.size,
@@ -2649,7 +2649,7 @@ fn build_pcodeop<'a>(
                         } else {
                             let mut src = input_handle.varnode.clone();
                             src.size = 8; // FIXME
-                            src.space = input_handle.exported.space.clone();
+                            src.space = input_handle.exported.space;
 
                             ops.push(PcodeOp {
                                 seq: seq.clone(),
