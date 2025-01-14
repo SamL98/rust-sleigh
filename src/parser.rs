@@ -1852,7 +1852,7 @@ fn resolve_constructor<'a>(
                     }
                 }
 
-                println!("did not match");
+                // println!("did not match");
                 return None;
             }
         };
@@ -2987,14 +2987,14 @@ pub fn build_sym<'a>(
     ops
 }
 
-fn _build_cmd_text(cmd: &PrintCommand, operands: &Vec<(MatchedSymbol, Option<FixupType>)>, text: &mut String, ops: &Vec<PcodeOp>) {
+fn _build_cmd_text(cmd: &PrintCommand, operands: &Vec<(MatchedSymbol, Option<FixupType>)>, text: &mut String, ops: &[PcodeOp]) {
     match cmd {
         PrintCommand::Op(op_idx) => _build_text(&operands[*op_idx as usize].0, text, ops),
         PrintCommand::Piece(piece) => text.push_str(piece),
     }
 }
 
-pub fn _build_text(matched_sym: &MatchedSymbol, text: &mut String, ops: &Vec<PcodeOp>) {
+pub fn _build_text(matched_sym: &MatchedSymbol, text: &mut String, ops: &[PcodeOp]) {
     match &matched_sym {
         MatchedSymbol::Constructor((ct, operands)) => {
             if let Some(cmds) = &ct.print_commands {
@@ -3050,7 +3050,7 @@ pub fn _build_text(matched_sym: &MatchedSymbol, text: &mut String, ops: &Vec<Pco
     }
 }
 
-pub fn build_text(matched_sym: &MatchedSymbol, ops: &Vec<PcodeOp>) -> String {
+pub fn build_text(matched_sym: &MatchedSymbol, ops: &[PcodeOp]) -> String {
     let mut text = String::new();
     _build_text(matched_sym, &mut text, ops);
     text

@@ -15,6 +15,8 @@ use bitvec::prelude::*;
 
 use std::time::Instant;
 use std::collections::HashMap;
+use std::thread;
+use std::sync::{Arc, Mutex};
 
 fn parse_hex(s: &str) -> Result<u64, String> {
     Ok(u64hex(s))
@@ -33,6 +35,9 @@ struct Args {
 
     #[arg(short, long)]
     time: bool,
+
+    #[arg(short, long)]
+    parallel: bool,
 
     #[arg(short, long, default_value_t = false)]
     verbose: bool,
@@ -143,6 +148,8 @@ impl<'a> Disassembler<'a> {
                 num_bits += num_bits - (num_bits % self.lang.bit_align);
             }
 
+            let mut should_insert = false;
+
             let pcodeops = if let Some(ops) = self.build_cache.get(&matched_symbol) {
                 let mut new_ops = ops.clone();
 
@@ -168,11 +175,15 @@ impl<'a> Disassembler<'a> {
                     &self.lang.varnode_map,
                 );
 
-                self.build_cache.insert(matched_symbol.clone(), ops.clone());
+                should_insert = true;
                 ops
             };
 
             let asm = build_text(&matched_symbol, &pcodeops);
+
+            if should_insert {
+                self.build_cache.insert(matched_symbol, pcodeops.clone());
+            }
 
             Instruction {
                 address: pc,
@@ -193,6 +204,91 @@ impl<'a> Disassembler<'a> {
             ctx: ctx,
             bits_consumed: 0,
             num_insns: 0,
+        }
+    }
+
+    pub fn parallel_disassemble(&mut self, buf: &[u8], orig_pc: u64) {
+        let ctx = read_reg(&self.lang.context_reg, &self.reg_space);
+        let mut bits_consumed = 0;
+
+        let num_threads = 8;
+        let mut starts = vec![];
+
+        while bits_consumed < buf.len() * 8 {
+            let pc = Address {
+                space: "ram".to_owned(),
+                offset: (orig_pc as usize + bits_consumed / 8) as u64,
+            };
+
+            if pc.offset % 0x1000 == 0 {
+                println!("0x{:x} / 0x{:x}", pc.offset - orig_pc, buf.len());
+            }
+
+            bits_consumed += resolve_symbol(
+                &buf[bits_consumed / 8..],
+                pc.offset,
+                &self.lang.symbols[&self.lang.insn_table_id],
+                &self.lang.symbols,
+                &mut ctx.clone(),
+                &self.reg_space,
+                &mut ResolverDebug::default(),
+            ).map(|(_, mut num_bits)|{
+                if num_bits % self.lang.bit_align != 0 {
+                    num_bits += num_bits - (num_bits % self.lang.bit_align);
+                }
+                starts.push(pc.offset);
+                num_bits
+            }).unwrap_or(self.lang.bit_align);
+        }
+
+        let idx = Arc::new(Mutex::new(0));
+        let starts = Arc::new(starts);
+        let buf = Arc::new(buf.to_vec());
+
+        let mut handles = vec![];
+
+        for _ in 0..num_threads {
+            let idx = idx.clone();
+            let starts = starts.clone();
+            let buf = buf.clone();
+
+            let handle = thread::spawn(move || {
+                let contents = read_file("x86-64.sla");
+                let lang = SleighLanguage::create("x86", "x86:LE:64:default", &contents);
+                let mut disasm = Disassembler::new(Args::default(), &lang);
+                let mut ctx = read_reg(&disasm.lang.context_reg, &disasm.reg_space);
+
+                loop {
+                    let ix = {
+                        let mut idx = idx.lock().unwrap();
+
+                        if *idx >= starts.len() {
+                            break;
+                        }
+
+                        let ix = *idx;
+                        *idx += 1;
+                        ix
+                    };
+
+                    let off = starts[ix];
+
+                    let pc = Address {
+                        space: "ram".to_owned(),
+                        offset: off,
+                    };
+
+                    if let Some(_insn) = disasm.disassemble_one(&buf[(off - orig_pc) as usize..], pc, &mut ctx) {
+                        // println!("{}", insn);
+                    }
+                }
+            });
+
+            handles.push(handle);
+        }
+
+        for handle in handles.into_iter() {
+            handle.join().unwrap();
         }
     }
 }
@@ -218,8 +314,13 @@ fn main() {
     let start = Instant::now();
     let print_time = args.time;
 
-    let mut disasm = Disassembler::new(args, &lang);
-    for _ in disasm.disassemble(&buf, orig_pc) {}
+    if args.parallel {
+        let mut disasm = Disassembler::new(args, &lang);
+        disasm.parallel_disassemble(&buf, orig_pc);
+    } else {
+        let mut disasm = Disassembler::new(args, &lang);
+        for _ in disasm.disassemble(&buf, orig_pc) {}
+    }
 
     if print_time {
         println!("Disassembly took {}s", ((Instant::now() - start).as_millis() as f64) / 1000.0);
