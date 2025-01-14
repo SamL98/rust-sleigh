@@ -13,6 +13,8 @@ use crate::sleigh::types::{Address, Instruction};
 
 use bitvec::prelude::*;
 
+use std::time::Instant;
+
 fn parse_hex(s: &str) -> Result<u64, String> {
     Ok(u64hex(s))
 }
@@ -24,6 +26,9 @@ struct Args {
 
     #[arg(short, long)]
     num: Option<u64>,
+
+    #[arg(short, long)]
+    time: bool,
 
     #[arg(short, long, default_value_t = false)]
     verbose: bool,
@@ -178,9 +183,17 @@ fn main() {
 
     let contents = read_file("x86-64.sla");
     let lang = SleighLanguage::create("x86", "x86:LE:64:default", &contents);
+
+    let start = Instant::now();
+    let print_time = args.time;
+
     let disasm = Disassembler::new(args, &lang);
 
     for _ in disasm.disassemble(&buf, orig_pc) {}
+
+    if print_time {
+        println!("Disassembly took {}s", ((Instant::now() - start).as_millis() as f64) / 1000.0);
+    }
 }
 
 #[cfg(test)]
