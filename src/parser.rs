@@ -2079,7 +2079,6 @@ fn resolve_operands<'a>(
 
     for op_idx in &ct.operands {
         let operand = get_operand(&op_idx, &symbols);
-        // println!("{:?} {} {:x?}", operand, bit_end, &words[..4]);
 
         match &operand.expr {
             Some(Expr::Field(Field::Token(expr))) => {
@@ -2098,13 +2097,9 @@ fn resolve_operands<'a>(
                 let val = ((word >> expr.start_bit) & mask) as i64;
 
                 matched_ops.push((MatchedSymbol::Literal((val, num_bytes)), None));
-                // let prev_bit_end = bit_end;
                 let byte_start = (bit_end + (expr.start_byte as usize)) / 8; // FIXME
-                // bit_end = bit_end.max(((size as usize) / 8 * 8 + byte_start * 8) as usize);
-                // bit_end = bit_end.max(byte_start * 8 + size as usize);
                 bit_end = bit_end.max(byte_start * 8);
                 total_bit_end = total_bit_end.max(byte_start * 8 + size as usize);
-                // println!("bit end is now {} {:?}, was {}", bit_end, expr, prev_bit_end);
             },
             Some(Expr::Field(Field::Context(expr))) => {
                 let size = expr.end_bit - expr.start_bit + 1;
@@ -2135,7 +2130,6 @@ fn resolve_operands<'a>(
                 } else {
                     bit_end / 8
                 };
-                // let base = bit_end / 8;
 
                 // Before recursively resolving a symbol, we first need to modify the context.
                 for op in &ct.context_ops {
@@ -2151,7 +2145,6 @@ fn resolve_operands<'a>(
                     Some((matched_sym, sub_bit_end)) => {
                         let new_bit_end = bit_end.max((base * 8) as usize + sub_bit_end);
                         matched_ops.push((matched_sym, None));
-                        // println!("-- bit end is now {}, was {} {:?} {} {}", new_bit_end, bit_end, operand, base, sub_bit_end);
                         total_bit_end = new_bit_end;
 
                         if operand.base == -1 {

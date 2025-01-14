@@ -15,7 +15,6 @@ use bitvec::prelude::*;
 
 use std::time::Instant;
 use std::collections::HashMap;
-use std::slice::from_raw_parts;
 
 fn parse_hex(s: &str) -> Result<u64, String> {
     Ok(u64hex(s))
@@ -42,55 +41,10 @@ struct Args {
 // const FILE_BYTES: &[u8] = include_bytes!("/Users/samlerner/Projects/cracks/roots/Payload/Random Roots.app/Random Roots");
 const FILE_BYTES: &[u8] = include_bytes!("../test_assets/understand_x64");
 
-struct Trie<T: Clone> {
-    terminal: Option<T>,
-    children: HashMap<u8, Trie<T>>,
-}
-
-impl<T: Clone> Trie<T> {
-    fn new() -> Self {
-        Self {
-            terminal: None,
-            children: HashMap::default(),
-        }
-    }
-
-    fn get(&self, ctx: &[u8], bytes: &[u8]) -> Option<T> {
-        if let Some(term) = &self.terminal {
-            Some(term.clone())
-        } else if ctx.len() > 0 {
-            if let Some(child) = self.children.get(&ctx[0]) {
-                child.get(&ctx[1..], bytes)
-            } else {
-                None
-            }
-        } else if bytes.len() > 0 {
-            if let Some(child) = self.children.get(&bytes[0]) {
-                child.get(ctx, &bytes[1..])
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-
-    fn insert(&mut self, ctx: &[u8], key: &[u8], terminal: T) {
-        if key.len() == 0 {
-            self.terminal = Some(terminal);
-        } else if ctx.len() > 0 {
-            self.children.entry(key[0]).or_insert_with(Trie::new).insert(&ctx[1..], key, terminal);
-        } else {
-            self.children.entry(key[0]).or_insert_with(Trie::new).insert(ctx, &key[1..], terminal);
-        }
-    }
-}
-
 struct Disassembler<'a> {
     args: Args,
     lang: &'a SleighLanguage,
     reg_space: BitVec<u8, Msb0>,
-    resolve_cache: Trie<Option<(MatchedSymbol<'a>, usize)>>,
     build_cache: HashMap<MatchedSymbol<'a>, Vec<PcodeOp>>,
 }
 
@@ -170,36 +124,25 @@ impl<'a> Disassembler<'a> {
             args: args,
             lang: lang,
             reg_space: reg_space,
-            resolve_cache: Trie::new(),
             build_cache: HashMap::default(),
         }
     }
 
     pub fn disassemble_one(&mut self, data: &[u8], pc: Address, ctx: &mut Vec<u32>) -> Option<Instruction> {
-        let result = if let Some(result) = self.resolve_cache.get(unsafe { from_raw_parts(ctx.as_ptr() as *const u8, ctx.len() * 4) }, &data[..8]) {
-            result.clone()
-        } else {
-            let result = resolve_symbol(
-                data,
-                pc.offset,
-                &self.lang.symbols[&self.lang.insn_table_id],
-                &self.lang.symbols,
-                ctx,
-                &self.reg_space,
-                &mut ResolverDebug::default(),
-            ).map(|(sym, mut num_bits)|{
-                if num_bits % self.lang.bit_align != 0 {
-                    num_bits += num_bits - (num_bits % self.lang.bit_align);
-                }
-                (sym, num_bits)
-            });
+        resolve_symbol(
+            data,
+            pc.offset,
+            &self.lang.symbols[&self.lang.insn_table_id],
+            &self.lang.symbols,
+            ctx,
+            &self.reg_space,
+            &mut ResolverDebug::default(),
+        ).map(|(matched_symbol, mut num_bits)|{
+            if num_bits % self.lang.bit_align != 0 {
+                // TODO: bit-hacking.
+                num_bits += num_bits - (num_bits % self.lang.bit_align);
+            }
 
-            let num_bytes = result.as_ref().map(|o| o.1 / 8).unwrap_or(1);
-            self.resolve_cache.insert(unsafe { from_raw_parts(ctx.as_ptr() as *const u8, ctx.len() * 4) }, &data[..num_bytes], result.clone());
-            result
-        };
-
-        result.map(|(matched_symbol, num_bits)|{
             let pcodeops = if let Some(ops) = self.build_cache.get(&matched_symbol) {
                 let mut new_ops = ops.clone();
 
