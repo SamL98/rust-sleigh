@@ -15,8 +15,8 @@ use bitvec::prelude::*;
 
 use std::time::Instant;
 use std::collections::HashMap;
-use std::thread;
-use std::sync::{Arc, Mutex};
+// use std::thread;
+// use std::sync::{Arc, Mutex};
 
 fn parse_hex(s: &str) -> Result<u64, String> {
     Ok(u64hex(s))
@@ -46,11 +46,56 @@ struct Args {
 // const FILE_BYTES: &[u8] = include_bytes!("/Users/samlerner/Projects/cracks/roots/Payload/Random Roots.app/Random Roots");
 const FILE_BYTES: &[u8] = include_bytes!("../test_assets/understand_x64");
 
+#[derive(Clone, Debug)]
+struct Trie<V> {
+    terminal: Option<V>,
+    children: [Option<usize>; 0x100],
+}
+
+impl<V> Trie<V> {
+    pub fn new() -> Self {
+        Self {
+            terminal: None,
+            children: [None; 0x100],
+        }
+    }
+
+    pub fn get<'a>(&'a self, key: &[u8], tries: &'a Vec<Trie<V>>) -> Option<&'a V> {
+        self.terminal.as_ref().or(
+            if key.len() == 0 {
+                None
+            } else {
+                self.children[key[0] as usize].map(|child_idx| {
+                    tries[child_idx].get(&key[1..], tries)
+                })?
+            }
+        )
+    }
+}
+
+fn set_in_trie<V>(mut idx: usize, key: &[u8], value: V, tries: &mut Vec<Trie<V>>) {
+    for b in key {
+        let k = *b as usize;
+
+        if tries[idx].children[k].is_none() {
+            tries.push(Trie::new());
+            tries[idx].children[k] = Some(tries.len() - 1);
+        }
+
+        idx = tries[idx].children[k].unwrap();
+    }
+
+    tries[idx].terminal = Some(value);
+}
+
 struct Disassembler<'a> {
     args: Args,
     lang: &'a SleighLanguage,
     reg_space: BitVec<u8, Msb0>,
-    build_cache: HashMap<MatchedSymbol<'a>, Vec<PcodeOp>>,
+    tries: Vec<Trie<(MatchedSymIdx, usize)>>,
+    resolve_caches: HashMap<u32, usize>,
+    build_cache: HashMap<MatchedSymIdx, Vec<PcodeOp>>,
+    matched_syms: Vec<(MatchedSymbol, Option<FixupType>)>,
 }
 
 struct DisassemblyIter<'a> {
@@ -129,28 +174,39 @@ impl<'a> Disassembler<'a> {
             args: args,
             lang: lang,
             reg_space: reg_space,
+            tries: vec![],
+            resolve_caches: HashMap::default(),
             build_cache: HashMap::default(),
+            matched_syms: vec![],
         }
     }
 
     pub fn disassemble_one(&mut self, data: &[u8], pc: Address, ctx: &mut Vec<u32>) -> Option<Instruction> {
-        resolve_symbol(
-            data,
-            pc.offset,
-            &self.lang.symbols[&self.lang.insn_table_id],
-            &self.lang.symbols,
-            ctx,
-            &self.reg_space,
-            &mut ResolverDebug::default(),
-        ).map(|(matched_symbol, mut num_bits)|{
-            if num_bits % self.lang.bit_align != 0 {
-                // TODO: bit-hacking.
-                num_bits += num_bits - (num_bits % self.lang.bit_align);
-            }
+        let trie_idx = *self.resolve_caches.entry(ctx[0]).or_insert_with(|| {
+            self.tries.push(Trie::new());
+            self.tries.len() - 1
+        });
 
+        if let Some((matched_sym_idx, num_bits)) = self.tries[trie_idx].get(data, &self.tries).cloned().or(
+            if let Some((matched_sym_idx, num_bits)) = resolve_symbol(
+                data,
+                pc.offset,
+                &self.lang.symbols[&self.lang.insn_table_id],
+                &self.lang.symbols,
+                ctx,
+                &self.reg_space,
+                self.lang.bit_align,
+                &mut self.matched_syms,
+            ) {
+                set_in_trie(trie_idx, &data[..num_bits / 8], (matched_sym_idx, num_bits), &mut self.tries);
+                Some((matched_sym_idx, num_bits))
+            } else {
+                None
+            }
+        ) {
             let mut should_insert = false;
 
-            let pcodeops = if let Some(ops) = self.build_cache.get(&matched_symbol) {
+            let pcodeops = if let Some(ops) = self.build_cache.get(&matched_sym_idx) {
                 let mut new_ops = ops.clone();
 
                 for op in new_ops.iter_mut() {
@@ -168,30 +224,32 @@ impl<'a> Disassembler<'a> {
                 new_ops
             } else {
                 let ops = build_sym(
-                    &matched_symbol,
+                    matched_sym_idx,
+                    &self.matched_syms,
                     &pc,
                     num_bits,
-                    &self.lang.spaces,
-                    &self.lang.varnode_map,
+                    &self.lang,
                 );
 
                 should_insert = true;
                 ops
             };
 
-            let asm = build_text(&matched_symbol, &pcodeops);
+            let asm = build_text(matched_sym_idx, &self.matched_syms, &self.lang, &pcodeops);
 
             if should_insert {
-                self.build_cache.insert(matched_symbol, pcodeops.clone());
+                self.build_cache.insert(matched_sym_idx, pcodeops.clone());
             }
 
-            Instruction {
+            Some(Instruction {
                 address: pc,
                 bit_len: num_bits,
                 asm: asm,
                 ops: pcodeops,
-            }
-        })
+            })
+        } else {
+            None
+        }
     }
 
     pub fn disassemble(&'a mut self, buf: &'a [u8], orig_pc: u64) -> DisassemblyIter {
@@ -207,91 +265,90 @@ impl<'a> Disassembler<'a> {
         }
     }
 
-    pub fn parallel_disassemble(&mut self, buf: &[u8], orig_pc: u64) {
-        let ctx = read_reg(&self.lang.context_reg, &self.reg_space);
-        let mut bits_consumed = 0;
+    // pub fn parallel_disassemble(&mut self, buf: &[u8], orig_pc: u64) {
+    //     let ctx = read_reg(&self.lang.context_reg, &self.reg_space);
+    //     let mut bits_consumed = 0;
 
-        let num_threads = 8;
-        let mut starts = vec![];
+    //     let num_threads = 8;
+    //     let mut starts = vec![];
 
-        while bits_consumed < buf.len() * 8 {
-            let pc = Address {
-                space: "ram".to_owned(),
-                offset: (orig_pc as usize + bits_consumed / 8) as u64,
-            };
+    //     while bits_consumed < buf.len() * 8 {
+    //         let pc = Address {
+    //             space: "ram".to_owned(),
+    //             offset: (orig_pc as usize + bits_consumed / 8) as u64,
+    //         };
 
-            if pc.offset % 0x1000 == 0 {
-                println!("0x{:x} / 0x{:x}", pc.offset - orig_pc, buf.len());
-            }
+    //         if pc.offset % 0x1000 == 0 {
+    //             println!("0x{:x} / 0x{:x}", pc.offset - orig_pc, buf.len());
+    //         }
 
-            bits_consumed += resolve_symbol(
-                &buf[bits_consumed / 8..],
-                pc.offset,
-                &self.lang.symbols[&self.lang.insn_table_id],
-                &self.lang.symbols,
-                &mut ctx.clone(),
-                &self.reg_space,
-                &mut ResolverDebug::default(),
-            ).map(|(_, mut num_bits)|{
-                if num_bits % self.lang.bit_align != 0 {
-                    num_bits += num_bits - (num_bits % self.lang.bit_align);
-                }
-                starts.push(pc.offset);
-                num_bits
-            }).unwrap_or(self.lang.bit_align);
-        }
+    //         bits_consumed += resolve_symbol(
+    //             &buf[bits_consumed / 8..],
+    //             pc.offset,
+    //             &self.lang.symbols[&self.lang.insn_table_id],
+    //             &self.lang.symbols,
+    //             &mut ctx.clone(),
+    //             &self.reg_space,
+    //         ).map(|(_, mut num_bits)|{
+    //             if num_bits % self.lang.bit_align != 0 {
+    //                 num_bits += num_bits - (num_bits % self.lang.bit_align);
+    //             }
+    //             starts.push(pc.offset);
+    //             num_bits
+    //         }).unwrap_or(self.lang.bit_align);
+    //     }
 
-        let idx = Arc::new(Mutex::new(0));
-        let starts = Arc::new(starts);
-        let buf = Arc::new(buf.to_vec());
+    //     let idx = Arc::new(Mutex::new(0));
+    //     let starts = Arc::new(starts);
+    //     let buf = Arc::new(buf.to_vec());
 
-        let mut handles = vec![];
-        let max_insns = self.args.num.unwrap_or(0xffffffffffffffff) as usize;
+    //     let mut handles = vec![];
+    //     let max_insns = self.args.num.unwrap_or(0xffffffffffffffff) as usize;
 
-        for _ in 0..num_threads {
-            let idx = idx.clone();
-            let starts = starts.clone();
-            let buf = buf.clone();
+    //     for _ in 0..num_threads {
+    //         let idx = idx.clone();
+    //         let starts = starts.clone();
+    //         let buf = buf.clone();
 
-            let handle = thread::spawn(move || {
-                let contents = read_file("x86-64.sla");
-                let lang = SleighLanguage::create("x86", "x86:LE:64:default", &contents);
-                let mut disasm = Disassembler::new(Args::default(), &lang);
-                let mut ctx = read_reg(&disasm.lang.context_reg, &disasm.reg_space);
+    //         let handle = thread::spawn(move || {
+    //             let contents = read_file("x86-64.sla");
+    //             let lang = SleighLanguage::create("x86", "x86:LE:64:default", &contents);
+    //             let mut disasm = Disassembler::new(Args::default(), &lang);
+    //             let mut ctx = read_reg(&disasm.lang.context_reg, &disasm.reg_space);
 
-                loop {
-                    let ix = {
-                        let mut idx = idx.lock().unwrap();
+    //             loop {
+    //                 let ix = {
+    //                     let mut idx = idx.lock().unwrap();
 
-                        if *idx >= starts.len() || *idx >= max_insns {
-                            break;
-                        }
+    //                     if *idx >= starts.len() || *idx >= max_insns {
+    //                         break;
+    //                     }
 
-                        let ix = *idx;
-                        *idx += 1;
-                        ix
-                    };
+    //                     let ix = *idx;
+    //                     *idx += 1;
+    //                     ix
+    //                 };
 
-                    let off = starts[ix];
+    //                 let off = starts[ix];
 
-                    let pc = Address {
-                        space: "ram".to_owned(),
-                        offset: off,
-                    };
+    //                 let pc = Address {
+    //                     space: "ram".to_owned(),
+    //                     offset: off,
+    //                 };
 
-                    if let Some(_insn) = disasm.disassemble_one(&buf[(off - orig_pc) as usize..], pc, &mut ctx) {
-                        // println!("{}", insn);
-                    }
-                }
-            });
+    //                 if let Some(_insn) = disasm.disassemble_one(&buf[(off - orig_pc) as usize..], pc, &mut ctx) {
+    //                     // println!("{}", insn);
+    //                 }
+    //             }
+    //         });
 
-            handles.push(handle);
-        }
+    //         handles.push(handle);
+    //     }
 
-        for handle in handles.into_iter() {
-            handle.join().unwrap();
-        }
-    }
+    //     for handle in handles.into_iter() {
+    //         handle.join().unwrap();
+    //     }
+    // }
 }
 
 fn main() {
@@ -315,9 +372,10 @@ fn main() {
     let start = Instant::now();
     let print_time = args.time;
 
-    if args.parallel {
-        let mut disasm = Disassembler::new(args, &lang);
-        disasm.parallel_disassemble(&buf, orig_pc);
+    // if args.parallel {
+    if false {
+        // let mut disasm = Disassembler::new(args, &lang);
+        // disasm.parallel_disassemble(&buf, orig_pc);
     } else {
         let mut disasm = Disassembler::new(args, &lang);
         for _ in disasm.disassemble(&buf, orig_pc) {}
