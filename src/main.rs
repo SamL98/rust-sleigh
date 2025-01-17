@@ -246,6 +246,7 @@ impl<'a> Disassembler<'a> {
         let buf = Arc::new(buf.to_vec());
 
         let mut handles = vec![];
+        let max_insns = self.args.num.unwrap_or(0xffffffffffffffff) as usize;
 
         for _ in 0..num_threads {
             let idx = idx.clone();
@@ -262,7 +263,7 @@ impl<'a> Disassembler<'a> {
                     let ix = {
                         let mut idx = idx.lock().unwrap();
 
-                        if *idx >= starts.len() {
+                        if *idx >= starts.len() || *idx >= max_insns {
                             break;
                         }
 
