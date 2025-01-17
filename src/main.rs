@@ -41,6 +41,9 @@ struct Args {
 
     #[arg(short, long, default_value_t = false)]
     verbose: bool,
+
+    #[arg(short, long, default_value_t = false)]
+    diagnostics: bool,
 }
 
 // const FILE_BYTES: &[u8] = include_bytes!("/Users/samlerner/Projects/cracks/roots/Payload/Random Roots.app/Random Roots");
@@ -223,6 +226,10 @@ impl<'a> Disassembler<'a> {
 
                 new_ops
             } else {
+                if self.args.diagnostics {
+                    println!("Build cache miss at 0x{:x}", pc.offset);
+                }
+
                 let ops = build_sym(
                     matched_sym_idx,
                     &self.matched_syms,
