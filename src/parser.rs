@@ -1713,7 +1713,7 @@ fn match_pattern(pattern: &DecisionPattern, insn_words: &[u8], ctx_words: &Vec<u
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, Clone)]
 pub enum MatchedSymbol<'a> {
     Constructor((&'a Constructor, Vec<(MatchedSymbol<'a>, Option<FixupType>)>)),
     Symbol(&'a Symbol),
@@ -1739,6 +1739,34 @@ impl Hash for MatchedSymbol<'_> {
         }
     }
 }
+
+impl PartialEq for MatchedSymbol<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        use MatchedSymbol::*;
+
+        match (self, other) {
+            (Constructor((ct1, ops1)), Constructor((ct2, ops2))) => {
+                if ct1.line != ct2.line {
+                    return false;
+                }
+
+                for (op1, op2) in ops1.iter().zip(ops2.iter()) {
+                    if op1 != op2 {
+                        return false;
+                    }
+                }
+
+                return true;
+            },
+            (Symbol(sym1), Symbol(sym2)) => sym1.id == sym2.id,
+            (Literal((v1, sz1)), Literal((v2, sz2))) => v1 == v2 && sz1 == sz2,
+            (String(s1), String(s2)) => s1 == s2,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for MatchedSymbol<'_> {}
 
 pub fn read_reg(
     reg: &VarnodeSym,
