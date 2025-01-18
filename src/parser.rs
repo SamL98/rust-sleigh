@@ -280,20 +280,18 @@ pub struct OperandExpr {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub enum ExprOp {
+    Not, Minus,
+    Xor, Add, Sub, Lshift, Rshift, Mult, And, Or
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Expr {
     Const(i64),
     Operand(OperandExpr),
     Field(Field),
-    Not(Box<Expr>),
-    Minus(Box<Expr>),
-    Xor((Box<Expr>, Box<Expr>)),
-    Add((Box<Expr>, Box<Expr>)),
-    Sub((Box<Expr>, Box<Expr>)),
-    Lshift((Box<Expr>, Box<Expr>)),
-    Rshift((Box<Expr>, Box<Expr>)),
-    Mult((Box<Expr>, Box<Expr>)),
-    And((Box<Expr>, Box<Expr>)),
-    Or((Box<Expr>, Box<Expr>)),
+    Unary((ExprOp, Box<Expr>)),
+    Binary((ExprOp, Box<Expr>, Box<Expr>)),
     End,
     Start,
     Next2,
@@ -700,13 +698,13 @@ fn unary_expr(input: &str) -> Res<&str, Expr> {
 
     let hs = Box::new(hs_expr);
 
-    let expr = match expr_type {
-        "not_exp" => Expr::Not(hs),
-        "minus_exp" => Expr::Minus(hs),
+    let op = match expr_type {
+        "not_exp" => ExprOp::Not,
+        "minus_exp" => ExprOp::Minus,
         _ => todo!(),
     };
 
-    Ok((input, expr))
+    Ok((input, Expr::Unary((op, hs))))
 }
 
 fn binary_expr(input: &str) -> Res<&str, Expr> {
@@ -731,19 +729,19 @@ fn binary_expr(input: &str) -> Res<&str, Expr> {
     let lhs = Box::new(lhs_expr);
     let rhs = Box::new(rhs_expr);
 
-    let expr = match expr_type {
-        "plus_exp" => Expr::Add((lhs, rhs)),
-        "sub_exp" => Expr::Sub((lhs, rhs)),
-        "and_exp" => Expr::And((lhs, rhs)),
-        "or_exp" => Expr::Or((lhs, rhs)),
-        "xor_exp" => Expr::Xor((lhs, rhs)),
-        "lshift_exp" => Expr::Lshift((lhs, rhs)),
-        "rshift_exp" => Expr::Rshift((lhs, rhs)),
-        "mult_exp" => Expr::Mult((lhs, rhs)),
+    let op = match expr_type {
+        "plus_exp" => ExprOp::Add,
+        "sub_exp" => ExprOp::Sub,
+        "and_exp" => ExprOp::And,
+        "or_exp" => ExprOp::Or,
+        "xor_exp" => ExprOp::Xor,
+        "lshift_exp" => ExprOp::Lshift,
+        "rshift_exp" => ExprOp::Rshift,
+        "mult_exp" => ExprOp::Mult,
         _ => todo!(),
     };
 
-    Ok((input, expr))
+    Ok((input, Expr::Binary((op, lhs, rhs))))
 }
 
 fn expr(input: &str) -> Res<&str, Expr> {
@@ -1785,18 +1783,6 @@ pub fn read_reg(
     words
 }
 
-// fn write_ctx(
-//     ctx: &Vec<u32>,
-//     ctx_reg: &VarnodeSym,
-//     reg_space: &mut BitVec<u8, Msb0>,
-// ) {
-//     for (i, word) in ctx.iter().enumerate() {
-//         let start = (ctx_reg.offset * 8 + (i as u64) * 32) as usize;
-//         let end = (start + 32) as usize;
-//         reg_space[start..end].store_be(*word);
-//     }
-// }
-
 fn get_word(words: &[u8], start: usize, size: usize) -> u64 {
     let mut word: u64 = 0;
 
@@ -1826,12 +1812,10 @@ fn get_word_le(words: &[u8], start: usize, size: usize) -> u64 {
 }
 
 fn resolve_constructor<'a>(
-    _sym_idx: u32,
     words: &[u8],
     table: &'a Subtable,
     _symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
-    _debug: &mut ResolverDebug,
 ) -> Option<(&'a Constructor, usize)> {
     let mut dtree = &table.decision_tree;
     let mut bits_consumed = 0;
@@ -1858,29 +1842,23 @@ fn resolve_constructor<'a>(
 
                     dtree = &children[idx.min(children.len() - 1)];
                     bits_consumed = bits_consumed.max(start + size);
-                    // println!("insn {} {} {:x} {} {}", start, size, word, bit_start, idx);
                 } else {
                     let ctx_word = ctx[(*start as usize) / 32];
                     let idx = (ctx_word.overflowing_shr(bit_start).0 & ((1 << size) - 1)) as usize;
                     path.push(idx);
 
                     dtree = &children[idx.min(children.len() - 1)];
-                    // println!("ctx {} {}", start, size);
                 }
             }
             DecisionTree::Leaf(pairs) => {
                 for (ct_id, pattern) in pairs {
                     let ct = &table.constructors[*ct_id as usize];
-                    // println!("{:?} {:?}", pattern, words);
 
                     if match_pattern(pattern, &words, &ctx) {
-                        // println!("{}:{}, {}", ct.line.0, ct.line.1, bits_consumed);
-                        // return Some((ct, bits_consumed as usize));
                         return Some((ct, (ct.length * 8) as usize));
                     }
                 }
 
-                // println!("did not match");
                 return None;
             }
         };
@@ -1888,12 +1866,10 @@ fn resolve_constructor<'a>(
 }
 
 fn resolve_varlist<'a>(
-    _sym_idx: u32,
     words: &[u8],
     varlist: &'a Varlist,
     symbols: &'a HashMap<u32, Symbol>,
     _ctx: &mut Vec<u32>,
-    _debug: &mut ResolverDebug,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
     // println!("{:?}", varlist);
     match &varlist.field {
@@ -1961,7 +1937,6 @@ fn resolve_valuemap<'a>(
     valuemap: &'a Valuemap,
     _symbols: &'a HashMap<u32, Symbol>,
     _ctx: &mut Vec<u32>,
-    _debug: &mut ResolverDebug,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
     match &valuemap.field {
         Field::Token(token) => {
@@ -2027,55 +2002,36 @@ fn evaluate_expr(
                 panic!("{:?}", op);
             }
         },
-        Expr::Xor((lhs, rhs)) => {
+        Expr::Binary((op, lhs, rhs)) => {
             let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
             let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
-            (lhs_val ^ rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
+
+            use ExprOp::*;
+            let result = match op {
+                Xor => lhs_val ^ rhs_val,
+                Add => lhs_val + rhs_val,
+                Sub => lhs_val - rhs_val,
+                Mult => lhs_val * rhs_val,
+                And => lhs_val & rhs_val,
+                Or => lhs_val | rhs_val,
+                Lshift => lhs_val.overflowing_shl(rhs_val as u32).0,
+                Rshift => lhs_val >> rhs_val,
+                _ => panic!("unknown binary opcode {:?}", op),
+            };
+
+            (result, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
         },
-        Expr::Add((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
-            (lhs_val + rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
-        },
-        Expr::Sub((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
-            (lhs_val - rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
-        },
-        Expr::Mult((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
-            // FIXME: Use i128
-            (lhs_val.overflowing_mul(rhs_val).0, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
-        },
-        Expr::And((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
-            (lhs_val & rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
-        },
-        Expr::Or((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
-            (lhs_val | rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
-        },
-        Expr::Lshift((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
-            // FIXME: Use i128
-            (lhs_val.overflowing_shl(rhs_val as u32).0, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
-        },
-        Expr::Rshift((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
-            (lhs_val >> rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
-        },
-        Expr::Not(op) => {
-            let (val, sz, fixme) = evaluate_expr(&**op, ctx, operands, reg_space);
-            (!val, sz, fixme)
-        },
-        Expr::Minus(op) => {
-            let (val, sz, fixme) = evaluate_expr(&**op, ctx, operands, reg_space);
-            (-val, sz, fixme)
+        Expr::Unary((op, hs)) => {
+            let (val, sz, fixme) = evaluate_expr(&**hs, ctx, operands, reg_space);
+
+            use ExprOp::*;
+            let result = match op {
+                Not => !val,
+                Minus => -val,
+                _ => panic!("unknown unary opcode {:?}", op),
+            };
+
+            (result, sz, fixme)
         },
         Expr::Field(Field::Context(ctx_field)) => {
             // FIXME: Use BitVec for context. Use end_byte.
@@ -2103,7 +2059,6 @@ fn resolve_operands<'a>(
     symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
     reg_space: &BitVec<u8, Msb0>,
-    debug: &mut ResolverDebug,
 ) -> (Vec<(MatchedSymbol<'a>, Option<FixupType>)>, usize, bool) {
     let mut matched_ops = vec![];
     let mut bit_end: usize = 0;
@@ -2141,12 +2096,7 @@ fn resolve_operands<'a>(
                 let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
                 matched_ops.push((MatchedSymbol::Literal((val as i64, num_bytes)), None));
             },
-            Some(
-                Expr::Add(_) | Expr::And(_) |
-                Expr::Lshift(_) | Expr::Rshift(_) |
-                Expr::Sub(_) | Expr::Not(_) |
-                Expr::Or(_) | Expr::Mult(_) | Expr::Minus(_)
-            ) => {
+            Some(Expr::Unary(_) | Expr::Binary(_)) => {
                 let (val, sz, fixup_type) = evaluate_expr(operand.expr.as_ref().unwrap(), ctx, &matched_ops, reg_space);
                 matched_ops.push((MatchedSymbol::Literal((val, sz)), fixup_type));
             },
@@ -2174,7 +2124,7 @@ fn resolve_operands<'a>(
                     ctx[op.i as usize] = (existing & !mask) | (v & mask);
                 }
 
-                match _resolve_symbol(&words[base..], pc + base as u64, op_sym, symbols, ctx, reg_space, debug) {
+                match _resolve_symbol(&words[base..], pc + base as u64, op_sym, symbols, ctx, reg_space) {
                     Some((matched_sym, sub_bit_end)) => {
                         let new_bit_end = bit_end.max((base * 8) as usize + sub_bit_end);
                         matched_ops.push((matched_sym, None));
@@ -2201,14 +2151,13 @@ pub fn _resolve_symbol<'a>(
     symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
     reg_space: &BitVec<u8, Msb0>,
-    debug: &mut ResolverDebug,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
     // println!("{:?}", words);
     match &sym.body {
         SymbolBody::Subtable(table) => {
-            match resolve_constructor(sym.id, words, table, symbols, ctx, debug) {
+            match resolve_constructor(words, table, symbols, ctx) {
                 Some((ct, bit_end)) => {
-                    let (operands, ops_bit_end, ok) = resolve_operands(words, pc, ct, symbols, ctx, reg_space, debug);
+                    let (operands, ops_bit_end, ok) = resolve_operands(words, pc, ct, symbols, ctx, reg_space);
                     let bit_len = bit_end.max(ops_bit_end);
 
                     if ok {
@@ -2221,10 +2170,10 @@ pub fn _resolve_symbol<'a>(
             }
         },
         SymbolBody::Varlist(varlist) => {
-            resolve_varlist(sym.id, words, varlist, symbols, ctx, debug)
+            resolve_varlist(words, varlist, symbols, ctx)
         },
         SymbolBody::Valuemap(valuemap) => {
-            resolve_valuemap(words, valuemap, symbols, ctx, debug)
+            resolve_valuemap(words, valuemap, symbols, ctx)
         },
         SymbolBody::Varnode(_) => {
             Some((MatchedSymbol::Symbol(sym), 0))
@@ -2261,9 +2210,8 @@ pub fn resolve_symbol<'a>(
     symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
     reg_space: &BitVec<u8, Msb0>,
-    debug: &mut ResolverDebug,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
-    if let Some((mut matched_sym, bit_len)) = _resolve_symbol(words, pc, sym, symbols, ctx, reg_space, debug) {
+    if let Some((mut matched_sym, bit_len)) = _resolve_symbol(words, pc, sym, symbols, ctx, reg_space) {
         apply_fixups(&mut matched_sym, &None, pc, bit_len);
         Some((matched_sym, bit_len))
     } else {
@@ -2414,10 +2362,6 @@ fn build_handle<'a>(
             exported: ex.clone(),
             indirect: ind.clone(),
         };
-
-        // if vn.space == AddressSpace::Ram {
-        //     println!("{:?} {} {} {}", handle_tpl, vn, ex, ind);
-        // }
 
         if handle.needs_resolving() && ex.space != AddressSpace::Const {
             PcodeObject::Handle(handle)

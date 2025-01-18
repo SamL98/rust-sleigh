@@ -142,7 +142,6 @@ impl<'a> Disassembler<'a> {
             &self.lang.symbols,
             ctx,
             &self.reg_space,
-            &mut ResolverDebug::default(),
         ).map(|(matched_symbol, mut num_bits)|{
             if num_bits % self.lang.bit_align != 0 {
                 // TODO: bit-hacking.
