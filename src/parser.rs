@@ -2401,7 +2401,7 @@ fn build_handle<'a>(
     } else if deref_space == AddressSpace::Const {
         let mut offset = pointer.offset;
 
-        if pointer.size > 0 {
+        if deref_size > 0 && pointer.size > 0 {
             let shift = 64 - pointer.size * 8;
             offset = (((offset << shift) as i64) >> shift) as u64;
 
@@ -2413,7 +2413,7 @@ fn build_handle<'a>(
             name: None,
             space: deref_space,
             offset: offset,
-            size: deref_size,
+            size: deref_size.max(pointer.size),
         })
     } else if deref_space != AddressSpace::Dummy {
         let name = ctx.lang.varnode_map.get(&(pointer.offset, deref_size)).cloned();
@@ -2439,14 +2439,14 @@ fn build_varnode<'a>(
     let mut fixup_type = None;
 
     match (&vnode_tpl.space_template, &vnode_tpl.offset_template, &vnode_tpl.size_template) {
-        (Val(0), Handle((ix, _)), Val(0)) => {
+        (Val(0), Handle((ix, expr)), Val(0)) => {
             if let PcodeObject::Varnode(vn) = &objs[*ix as usize] {
                 vn.clone()
             } else {
                 panic!()
             }
         },
-        (Handle((ix, _)), Handle((ix2, _)), Val(0)) if ix == ix2 => {
+        (Handle((ix, _)), Handle((ix2, expr)), Val(0)) if ix == ix2 => {
             if let PcodeObject::Varnode(vn) = &objs[*ix as usize] {
                 vn.clone()
             } else {
@@ -2484,6 +2484,15 @@ fn build_varnode<'a>(
                             offset = (offset << shift) >> shift;
                         }
                     }
+                }
+            }
+
+            // Apply offset expressions.
+            if let Handle((_, Some(expr))) = &vnode_tpl.offset_template {
+                use HandleExpr::*;
+
+                match expr {
+                    OffsetPlus(addend) => offset += *addend as u64,
                 }
             }
 
@@ -2551,7 +2560,7 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
                 sz = output_size;
             }
 
-            if sz == 0 {
+            if sz == 0 || *opcode == OpCode::Copy {
                 sz = sz.max(output_size);
             }
         }
