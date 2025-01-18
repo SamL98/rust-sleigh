@@ -2,7 +2,6 @@ use super::types::{
     // SeqNum, 
     Varnode, 
     PcodeOp, 
-    PcodeOpInputs, 
     // Context,
     // Address
 };
@@ -12,112 +11,6 @@ use super::opcode::OpCode;
 use std::fmt;
 use std::ops::{Index, IndexMut};
 // use std::mem;
-
-pub struct InputsIter<'a> {
-    inputs: &'a PcodeOpInputs,
-    idx: usize,
-}
-
-impl<'a> Iterator for InputsIter<'a> {
-    type Item = &'a Varnode;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.idx >= self.inputs.len() {
-            return None;
-        }
-
-        let vn = &self.inputs[self.idx];
-        self.idx += 1;
-        Some(vn)
-    }
-}
-
-impl Index<usize> for PcodeOpInputs {
-    type Output = Varnode;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        match &self {
-            PcodeOpInputs::Unary(vn) if index == 0 => vn,
-            PcodeOpInputs::Binary((lhs, _)) if index == 0 => lhs,
-            PcodeOpInputs::Binary((_, rhs)) if index == 1 => rhs,
-            PcodeOpInputs::Ternary((op1, _, _)) if index == 0 => op1,
-            PcodeOpInputs::Ternary((_, op2, _)) if index == 1 => op2,
-            PcodeOpInputs::Ternary((_, _, op3)) if index == 2 => op3,
-            PcodeOpInputs::Nary(inputs) => &inputs[index],
-            _ => panic!("Input index out of bounds: {} for inputs: {}", index, self),
-        }
-    }
-}
-
-impl IndexMut<usize> for PcodeOpInputs {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        match self {
-            PcodeOpInputs::Unary(vn) if index == 0 => vn,
-            PcodeOpInputs::Binary((lhs, _)) if index == 0 => lhs,
-            PcodeOpInputs::Binary((_, rhs)) if index == 1 => rhs,
-            PcodeOpInputs::Ternary((op1, _, _)) if index == 0 => op1,
-            PcodeOpInputs::Ternary((_, op2, _)) if index == 1 => op2,
-            PcodeOpInputs::Ternary((_, _, op3)) if index == 2 => op3,
-            PcodeOpInputs::Nary(inputs) => inputs.get_mut(index).unwrap(),
-            _ => panic!("Input index out of bounds: {}", index),
-        }
-    }
-}
-
-impl FromIterator<Varnode> for PcodeOpInputs {
-    fn from_iter<I: IntoIterator<Item=Varnode>>(iter: I) -> Self {
-        let mut iter = iter.into_iter();
-
-        if let Some(vn1) = iter.next() {
-            if let Some(vn2) = iter.next() {
-                if let Some(vn3) = iter.next() {
-                    if let Some(vn4) = iter.next() {
-                        let mut vns = vec![vn1, vn2, vn3, vn4];
-
-                        for vn in iter {
-                            vns.push(vn);
-                        }
-
-                        Self::Nary(vns)
-                    } else {
-                        Self::Ternary((vn1, vn2, vn3))
-                    }
-                } else {
-                    Self::Binary((vn1, vn2))
-                }
-            } else {
-                Self::Unary(vn1)
-            }
-        } else {
-            Self::Null
-        }
-    }
-}
-
-impl<'a> PcodeOpInputs {
-    pub fn iter(&'a self) -> InputsIter<'a> {
-        InputsIter {
-            inputs: self,
-            idx: 0,
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        match &self {
-            PcodeOpInputs::Null => 0,
-            PcodeOpInputs::Unary(_) => 1,
-            PcodeOpInputs::Binary(_) => 2,
-            PcodeOpInputs::Ternary(_) => 3,
-            PcodeOpInputs::Nary(inputs) => inputs.len(),
-        }
-    }
-}
-
-impl fmt::Display for PcodeOpInputs {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.iter().map(|i| format!("{}", i)).collect::<Vec<String>>().join(", "))
-    }
-}
 
 impl PcodeOp {
     fn fmt_unary(&self, opstr: &str) -> String {

@@ -34,19 +34,10 @@ pub struct Varnode {
 }
 
 #[derive(Eq, PartialEq, Hash, Clone)]
-pub enum PcodeOpInputs {
-    Null,
-    Unary(Varnode),
-    Binary((Varnode, Varnode)),
-    Ternary((Varnode, Varnode, Varnode)),
-    Nary(Vec<Varnode>),
-}
-
-#[derive(Eq, PartialEq, Hash, Clone)]
 pub struct PcodeOp {
     pub seq: SeqNum,
     pub opcode: OpCode,
-    pub inputs: PcodeOpInputs,
+    pub inputs: Vec<Varnode>,
     pub output: Option<Varnode>,
 }
 
