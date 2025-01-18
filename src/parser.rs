@@ -1713,54 +1713,27 @@ fn match_pattern(pattern: &DecisionPattern, insn_words: &[u8], ctx_words: &Vec<u
     }
 }
 
-pub type SymIdx = u32;
-pub type CtIdx = usize;
-pub type MatchedSymIdx = usize;
-
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum MatchedSymbol {
-    Constructor((SymIdx, CtIdx, Vec<MatchedSymIdx>)),
-    Symbol(SymIdx),
+pub enum MatchedSymbol<'a> {
+    Constructor((&'a Constructor, Vec<(MatchedSymbol<'a>, Option<FixupType>)>)),
+    Symbol(&'a Symbol),
     Literal((i64, usize)),
-    String(String),
+    String(&'a str),
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct MatchedObject {
-    sym: MatchedSymbol,
-    fixup: Option<FixupType>,
-    orig_val: i64,
-}
-
-impl MatchedObject {
-    fn new(sym: MatchedSymbol) -> Self {
-        let orig_val = match &sym {
-            MatchedSymbol::Literal((val, _)) => *val,
-            _ => 0,
-        };
-
-        Self {
-            sym: sym,
-            fixup: None,
-            orig_val: orig_val,
-        }
-    }
-}
-
-impl Hash for MatchedSymbol {
+impl Hash for MatchedSymbol<'_> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         use MatchedSymbol::*;
 
         match self {
-            Constructor((sym_id, ct_id, operands)) => {
-                sym_id.hash(state);
-                ct_id.hash(state);
+            Constructor((ct, operands)) => {
+                ct.line.hash(state);
 
-                for op in operands {
+                for (op, _) in operands {
                     op.hash(state);
                 }
             },
-            Symbol(sym_id) => sym_id.hash(state),
+            Symbol(sym) => sym.id.hash(state),
             Literal((val, sz)) => (val, sz).hash(state),
             String(s) => s.hash(state),
         }
@@ -1830,7 +1803,8 @@ fn resolve_constructor<'a>(
     table: &'a Subtable,
     _symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
-) -> Option<(CtIdx, usize)> {
+    _debug: &mut ResolverDebug,
+) -> Option<(&'a Constructor, usize)> {
     let mut dtree = &table.decision_tree;
     let mut bits_consumed = 0;
     let mut path = vec![];
@@ -1874,7 +1848,7 @@ fn resolve_constructor<'a>(
                     if match_pattern(pattern, &words, &ctx) {
                         // println!("{}:{}, {}", ct.line.0, ct.line.1, bits_consumed);
                         // return Some((ct, bits_consumed as usize));
-                        return Some((*ct_id as CtIdx, (ct.length * 8) as usize));
+                        return Some((ct, (ct.length * 8) as usize));
                     }
                 }
 
@@ -1889,10 +1863,10 @@ fn resolve_varlist<'a>(
     _sym_idx: u32,
     words: &[u8],
     varlist: &'a Varlist,
-    _symbols: &'a HashMap<u32, Symbol>,
+    symbols: &'a HashMap<u32, Symbol>,
     _ctx: &mut Vec<u32>,
-    matched_syms: &mut Vec<MatchedObject>,
-) -> Option<(MatchedSymIdx, usize)> {
+    _debug: &mut ResolverDebug,
+) -> Option<(MatchedSymbol<'a>, usize)> {
     // println!("{:?}", varlist);
     match &varlist.field {
         Field::Token(token) => {
@@ -1910,10 +1884,11 @@ fn resolve_varlist<'a>(
             let idx = ((token_word >> start) & ((1 << size) - 1)) as usize;
 
             varlist.vars[idx].map(|var_idx| {
+                let var = &symbols[&var_idx];
+
                 // Not super sure if this size calculation is right but it seems to work.
                 let bit_end = (token.end_byte * 8 + (8 - (token.end_bit % 8) - 1) + size) as usize;
-                matched_syms.push(MatchedObject::new(MatchedSymbol::Symbol(var_idx)));
-                (matched_syms.len() - 1, bit_end)
+                ((MatchedSymbol::Symbol(var)), bit_end)
             })
         }
         _ => todo!(),
@@ -1925,8 +1900,7 @@ fn resolve_nametab<'a>(
     nametab: &'a NameTable,
     _symbols: &'a HashMap<u32, Symbol>,
     _ctx: &mut Vec<u32>,
-    matched_syms: &mut Vec<MatchedObject>
-) -> Option<(MatchedSymIdx, usize)> {
+) -> Option<(MatchedSymbol<'a>, usize)> {
     match &nametab.field {
         Field::Token(token) => {
             let num_bytes = (token.end_byte - token.start_byte + 1) as usize;
@@ -1943,8 +1917,7 @@ fn resolve_nametab<'a>(
             let idx = ((token_word >> start) & ((1 << size) - 1)) as usize;
             let name = nametab.names[idx].as_ref().unwrap();
             let bit_end = (token.end_byte * 8 + (8 - (token.end_bit % 8) - 1) + size) as usize;
-            matched_syms.push(MatchedObject::new(MatchedSymbol::String(name.to_string())));
-            Some((matched_syms.len() - 1, bit_end))
+            Some((MatchedSymbol::String(name), bit_end))
         }
         _ => todo!(),
     }
@@ -1955,8 +1928,8 @@ fn resolve_valuemap<'a>(
     valuemap: &'a Valuemap,
     _symbols: &'a HashMap<u32, Symbol>,
     _ctx: &mut Vec<u32>,
-    matched_syms: &mut Vec<MatchedObject>,
-) -> Option<(MatchedSymIdx, usize)> {
+    _debug: &mut ResolverDebug,
+) -> Option<(MatchedSymbol<'a>, usize)> {
     match &valuemap.field {
         Field::Token(token) => {
             let num_bytes = (token.end_byte - token.start_byte + 1) as usize;
@@ -1974,9 +1947,9 @@ fn resolve_valuemap<'a>(
             let val = valuemap.vars[idx] as i64;
 
             // Not super sure if this size calculation is right but it seems to work.
+            let literal = MatchedSymbol::Literal((val, size as usize));
             let token_size = (token.end_byte * 8 + (8 - token.end_bit - 1) + size) as usize;
-            matched_syms.push(MatchedObject::new(MatchedSymbol::Literal((val, size as usize))));
-            Some((matched_syms.len() - 1, token_size))
+            Some((literal, token_size))
         }
         _ => todo!(),
     }
@@ -1990,18 +1963,16 @@ pub enum FixupType {
 fn evaluate_expr(
     expr: &Expr,
     ctx: &Vec<u32>,
-    operands: &Vec<MatchedSymIdx>,
+    operands: &Vec<(MatchedSymbol, Option<FixupType>)>,
     reg_space: &BitVec<u8, Msb0>,
-    matched_syms: &Vec<MatchedObject>,
-    symbols: &HashMap<u32, Symbol>,
 ) -> (i64, usize, Option<FixupType>) {
     match expr {
         Expr::Const(val) => (*val, 8, None), // FIXME
         Expr::Operand(op_expr) if (op_expr.idx as usize) < operands.len() => {
-            let op = &matched_syms[operands[op_expr.idx as usize]].sym;
+            let op = &operands[op_expr.idx as usize].0;
 
             if let MatchedSymbol::Literal((val, sz)) = op {
-                let signed_val = match sz {
+                let signed_val = match *sz {
                     1 => (*val as i8) as i64,
                     2 => (*val as i16) as i64,
                     4 => (*val as i32) as i64,
@@ -2010,9 +1981,7 @@ fn evaluate_expr(
                 };
 
                 (signed_val, *sz, None)
-            } else if let MatchedSymbol::Symbol(sym_idx) = op {
-                let sym = &symbols[sym_idx];
-
+            } else if let MatchedSymbol::Symbol(sym) = op {
                 if let SymbolBody::Varnode(_vnode_sym) = &sym.body {
                     // let words = read_reg(vnode_sym, reg_space);
                     // TODO: How to handle SIMD values???
@@ -2026,53 +1995,53 @@ fn evaluate_expr(
             }
         },
         Expr::Xor((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space, matched_syms, symbols);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space, matched_syms, symbols);
+            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
+            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
             (lhs_val ^ rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
         },
         Expr::Add((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space, matched_syms, symbols);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space, matched_syms, symbols);
+            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
+            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
             (lhs_val + rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
         },
         Expr::Sub((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space, matched_syms, symbols);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space, matched_syms, symbols);
+            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
+            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
             (lhs_val - rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
         },
         Expr::Mult((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space, matched_syms, symbols);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space, matched_syms, symbols);
+            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
+            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
             // FIXME: Use i128
             (lhs_val.overflowing_mul(rhs_val).0, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
         },
         Expr::And((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space, matched_syms, symbols);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space, matched_syms, symbols);
+            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
+            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
             (lhs_val & rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
         },
         Expr::Or((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space, matched_syms, symbols);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space, matched_syms, symbols);
+            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
+            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
             (lhs_val | rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
         },
         Expr::Lshift((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space, matched_syms, symbols);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space, matched_syms, symbols);
+            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
+            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
             // FIXME: Use i128
             (lhs_val.overflowing_shl(rhs_val as u32).0, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
         },
         Expr::Rshift((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space, matched_syms, symbols);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space, matched_syms, symbols);
+            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
+            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
             (lhs_val >> rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
         },
         Expr::Not(op) => {
-            let (val, sz, fixme) = evaluate_expr(&**op, ctx, operands, reg_space, matched_syms, symbols);
+            let (val, sz, fixme) = evaluate_expr(&**op, ctx, operands, reg_space);
             (!val, sz, fixme)
         },
         Expr::Minus(op) => {
-            let (val, sz, fixme) = evaluate_expr(&**op, ctx, operands, reg_space, matched_syms, symbols);
+            let (val, sz, fixme) = evaluate_expr(&**op, ctx, operands, reg_space);
             (-val, sz, fixme)
         },
         Expr::Field(Field::Context(ctx_field)) => {
@@ -2101,8 +2070,8 @@ fn resolve_operands<'a>(
     symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
     reg_space: &BitVec<u8, Msb0>,
-    matched_syms: &mut Vec<MatchedObject>,
-) -> (Vec<MatchedSymIdx>, usize, bool) {
+    debug: &mut ResolverDebug,
+) -> (Vec<(MatchedSymbol<'a>, Option<FixupType>)>, usize, bool) {
     let mut matched_ops = vec![];
     let mut bit_end: usize = 0;
     let mut total_bit_end: usize = 0;
@@ -2127,9 +2096,7 @@ fn resolve_operands<'a>(
                 let mask = 0xffffffffffffffff_u64 >> ((8 - num_bytes) * 8);
                 let val = ((word >> expr.start_bit) & mask) as i64;
 
-                matched_syms.push(MatchedObject::new(MatchedSymbol::Literal((val, num_bytes))));
-                matched_ops.push(matched_syms.len() - 1);
-
+                matched_ops.push((MatchedSymbol::Literal((val, num_bytes)), None));
                 let byte_start = (bit_end + (expr.start_byte as usize)) / 8; // FIXME
                 bit_end = bit_end.max(byte_start * 8);
                 total_bit_end = total_bit_end.max(byte_start * 8 + size as usize);
@@ -2139,9 +2106,7 @@ fn resolve_operands<'a>(
                 let bit_start = 32 - (expr.start_bit + size);
                 let val = (ctx[(expr.start_bit / 32) as usize] >> bit_start) & ((1 << size) - 1);
                 let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
-
-                matched_syms.push(MatchedObject::new(MatchedSymbol::Literal((val as i64, num_bytes))));
-                matched_ops.push(matched_syms.len() - 1);
+                matched_ops.push((MatchedSymbol::Literal((val as i64, num_bytes)), None));
             },
             Some(
                 Expr::Add(_) | Expr::And(_) |
@@ -2149,18 +2114,12 @@ fn resolve_operands<'a>(
                 Expr::Sub(_) | Expr::Not(_) |
                 Expr::Or(_) | Expr::Mult(_) | Expr::Minus(_)
             ) => {
-                let (val, sz, fixup_type) = evaluate_expr(operand.expr.as_ref().unwrap(), ctx, &matched_ops, reg_space, matched_syms, symbols);
-                matched_syms.push(MatchedObject {
-                    sym: MatchedSymbol::Literal((val, sz)),
-                    fixup: fixup_type,
-                    orig_val: val,
-                });
-                matched_ops.push(matched_syms.len() - 1);
+                let (val, sz, fixup_type) = evaluate_expr(operand.expr.as_ref().unwrap(), ctx, &matched_ops, reg_space);
+                matched_ops.push((MatchedSymbol::Literal((val, sz)), fixup_type));
             },
             Some(Expr::Const(val)) => {
                 // TODO: Fix size.
-                matched_syms.push(MatchedObject::new(MatchedSymbol::Literal((*val, 8))));
-                matched_ops.push(matched_syms.len() - 1);
+                matched_ops.push((MatchedSymbol::Literal((*val, 8)), None));
             }
             None => {
                 let op_sym = &symbols[&operand.subsym];
@@ -2177,15 +2136,15 @@ fn resolve_operands<'a>(
                     let existing = ctx[op.i as usize];
                     let mask = op.mask;
 
-                    let (val, _, _) = evaluate_expr(&op.expr, ctx, &matched_ops, reg_space, matched_syms, symbols);
+                    let (val, _, _) = evaluate_expr(&op.expr, ctx, &matched_ops, reg_space);
                     let v = (val as u32) << op.shift;
                     ctx[op.i as usize] = (existing & !mask) | (v & mask);
                 }
 
-                match _resolve_symbol(&words[base..], pc + base as u64, op_sym, symbols, ctx, reg_space, matched_syms) {
+                match _resolve_symbol(&words[base..], pc + base as u64, op_sym, symbols, ctx, reg_space, debug) {
                     Some((matched_sym, sub_bit_end)) => {
                         let new_bit_end = bit_end.max((base * 8) as usize + sub_bit_end);
-                        matched_ops.push(matched_sym);
+                        matched_ops.push((matched_sym, None));
                         total_bit_end = new_bit_end;
 
                         if operand.base == -1 {
@@ -2209,20 +2168,18 @@ pub fn _resolve_symbol<'a>(
     symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
     reg_space: &BitVec<u8, Msb0>,
-    matched_syms: &mut Vec<MatchedObject>,
-) -> Option<(MatchedSymIdx, usize)> {
+    debug: &mut ResolverDebug,
+) -> Option<(MatchedSymbol<'a>, usize)> {
     // println!("{:?}", words);
     match &sym.body {
         SymbolBody::Subtable(table) => {
-            match resolve_constructor(sym.id, words, table, symbols, ctx) {
-                Some((ct_id, bit_end)) => {
-                    let ct = &table.constructors[ct_id];
-                    let (operands, ops_bit_end, ok) = resolve_operands(words, pc, ct, symbols, ctx, reg_space, matched_syms);
+            match resolve_constructor(sym.id, words, table, symbols, ctx, debug) {
+                Some((ct, bit_end)) => {
+                    let (operands, ops_bit_end, ok) = resolve_operands(words, pc, ct, symbols, ctx, reg_space, debug);
                     let bit_len = bit_end.max(ops_bit_end);
 
                     if ok {
-                        matched_syms.push(MatchedObject::new(MatchedSymbol::Constructor((sym.id, ct_id, operands))));
-                        Some((matched_syms.len() - 1, bit_len))
+                        Some((MatchedSymbol::Constructor((ct, operands)), bit_len))
                     } else {
                         None
                     }
@@ -2231,40 +2188,36 @@ pub fn _resolve_symbol<'a>(
             }
         },
         SymbolBody::Varlist(varlist) => {
-            resolve_varlist(sym.id, words, varlist, symbols, ctx, matched_syms)
+            resolve_varlist(sym.id, words, varlist, symbols, ctx, debug)
         },
         SymbolBody::Valuemap(valuemap) => {
-            resolve_valuemap(words, valuemap, symbols, ctx, matched_syms)
+            resolve_valuemap(words, valuemap, symbols, ctx, debug)
         },
         SymbolBody::Varnode(_) => {
-            matched_syms.push(MatchedObject::new(MatchedSymbol::Symbol(sym.id)));
-            Some((matched_syms.len() - 1, 0))
+            Some((MatchedSymbol::Symbol(sym), 0))
         },
         SymbolBody::Nametab(nametab) => {
-            resolve_nametab(words, nametab, symbols, ctx, matched_syms)
+            resolve_nametab(words, nametab, symbols, ctx)
         },
         _ => todo!("{:?}", sym.body),
     }
 }
 
-pub fn apply_fixups(
-    matched_syms: &mut [MatchedObject],
-    pc: u64,
-    bit_len: usize
-) {
-    for i in 0..matched_syms.len() {
-        let fixup_type = matched_syms[i].fixup.clone();
-
-        match &mut matched_syms[i].sym {
-            MatchedSymbol::Literal((val, _)) => {
-                *val = match fixup_type {
-                    Some(FixupType::Start) => matched_syms[i].orig_val + pc as i64,
-                    Some(FixupType::End) => matched_syms[i].orig_val + (pc as usize + bit_len / 8) as i64,
-                    _ => matched_syms[i].orig_val,
-                };
-            },
-            _ => (),
-        }
+fn apply_fixups(matched_sym: &mut MatchedSymbol, fixup_type: &Option<FixupType>, pc: u64, bit_len: usize) {
+    match matched_sym {
+        MatchedSymbol::Constructor((_, operands)) => {
+            for (oper, t) in operands.iter_mut() {
+                apply_fixups(oper, t, pc, bit_len);
+            }
+        },
+        MatchedSymbol::Literal((val, _)) => {
+            *val = match fixup_type {
+                Some(FixupType::Start) => *val + pc as i64,
+                Some(FixupType::End) => *val + (pc as usize + bit_len / 8) as i64,
+                _ => *val,
+            };
+        },
+        _ => (),
     }
 }
 
@@ -2275,19 +2228,11 @@ pub fn resolve_symbol<'a>(
     symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
     reg_space: &BitVec<u8, Msb0>,
-    bit_align: usize,
-    matched_syms: &mut Vec<MatchedObject>,
-) -> Option<(MatchedSymIdx, usize)> {
-    let sym_start_idx = matched_syms.len();
-
-    if let Some((matched_sym_idx, mut bit_len)) = _resolve_symbol(words, pc, sym, symbols, ctx, reg_space, matched_syms) {
-        apply_fixups(&mut matched_syms[sym_start_idx..], pc, bit_len);
-
-        if bit_len % bit_align != 0 { // TODO: Bit-hacking.
-            bit_len += bit_len - (bit_len % bit_align);
-        }
-
-        Some((matched_sym_idx, bit_len))
+    debug: &mut ResolverDebug,
+) -> Option<(MatchedSymbol<'a>, usize)> {
+    if let Some((mut matched_sym, bit_len)) = _resolve_symbol(words, pc, sym, symbols, ctx, reg_space, debug) {
+        apply_fixups(&mut matched_sym, &None, pc, bit_len);
+        Some((matched_sym, bit_len))
     } else {
         None
     }
@@ -2400,14 +2345,16 @@ fn build_handle<'a>(
     pc: u64,
     bit_len: usize,
     objs: &'a [PcodeObject],
-    lang: &'a SleighLanguage,
+    spaces: &'a HashMap<String, u64>,
+    varnode_map: &'a HashMap<(u64, u64), String>,
 ) -> PcodeObject {
     let varnode = build_varnode(
         &handle_tpl.varnode_template,
         pc,
         bit_len,
         objs,
-        lang,
+        spaces,
+        varnode_map,
     );
 
     let exported = build_varnode(
@@ -2415,7 +2362,8 @@ fn build_handle<'a>(
         pc,
         bit_len,
         objs,
-        lang,
+        spaces,
+        varnode_map,
     );
 
     let indirect = build_varnode(
@@ -2423,7 +2371,8 @@ fn build_handle<'a>(
         pc,
         bit_len,
         objs,
-        lang,
+        spaces,
+        varnode_map,
     );
 
     if let (PcodeObject::Varnode(vn), PcodeObject::Varnode(ex), PcodeObject::Varnode(ind)) = (&varnode, &exported, &indirect) {
@@ -2452,11 +2401,11 @@ fn build_varnode<'a>(
     pc: u64,
     bit_len: usize,
     objs: &'a [PcodeObject],
-    lang: &'a SleighLanguage,
+    spaces: &'a HashMap<String, u64>,
+    varnode_map: &'a HashMap<(u64, u64), String>,
 ) -> PcodeObject {
     // println!("{} {:?}", vnode_tpl, objs);
     let mut fixup_type = None;
-    let mut name = None;
 
     let (space, offset, size) = match &vnode_tpl.offset_template {
         ConstTemplate::Handle((h2, expr)) => {
@@ -2464,12 +2413,10 @@ fn build_varnode<'a>(
 
             let (spc, mut off, sz) = match &objs[*h2 as usize] {
                 PcodeObject::Varnode(vn) => {
-                    name = vn.name.clone();
-
                     let (mut size, ft) = if !matches!(vnode_tpl.space_template, ConstTemplate::Handle(_)) {//&& vn.space != AddressSpace::Const {
                         (vn.size, None)
                     } else {
-                        match build_value(&vnode_tpl.size_template, pc, bit_len, objs, &lang.varnode_map) {
+                        match build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map) {
                             (VarnodeValue::Int(sz), ft) => (sz, ft),
                             (VarnodeValue::Op(op), ft) => (op.size, ft),
                             _ => panic!("Unknown size value for {}", vnode_tpl),
@@ -2479,7 +2426,7 @@ fn build_varnode<'a>(
                     fixup_type = fixup_type.or(ft);
 
                     let (space, mut ft) = if matches!(vnode_tpl.size_template, ConstTemplate::Handle(_)) && size == 0 {
-                        match build_value(&vnode_tpl.space_template, pc, bit_len, objs, &lang.varnode_map) {
+                        match build_value(&vnode_tpl.space_template, pc, bit_len, objs, varnode_map) {
                             (VarnodeValue::String(s), ft) => (AddressSpace::from_str(s.as_str()), ft),
                             (VarnodeValue::Space(spc), ft) => (spc, ft),
                             (VarnodeValue::Op(op), ft) => (op.space, ft),
@@ -2493,7 +2440,7 @@ fn build_varnode<'a>(
                     fixup_type = fixup_type.or(ft);
 
                     if vn.space == AddressSpace::Const && size > 0 {
-                        (size, ft) = match build_value(&vnode_tpl.size_template, pc, bit_len, objs, &lang.varnode_map) {
+                        (size, ft) = match build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map) {
                             (VarnodeValue::Int(sz), ft) => (sz, ft),
                             (VarnodeValue::Op(op), ft) => (op.size, ft),
                             _ => panic!("Unknown size value for {}", vnode_tpl),
@@ -2518,7 +2465,6 @@ fn build_varnode<'a>(
                 PcodeObject::Handle(h) if h.exported.space != AddressSpace::Register && 
                     h.exported.offset == 0 && 
                     h.indirect.offset != 0 => {
-                    name = h.varnode.name.clone();
                     (h.exported.space, h.varnode.offset, h.exported.size) // FIXME
                 }
                 PcodeObject::Handle(h) if !h.needs_resolving() => {
@@ -2544,7 +2490,7 @@ fn build_varnode<'a>(
             (spc, off, sz)
         },
         _ =>  {
-            let (mut space, ft) = match build_value(&vnode_tpl.space_template, pc, bit_len, objs, &lang.varnode_map) {
+            let (mut space, ft) = match build_value(&vnode_tpl.space_template, pc, bit_len, objs, varnode_map) {
                 (VarnodeValue::String(name), ft) => (AddressSpace::from_str(name.as_str()), ft),
                 (VarnodeValue::Space(spc), ft) => (spc, ft),
                 (VarnodeValue::Op(op), ft) => (op.space, ft),
@@ -2554,7 +2500,7 @@ fn build_varnode<'a>(
 
             fixup_type = fixup_type.or(ft);
 
-            let (offset, ft) = match build_value(&vnode_tpl.offset_template, pc, bit_len, objs, &lang.varnode_map) {
+            let (offset, ft) = match build_value(&vnode_tpl.offset_template, pc, bit_len, objs, varnode_map) {
                 (VarnodeValue::Int(off), ft) => (off, ft),
                 (VarnodeValue::Op(op), ft) => {
                     (if space == AddressSpace::Const {
@@ -2570,20 +2516,20 @@ fn build_varnode<'a>(
                     }, ft)
                 },
                 (VarnodeValue::Rel(lbl_idx), ft) => (lbl_idx, ft),
-                (VarnodeValue::String(name), ft) => (lang.spaces[name], ft),
+                (VarnodeValue::String(name), ft) => (spaces[name], ft),
                 _ => panic!(),
             };
 
             fixup_type = fixup_type.or(ft);
 
-            let (size, ft) = match build_value(&vnode_tpl.size_template, pc, bit_len, objs, &lang.varnode_map) {
+            let (size, ft) = match build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map) {
                 (VarnodeValue::Int(sz), ft) => (sz, ft),
                 (VarnodeValue::Op(op), ft) => (op.size, ft),
                 (VarnodeValue::String(s), _) if AddressSpace::from_str(s.as_str()) == AddressSpace::Unique => { // FIXME
                     space = AddressSpace::Unique;
                     (8, None)
                 },
-                _ => panic!("Unknown size value for {}: {:?}", vnode_tpl, build_value(&vnode_tpl.size_template, pc, bit_len, objs, &lang.varnode_map)),
+                _ => panic!("Unknown size value for {}: {:?}", vnode_tpl, build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map)),
             };
 
             fixup_type = fixup_type.or(ft);
@@ -2591,17 +2537,17 @@ fn build_varnode<'a>(
         }
     };
 
-    // println!("{} {:?} {} {:x} {} {:?} {:?}", vnode_tpl, objs, space, offset, size, fixup_type, name);
+    // println!("{} {:?} {} {:x} {}", vnode_tpl, objs, space, offset, size);
 
-    let name = name.or_else(|| match space {
-        AddressSpace::Register => lang.varnode_map.get(&(offset, size)).map(|x| x.to_string()),
+    let name = match space {
+        AddressSpace::Register => varnode_map.get(&(offset, size)).map(|x| x.to_string()),
         _ => match fixup_type {
             Some(FixupType::Start) => Some("fixup_start".to_string()),
             Some(FixupType::End) => Some("fixup_end".to_string()),
             _ => None,
         },
-    });
-    
+    };
+
     PcodeObject::Varnode(Varnode {
         name: name,
         space: space.to_owned(),
@@ -2711,7 +2657,8 @@ fn build_pcodeop<'a>(
     bit_len: usize,
     op_tpl: &'a OpTemplate,
     objs: &'a [PcodeObject],
-    lang: &'a SleighLanguage,
+    spaces: &'a HashMap<String, u64>,
+    varnode_map: &'a HashMap<(u64, u64), String>,
     ops: &mut Vec<PcodeOp>,
 ) {
     let pc = seq.pc.offset;
@@ -2728,7 +2675,7 @@ fn build_pcodeop<'a>(
 
     let mut inputs: PcodeOpInputs = input_iter
         .map(|tpl| {
-            match build_varnode(&tpl, pc, bit_len, objs, lang) {
+            match build_varnode(&tpl, pc, bit_len, objs, spaces, varnode_map) {
                 PcodeObject::Handle(input_handle) => {
                     if input_handle.needs_resolving() {
                         if input_handle.varnode.size == 0 {
@@ -2771,7 +2718,7 @@ fn build_pcodeop<'a>(
         .output
         .as_ref()
         .map(|tpl| {
-            match build_varnode(&tpl, pc, bit_len, objs, lang) {
+            match build_varnode(&tpl, pc, bit_len, objs, spaces, varnode_map) {
                 PcodeObject::Handle(output_handle) => {
                     if output_handle.needs_resolving() {
                         let src = output_handle.indirect.clone();
@@ -2780,7 +2727,7 @@ fn build_pcodeop<'a>(
 
                         if dst.space != AddressSpace::Ram {
                             let mut output = Some(output_handle.indirect.clone());
-                            fix_sizes(&mut opcode, &mut inputs, &mut output, &lang.varnode_map);
+                            fix_sizes(&mut opcode, &mut inputs, &mut output, varnode_map);
 
                             ops.push(PcodeOp {
                                 seq: seq.clone(),
@@ -2813,7 +2760,7 @@ fn build_pcodeop<'a>(
             }
         }).flatten();
 
-    fix_sizes(&mut opcode, &mut inputs, &mut output, &lang.varnode_map);
+    fix_sizes(&mut opcode, &mut inputs, &mut output, varnode_map);
 
     let op = PcodeOp {
         seq: seq,
@@ -2826,11 +2773,11 @@ fn build_pcodeop<'a>(
 }
 
 pub fn _build_sym<'a>(
-    matched_sym_idx: MatchedSymIdx,
-    matched_syms: &Vec<MatchedObject>,
+    matched_sym: &'a MatchedSymbol,
     pc: &Address,
     bit_len: usize,
-    lang: &'a SleighLanguage,
+    spaces: &'a HashMap<String, u64>,
+    varnode_map: &'a HashMap<(u64, u64), String>,
     built_pcodeops: &mut Vec<PcodeOp>,
     built_objects: &mut Vec<PcodeObject>,
     order: &mut Vec<usize>,
@@ -2845,25 +2792,16 @@ pub fn _build_sym<'a>(
     let mut ops_start = 0;
     let mut num_ops = 0;
 
-    let matched_sym = &matched_syms[matched_sym_idx].sym;
-
-    if let MatchedSymbol::Constructor((sym_id, ct_id, operands)) = matched_sym {
-        let ct = lang.get_constructor(*sym_id, *ct_id);
-
-        for (_i, op_idx) in operands.iter().enumerate() {
-            let op = &matched_syms[*op_idx].sym;
-            let fixup_type = &matched_syms[*op_idx].fixup;
-
+    if let MatchedSymbol::Constructor((ct, operands)) = &matched_sym {
+        for (_i, (op, fixup_type)) in operands.iter().enumerate() {
             let mut op_handle = None;
             let mut sub_op_start = 0;
             let mut sub_op_size = 0;
 
-            if let MatchedSymbol::Symbol(sym_idx) = op {
-                let sym = &lang.symbols[sym_idx];
-
+            if let MatchedSymbol::Symbol(sym) = op {
                 if let SymbolBody::Varnode(vnode) = &sym.body {
                     let name = match vnode.space {
-                        AddressSpace::Register => lang.varnode_map.get(&(vnode.offset, vnode.size)),
+                        AddressSpace::Register => varnode_map.get(&(vnode.offset, vnode.size)),
                         _ => None,
                     };
 
@@ -2895,7 +2833,7 @@ pub fn _build_sym<'a>(
                 op_handle = Some(varnode);
             } else if let MatchedSymbol::Constructor(_) = op {
                 let sub_obj_start = built_objects.len();
-                (op_handle, sub_op_start, sub_op_size) = _build_sym(*op_idx, matched_syms, pc, bit_len, lang, built_pcodeops, built_objects, order);
+                (op_handle, sub_op_start, sub_op_size) = _build_sym(op, pc, bit_len, spaces, varnode_map, built_pcodeops, built_objects, order);
                 built_objects.drain(sub_obj_start..built_objects.len());
             }
 
@@ -2943,7 +2881,8 @@ pub fn _build_sym<'a>(
                         bit_len,
                         &op_template,
                         &built_objects[start_obj_idx..],
-                        lang,
+                        spaces,
+                        varnode_map,
                         built_pcodeops,
                     );
 
@@ -2966,7 +2905,8 @@ pub fn _build_sym<'a>(
                     pc.offset,
                     bit_len,
                     &built_objects[start_obj_idx..],
-                    lang,
+                    spaces,
+                    varnode_map,
                 );
 
                 // println!("{} {} {:?}", handle_template, my_handle, built_objects);
@@ -2977,7 +2917,6 @@ pub fn _build_sym<'a>(
 
     (handle, ops_start, num_ops)
 }
-
 fn sort_by_indices<T>(data: &mut [T], mut indices: Vec<usize>) {
     for idx in 0..data.len() {
         if indices[idx] != idx {
@@ -2996,17 +2935,17 @@ fn sort_by_indices<T>(data: &mut [T], mut indices: Vec<usize>) {
 }
 
 pub fn build_sym<'a>(
-    matched_sym_idx: MatchedSymIdx,
-    matched_syms: &Vec<MatchedObject>,
+    matched_sym: &'a MatchedSymbol,
     pc: &Address,
     bit_len: usize,
-    lang: &'a SleighLanguage,
+    spaces: &'a HashMap<String, u64>,
+    varnode_map: &'a HashMap<(u64, u64), String>,
 ) -> Vec<PcodeOp> {
     let mut ops = vec![];
     let mut objs = vec![];
     let mut order = vec![];
 
-    let (_, ops_start, num_ops) = _build_sym(matched_sym_idx, matched_syms, pc, bit_len, lang, &mut ops, &mut objs, &mut order);
+    let (_, ops_start, num_ops) = _build_sym(matched_sym, pc, bit_len, spaces, varnode_map, &mut ops, &mut objs, &mut order);
 
     let _ = order.drain(0..ops_start);
     order.truncate(num_ops);
@@ -3048,45 +2987,23 @@ pub fn build_sym<'a>(
     ops
 }
 
-fn _build_cmd_text(
-    cmd: &PrintCommand,
-    operands: &Vec<MatchedSymIdx>,
-    matched_syms: &Vec<MatchedObject>,
-    lang: &SleighLanguage,
-    text: &mut String,
-    ops: &[PcodeOp]
-) {
+fn _build_cmd_text(cmd: &PrintCommand, operands: &Vec<(MatchedSymbol, Option<FixupType>)>, text: &mut String, ops: &[PcodeOp]) {
     match cmd {
-        PrintCommand::Op(op_idx) => {
-            let matched_sym_idx = operands[*op_idx as usize];
-            _build_text(matched_sym_idx, matched_syms, lang, text, ops)
-        },
+        PrintCommand::Op(op_idx) => _build_text(&operands[*op_idx as usize].0, text, ops),
         PrintCommand::Piece(piece) => text.push_str(piece),
     }
 }
 
-pub fn _build_text(
-    matched_sym_idx: MatchedSymIdx,
-    matched_syms: &Vec<MatchedObject>,
-    lang: &SleighLanguage,
-    text: &mut String,
-    ops: &[PcodeOp]
-) {
-    let matched_sym = &matched_syms[matched_sym_idx].sym;
-
+pub fn _build_text(matched_sym: &MatchedSymbol, text: &mut String, ops: &[PcodeOp]) {
     match &matched_sym {
-        MatchedSymbol::Constructor((sym_id, ct_id, operands)) => {
-            let ct = lang.get_constructor(*sym_id, *ct_id);
-
+        MatchedSymbol::Constructor((ct, operands)) => {
             if let Some(cmds) = &ct.print_commands {
                 for cmd in cmds {
-                    _build_cmd_text(cmd, &operands, matched_syms, lang, text, ops);
+                    _build_cmd_text(cmd, &operands, text, ops);
                 }
             }
         },
-        MatchedSymbol::Symbol(sym_id) => {
-            let sym = &lang.symbols[sym_id];
-
+        MatchedSymbol::Symbol(sym) => {
             if let SymbolBody::Varnode(vnode) = &sym.body {
                 text.push_str(&vnode.name);
             }
@@ -3133,14 +3050,9 @@ pub fn _build_text(
     }
 }
 
-pub fn build_text(
-    matched_sym_idx: MatchedSymIdx,
-    matched_syms: &Vec<MatchedObject>,
-    lang: &SleighLanguage,
-    ops: &[PcodeOp]
-) -> String {
+pub fn build_text(matched_sym: &MatchedSymbol, ops: &[PcodeOp]) -> String {
     let mut text = String::new();
-    _build_text(matched_sym_idx, matched_syms, lang, &mut text, ops);
+    _build_text(matched_sym, &mut text, ops);
     text
 }
 
@@ -3212,15 +3124,6 @@ impl SleighLanguage {
             reg_space_size: reg_space_size,
             insn_table_id: insn_table_id,
             context_reg: ctx_reg,
-        }
-    }
-
-    pub fn get_constructor<'a>(&'a self, sym_id: u32, ct_id: usize) -> &'a Constructor {
-        let sym = &self.symbols[&sym_id];
-
-        match &sym.body {
-            SymbolBody::Subtable(subtable) => &subtable.constructors[ct_id],
-            _ => panic!("Cannot get constructor for non-subtable symbol {}", sym_id),
         }
     }
 }
