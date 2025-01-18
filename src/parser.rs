@@ -1904,7 +1904,12 @@ fn resolve_varlist<'a>(
 
             for i in 0..num_bytes {
                 token_word <<= 8;
-                token_word |= words[sb + i] as u32;
+
+                if sb + i < words.len() {
+                    token_word |= words[sb + i] as u32;
+                } else {
+                    token_word |= 0;
+                }
             }
 
             let start = token.start_bit - token.start_byte * 8;
@@ -2419,6 +2424,8 @@ fn build_handle<'a>(
         } else {
             PcodeObject::Varnode(vn.clone())
         }
+    } else if let PcodeObject::Handle(h) = &varnode {
+        PcodeObject::Handle(h.clone())
     } else {
         panic!("({}, {}, {})", varnode, exported, indirect);
     }
@@ -2945,6 +2952,7 @@ pub fn _build_sym<'a>(
 
     (handle, ops_start, num_ops)
 }
+
 fn sort_by_indices<T>(data: &mut [T], mut indices: Vec<usize>) {
     for idx in 0..data.len() {
         if indices[idx] != idx {
@@ -2993,7 +3001,13 @@ pub fn build_sym<'a>(
 
     for (i, op) in ops.iter().enumerate() {
         if op.opcode == OpCode::Label {
-            labels.insert(ops[i + 1].seq.clone(), op.inputs[0].offset);
+            let seq = if i + 1 < ops.len() {
+                ops[i + 1].seq.clone()
+            } else {
+                ops[ops.len() - 1].seq.next() // FIXME
+            };
+
+            labels.insert(seq, op.inputs[0].offset);
         }
     }
 
@@ -3005,10 +3019,13 @@ pub fn build_sym<'a>(
         }
     }
 
+    let n = ops.len();
+
     for (i, op) in ops.iter_mut().enumerate() {
         if (op.opcode == OpCode::Branch || op.opcode == OpCode::CBranch) && op.inputs[0].space == AddressSpace::Const {
-            let lbl_idx = op.inputs[0].offset;
-            op.inputs[0].offset = ((label_idxs[&lbl_idx] as i64 - i as i64) as u32) as u64;
+            let idx = op.inputs[0].offset;
+            let lbl_idx = label_idxs.get(&idx).copied().unwrap_or(n);
+            op.inputs[0].offset = ((lbl_idx as i64 - i as i64) as u32) as u64;
         }
     }
 
