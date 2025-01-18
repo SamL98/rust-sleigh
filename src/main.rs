@@ -171,8 +171,7 @@ impl<'a> Disassembler<'a> {
                     &matched_symbol,
                     &pc,
                     num_bits,
-                    &self.lang.spaces,
-                    &self.lang.varnode_map,
+                    &self.lang,
                 );
 
                 should_insert = true;
