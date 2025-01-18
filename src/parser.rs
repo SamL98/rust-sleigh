@@ -2390,7 +2390,7 @@ fn build_handle<'a>(
             name: pointer.name.clone(),
             space: deref_space,
             offset: pointer.offset,
-            size: deref_size,
+            size: pointer.size,
         })
     } else if !temp.space.is_dummy() && deref_space != AddressSpace::Const {
         PcodeObject::Handle(Handle {
@@ -2440,18 +2440,14 @@ fn build_varnode<'a>(
 
     match (&vnode_tpl.space_template, &vnode_tpl.offset_template, &vnode_tpl.size_template) {
         (Val(0), Handle((ix, _)), Val(0)) => {
-            let obj = &objs[*ix as usize];
-
-            if let PcodeObject::Varnode(vn) = obj {
+            if let PcodeObject::Varnode(vn) = &objs[*ix as usize] {
                 vn.clone()
             } else {
                 panic!()
             }
         },
         (Handle((ix, _)), Handle((ix2, _)), Val(0)) if ix == ix2 => {
-            let obj = &objs[*ix as usize];
-
-            if let PcodeObject::Varnode(vn) = obj {
+            if let PcodeObject::Varnode(vn) = &objs[*ix as usize] {
                 vn.clone()
             } else {
                 panic!()
@@ -2461,10 +2457,10 @@ fn build_varnode<'a>(
             let (space, ft) = build_space(&vnode_tpl.space_template, objs, ctx);
             fixup_type = fixup_type.or(ft);
 
-            let (offset, ft) = build_offset(&vnode_tpl.offset_template, objs, ctx);
+            let (mut offset, ft) = build_offset(&vnode_tpl.offset_template, objs, ctx);
             fixup_type = fixup_type.or(ft);
 
-            let (mut size, ft) = build_size(&vnode_tpl.size_template, objs, ctx);
+            let (size, ft) = build_size(&vnode_tpl.size_template, objs, ctx);
             fixup_type = fixup_type.or(ft);
 
             let name = match space {
@@ -2475,6 +2471,21 @@ fn build_varnode<'a>(
                     _ => None,
                 },
             };
+
+            // Need to sign-extend.
+            if space == AddressSpace::Const {
+                if let (Handle((ix, _)), Handle((ix2, _))) = (&vnode_tpl.space_template, &vnode_tpl.offset_template) {
+                    if ix == ix2 {
+                        if let PcodeObject::Varnode(vn) = &objs[*ix as usize] {
+                            let shift = 64 - vn.size * 8;
+                            offset = (((offset << shift) as i64) >> shift) as u64;
+
+                            let shift = 64 - size * 8;
+                            offset = (offset << shift) >> shift;
+                        }
+                    }
+                }
+            }
 
             println!("{}\n  {:?}\n  ({}, {:x}, {})\n", vnode_tpl, objs, space, offset, size);
 
