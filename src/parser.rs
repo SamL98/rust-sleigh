@@ -2332,6 +2332,7 @@ fn build_offset<'a>(
         VarnodeValue::Op(op) => (op.offset, ft),
         VarnodeValue::Space(_) => (8, ft), // FIXME
         VarnodeValue::String(s) => (ctx.lang.spaces[s.as_str()], ft),
+        VarnodeValue::Rel(ix) => (*ix, ft),
         _ => panic!("Unknown varnode value type for int {:?}", val),
     }
 }
@@ -2488,13 +2489,16 @@ fn build_varnode<'a>(
             }
 
             // Apply offset expressions.
-            if let Handle((_, Some(expr))) = &vnode_tpl.offset_template {
-                use HandleExpr::*;
+            // if let Handle((_, Some(expr))) = &vnode_tpl.offset_template {
+            //     use HandleExpr::*;
 
-                match expr {
-                    OffsetPlus(addend) => offset += *addend as u64,
-                }
-            }
+            //     match expr {
+            //         OffsetPlus(addend) => {
+            //             println!("adding {} to {:x}", addend, offset);
+            //             offset += *addend as u64
+            //         },
+            //     }
+            // }
 
             println!("{}\n  {:?}\n  ({}, {:x}, {})\n", vnode_tpl, objs, space, offset, size);
 
@@ -2568,7 +2572,7 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
         for i in 0..inputs.len() {
             let input = &mut inputs[i];
 
-            if !(i == 1 && *opcode == OpCode::SubPiece) && 
+            if input.space != AddressSpace::Register && !(i == 1 && *opcode == OpCode::SubPiece) && 
                !(i == 0 && *opcode == OpCode::CBranch) && 
                 !(i == 1 && matches!(*opcode, OpCode::IntLeft | OpCode::IntRight | OpCode::IntSRight)) {
                 if input.space == AddressSpace::Const && input.size > 0 && input.size <= 8 && *opcode != OpCode::IntSub && *opcode != OpCode::IntAdd {
@@ -2583,7 +2587,7 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
             }
         }
 
-        if matches!(*opcode, OpCode::IntAdd | OpCode::IntSub | OpCode::IntMult | OpCode::IntDiv) {
+        if matches!(*opcode, OpCode::IntAdd | OpCode::IntSub | OpCode::IntMult | OpCode::IntDiv | OpCode::Copy) {
             output.as_mut().unwrap().size = sz;
         }
 

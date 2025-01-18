@@ -306,9 +306,9 @@ mod tests {
     fn normalize_varnode(vn1_offset: u64, vn2_offset: u64, vn2_size: u32, data_addr: usize, data_size: usize) -> (u64, u32) {
         match (vn1_offset, vn2_offset, vn2_size) {
             // (_, 0xffffffff, 8) => (0xffffffffffffffff, 8),
+            (_, o2, 4) if o2 > 0xffffffffffff => (o2, 8),
             (o1, o2, 8) if (o1 >> 63) == 1 && (o1 & 0xffffffff) == o2 => (0xffffffff00000000 | o2, 8),
             (o1, o2, sz) if o1 >= data_addr as u64 && o1 < (data_addr + data_size) as u64 && o2 < data_addr as u64 => (o2 | 0x100000000, sz),
-            (_, o2, 4) if o2 > 0xffffffffffff => (o2, 8),
             _ => (vn2_offset, vn2_size),
         }
     }
