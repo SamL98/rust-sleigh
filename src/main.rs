@@ -64,7 +64,7 @@ impl<V> Trie<V> {
     }
 
     pub fn get<'a>(&'a self, key: &[u8], tries: &'a Vec<Trie<V>>) -> Option<&'a V> {
-        self.terminal.as_ref().or(
+        self.terminal.as_ref().or_else(|| {
             if key.len() == 0 {
                 None
             } else {
@@ -72,7 +72,7 @@ impl<V> Trie<V> {
                     tries[child_idx].get(&key[1..], tries)
                 })?
             }
-        )
+        })
     }
 }
 
@@ -98,7 +98,7 @@ struct Disassembler<'a> {
     tries: Vec<Trie<(MatchedSymIdx, usize)>>,
     resolve_caches: HashMap<u32, usize>,
     build_cache: HashMap<MatchedSymIdx, Vec<PcodeOp>>,
-    matched_syms: Vec<(MatchedSymbol, Option<FixupType>)>,
+    matched_syms: Vec<MatchedObject>,
 }
 
 struct DisassemblyIter<'a> {
@@ -190,7 +190,7 @@ impl<'a> Disassembler<'a> {
             self.tries.len() - 1
         });
 
-        if let Some((matched_sym_idx, num_bits)) = self.tries[trie_idx].get(data, &self.tries).cloned().or(
+        if let Some((matched_sym_idx, num_bits)) = self.tries[trie_idx].get(data, &self.tries).cloned().or_else(|| {
             if let Some((matched_sym_idx, num_bits)) = resolve_symbol(
                 data,
                 pc.offset,
@@ -206,7 +206,7 @@ impl<'a> Disassembler<'a> {
             } else {
                 None
             }
-        ) {
+        }) {
             let mut should_insert = false;
 
             let pcodeops = if let Some(ops) = self.build_cache.get(&matched_sym_idx) {
