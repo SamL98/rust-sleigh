@@ -15,19 +15,38 @@ pub struct SeqNum {
     pub order: u32
 }
 
+#[repr(u8)]
+#[derive(Eq, PartialEq, Hash, Copy, Clone, Debug)]
+pub enum AddressSpace {
+    Const,
+    Unique,
+    Register,
+    Ram,
+    Dummy,
+}
+
 #[derive(Eq, PartialEq, Hash, Clone)]
 pub struct Varnode {
     pub name: Option<String>,
-    pub space: String,
+    pub space: AddressSpace,
     pub offset: u64,
     pub size: u64
+}
+
+#[derive(Eq, PartialEq, Hash, Clone)]
+pub enum PcodeOpInputs {
+    Null,
+    Unary(Varnode),
+    Binary((Varnode, Varnode)),
+    Ternary((Varnode, Varnode, Varnode)),
+    Nary(Vec<Varnode>),
 }
 
 #[derive(Eq, PartialEq, Hash, Clone)]
 pub struct PcodeOp {
     pub seq: SeqNum,
     pub opcode: OpCode,
-    pub inputs: Vec<Varnode>,
+    pub inputs: PcodeOpInputs,
     pub output: Option<Varnode>,
 }
 

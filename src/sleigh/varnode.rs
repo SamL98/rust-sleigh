@@ -1,4 +1,5 @@
 use super::types::{
+    AddressSpace,
     Varnode,
     // Context
 };
@@ -9,11 +10,51 @@ use std::collections::HashMap;
 use std::clone::Clone;
 use std::fmt;
 
+impl AddressSpace {
+    pub fn from_str(s: &str) -> Self {
+        use AddressSpace::*;
+        match s {
+            "ram" => Ram,
+            "register" => Register,
+            "const" => Const,
+            "unique" => Unique,
+            "dummy" => Dummy,
+            _ => panic!("unknown space {}", s),
+        }
+    }
+
+    // pub fn try_from_str(s: &str) -> Option<Self> {
+    //     use AddressSpace::*;
+    //     match s {
+    //         "ram" => Some(Ram),
+    //         "register" => Some(Register),
+    //         "const" => Some(Const),
+    //         "unique" => Some(Unique),
+    //         "dummy" => Some(Dummy),
+    //         _ => None,
+    //     }
+    // }
+}
+
+impl fmt::Display for AddressSpace {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use AddressSpace::*;
+        let s = match self {
+            Ram => "ram",
+            Unique => "unique",
+            Const => "const",
+            Register => "register",
+            Dummy => "DUMMY",
+        };
+        write!(f, "{}", s)
+    }
+}
+
 impl Varnode{
     pub fn dummy() -> Self {
         Self {
             name: None,
-            space: "DUMMY".to_string(),
+            space: AddressSpace::Dummy,
             offset: 0,
             size: 0,
         }
@@ -21,21 +62,20 @@ impl Varnode{
 
     fn to_string(&self) -> String {
         match &self.name {
-            Some(name) => name.to_owned(),
-            None => match self.space.as_str() {
-                "unique" => format!("U{:x}:{}", self.offset, self.size),
-                "const" => format!("0x{:x}:{}", self.offset, self.size),
-                "register" => format!("R{:x}:{}", self.offset, self.size), // FIXME
-                "ram" => format!("[ram]0x{:x}:{}", self.offset, self.size),
-                "DUMMY" => "DUMMY".to_string(),
-                _ => panic!()
+            Some(name) if name != "fixup_start" && name != "fixup_end" => name.to_owned(),
+            _ => match self.space {
+                AddressSpace::Unique => format!("U{:x}:{}", self.offset, self.size),
+                AddressSpace::Const => format!("0x{:x}:{}", self.offset, self.size),
+                AddressSpace::Register => format!("R{:x}:{}", self.offset, self.size), // FIXME
+                AddressSpace::Ram => format!("[ram]0x{:x}:{}", self.offset, self.size),
+                AddressSpace::Dummy => "DUMMY".to_string(),
             }
         }
     }
 
     pub fn is_negative(&self) -> bool {
         // println!("{:x} {} {}", self.offset, self.size, self.offset >> ((self.size * 8) - 1));
-        self.space.as_str() == "const" && self.offset >> ((self.size * 8) - 1) != 0
+        self.space == AddressSpace::Const && self.offset >> ((self.size * 8) - 1) != 0
 
         // match self.size {
         //     1 if (*val >> 7) != 0 => ((*val ^ 0xff) as u64 + 1, "-"),
@@ -47,11 +87,11 @@ impl Varnode{
     }
 
     // pub fn is_ram(&self) -> bool {
-    //     self.space.as_str() == "ram"
+    //     self.space == AddressSpace::Ram
     // }
 
     // pub fn is_const(&self) -> bool {
-    //     self.space.as_str() == "const"
+    //     self.space == AddressSpace::Const
     // }
 
     pub fn negate(&self) -> Varnode {
@@ -70,7 +110,7 @@ impl Varnode{
     pub fn subpiece(&self, addend: u64, new_size: u64, varnode_map: &HashMap<(u64, u64), String>) -> Self {
         let new_offset = self.offset + addend;
 
-        let new_name = if self.space == "register" {
+        let new_name = if self.space == AddressSpace::Register {
             varnode_map.get(&(new_offset, new_size)).cloned()
         } else {
             None

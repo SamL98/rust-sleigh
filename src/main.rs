@@ -9,12 +9,14 @@ extern crate nom;
 use clap::Parser;
 
 use crate::parser::*;
-use crate::sleigh::types::{Address, Instruction};
-use crate::sleigh::opcode::OpCode;
+use crate::sleigh::types::{Address, PcodeOp, Instruction};
 
 use bitvec::prelude::*;
 
 use std::time::Instant;
+use std::collections::HashMap;
+use std::thread;
+use std::sync::{Arc, Mutex};
 
 fn parse_hex(s: &str) -> Result<u64, String> {
     Ok(u64hex(s))
@@ -23,10 +25,19 @@ fn parse_hex(s: &str) -> Result<u64, String> {
 #[derive(Parser, Debug, Default)]
 struct Args {
     #[arg(short, long, value_parser = parse_hex)]
-    addr: Option<u64>,
+    start_addr: Option<u64>,
+
+    #[arg(short, long, value_parser = parse_hex)]
+    end_addr: Option<u64>,
 
     #[arg(short, long)]
     num: Option<u64>,
+
+    #[arg(short, long)]
+    time: bool,
+
+    #[arg(short, long)]
+    parallel: bool,
 
     #[arg(short, long, default_value_t = false)]
     verbose: bool,
@@ -39,10 +50,11 @@ struct Disassembler<'a> {
     args: Args,
     lang: &'a SleighLanguage,
     reg_space: BitVec<u8, Msb0>,
+    build_cache: HashMap<MatchedSymbol<'a>, Vec<PcodeOp>>,
 }
 
 struct DisassemblyIter<'a> {
-    disasm: &'a Disassembler<'a>,
+    disasm: &'a mut Disassembler<'a>,
     orig_pc: u64,
     data: &'a [u8],
     ctx: Vec<u32>,
@@ -69,9 +81,9 @@ impl<'a> Iterator for DisassemblyIter<'a> {
             offset: (self.orig_pc as usize + self.bits_consumed / 8) as u64,
         };
 
-        // if pc.offset % 0x1000 == 0 {
-        //     println!("0x{:x} / 0x{:x}", pc.offset - orig_pc, buf.len());
-        // }
+        if pc.offset % 0x1000 == 0 {
+            println!("0x{:x} / 0x{:x}", pc.offset - self.orig_pc, self.data.len());
+        }
 
         let (rv, num_bits) = match self.disasm.disassemble_one(&self.data[self.bits_consumed / 8..], pc, &mut self.ctx.clone()) {
             Some(insn) => {
@@ -117,10 +129,11 @@ impl<'a> Disassembler<'a> {
             args: args,
             lang: lang,
             reg_space: reg_space,
+            build_cache: HashMap::default(),
         }
     }
 
-    pub fn disassemble_one(&self, data: &[u8], pc: Address, ctx: &mut Vec<u32>) -> Option<Instruction> {
+    pub fn disassemble_one(&mut self, data: &[u8], pc: Address, ctx: &mut Vec<u32>) -> Option<Instruction> {
         resolve_symbol(
             data,
             pc.offset,
@@ -135,15 +148,42 @@ impl<'a> Disassembler<'a> {
                 num_bits += num_bits - (num_bits % self.lang.bit_align);
             }
 
-            let pcodeops = build_sym(
-                &matched_symbol,
-                &pc,
-                num_bits,
-                &self.lang.spaces,
-                &self.lang.varnode_map,
-            );
+            let mut should_insert = false;
+
+            let pcodeops = if let Some(ops) = self.build_cache.get(&matched_symbol) {
+                let mut new_ops = ops.clone();
+
+                for op in new_ops.iter_mut() {
+                    for i in 0..op.inputs.len() {
+                        let input = &mut op.inputs[i];
+
+                        if input.name.as_ref().map(|n| n == "fixup_start" || n == "fixup_end").unwrap_or(false) {
+                            input.offset += pc.offset - op.seq.pc.offset; // TODO: Make this work for signed integers.
+                        }
+                    }
+
+                    op.seq.pc.offset = pc.offset;
+                }
+
+                new_ops
+            } else {
+                let ops = build_sym(
+                    &matched_symbol,
+                    &pc,
+                    num_bits,
+                    &self.lang.spaces,
+                    &self.lang.varnode_map,
+                );
+
+                should_insert = true;
+                ops
+            };
 
             let asm = build_text(&matched_symbol, &pcodeops);
+
+            if should_insert {
+                self.build_cache.insert(matched_symbol, pcodeops.clone());
+            }
 
             Instruction {
                 address: pc,
@@ -154,10 +194,8 @@ impl<'a> Disassembler<'a> {
         })
     }
 
-    pub fn disassemble(&'a self, buf: &'a [u8], orig_pc: u64) -> DisassemblyIter {
+    pub fn disassemble(&'a mut self, buf: &'a [u8], orig_pc: u64) -> DisassemblyIter {
         let ctx = read_reg(&self.lang.context_reg, &self.reg_space);
-        let mut bits_consumed = 0;
-        let mut num_insns = 0;
 
         DisassemblyIter {
             disasm: self,
@@ -168,6 +206,53 @@ impl<'a> Disassembler<'a> {
             num_insns: 0,
         }
     }
+
+    pub fn parallel_disassemble(&mut self, buf: &[u8], orig_pc: u64) {
+        let num_threads = 8;
+
+        let buf = Arc::new(buf.to_vec());
+
+        let mut handles = vec![];
+        let max_insns = self.args.num.unwrap_or(0xffffffffffffffff) as usize;
+        let chunk_size = buf.len() / num_threads;
+
+        for i in 0..num_threads {
+            let buf = buf.clone();
+
+            let handle = thread::spawn(move || {
+                let contents = read_file("x86-64.sla");
+                let lang = SleighLanguage::create("x86", "x86:LE:64:default", &contents);
+                let mut disasm = Disassembler::new(Args::default(), &lang);
+                let mut ctx = read_reg(&disasm.lang.context_reg, &disasm.reg_space);
+
+                let buf = &buf[i * chunk_size..(i + 1) * chunk_size];
+                let mut bits_consumed = 0;
+
+                while bits_consumed < buf.len() * 8 {
+                    let pc = Address {
+                        space: "ram".to_owned(),
+                        offset: (orig_pc as usize + bits_consumed / 8) as u64,
+                    };
+
+                    if pc.offset % 0x1000 == 0 {
+                        println!("0x{:x} / 0x{:x}", pc.offset - orig_pc, buf.len());
+                    }
+
+                    if let Some(insn) = disasm.disassemble_one(&buf[bits_consumed / 8..], pc, &mut ctx) {
+                        bits_consumed += insn.bit_len;
+                    } else {
+                        bits_consumed += lang.bit_align;
+                    }
+                }
+            });
+
+            handles.push(handle);
+        }
+
+        for handle in handles.into_iter() {
+            handle.join().unwrap();
+        }
+    }
 }
 
 fn main() {
@@ -176,20 +261,37 @@ fn main() {
     let mut buf = &FILE_BYTES[0xe070..0x1cd72e5];
     let mut orig_pc = 0x10000e070;
 
-    if let Some(addr) = args.addr {
+    if let Some(addr) = args.start_addr {
         buf = &buf[(addr - orig_pc) as usize..];
         orig_pc = addr;
     }
 
+    if let Some(addr) = args.end_addr {
+        buf = &buf[..(addr - orig_pc) as usize];
+    }
+
     let contents = read_file("x86-64.sla");
     let lang = SleighLanguage::create("x86", "x86:LE:64:default", &contents);
-    let disasm = Disassembler::new(args, &lang);
 
-    for _ in disasm.disassemble(&buf, orig_pc) {}
+    let start = Instant::now();
+    let print_time = args.time;
+
+    if args.parallel {
+        let mut disasm = Disassembler::new(args, &lang);
+        disasm.parallel_disassemble(&buf, orig_pc);
+    } else {
+        let mut disasm = Disassembler::new(args, &lang);
+        for _ in disasm.disassemble(&buf, orig_pc) {}
+    }
+
+    if print_time {
+        println!("Disassembly took {}s", ((Instant::now() - start).as_millis() as f64) / 1000.0);
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::sleigh::opcode::OpCode;
     use super::*;
 
     use ghidra_sleigh::get_context;
@@ -204,7 +306,6 @@ mod tests {
         let data_addr: usize = 0x10000e070;
 
         let buf = &FILE_BYTES[data_off..(data_off + data_size)];
-        let orig_pc: u64 = 0x10000e070;
 
         // Create Ghidra context.
         let ghidra_ctx = get_context(buf, data_addr, data_size);
@@ -214,12 +315,12 @@ mod tests {
         // Create my context.
         let contents = read_file("x86-64.sla");
         let lang = SleighLanguage::create("x86", "x86:LE:64:default", &contents);
-        let disasm = Disassembler::new(Args::default(), &lang);
+        let mut disasm = Disassembler::new(Args::default(), &lang);
         let mut disasm_iter = disasm.disassemble(buf, data_addr as u64);
 
         while let (Some(insn), Some(ghidra_insn)) = (disasm_iter.next(), ghidra_disasm_iter.next()) {
             if let (Some(insn), Some(ghidra_insn)) = (insn, ghidra_insn) {
-                // println!("0x{:x}: {} vs. {}", insn.address.offset, insn, ghidra_insn);
+                println!("0x{:x}: {} vs. {}", insn.address.offset, insn, ghidra_insn);
 
                 // TODO: Gradually increase this limit.
                 if insn.address.offset >= 0x100082706 {
@@ -241,7 +342,7 @@ mod tests {
                 assert_eq!(insn.ops.len(), ghidra_insn.ops.len());
 
                 for (op1, op2) in insn.ops.iter().zip(ghidra_insn.ops.iter()) {
-                    // println!("    {} vs. {}", op1, op2);
+                    println!("    {} vs. {}", op1, op2);
 
                     // TODO: Actually check for correctness.
                     match (op1.opcode, op2.opcode) {
