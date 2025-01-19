@@ -1,4 +1,5 @@
 use super::opcode::OpCode;
+use flexstr::LocalStr;
 
 // use std::collections::HashMap;
 
@@ -27,7 +28,7 @@ pub enum AddressSpace {
 
 #[derive(Eq, PartialEq, Hash, Clone)]
 pub struct Varnode {
-    pub name: Option<String>,
+    pub name: Option<LocalStr>,
     pub space: AddressSpace,
     pub offset: u64,
     pub size: u64

@@ -17,6 +17,8 @@ use nom::multi::*;
 use nom::sequence::*;
 use nom::*;
 
+use flexstr::{local_str, LocalStr, ToLocalStr};
+
 use bitvec::prelude::*;
 
 use std::collections::HashMap;
@@ -2270,16 +2272,6 @@ pub enum PcodeObject {
     Handle(Handle),
 }
 
-impl PcodeObject {
-    fn as_varnode(&self) -> Varnode {
-        if let PcodeObject::Varnode(vn) = self {
-            vn.clone()
-        } else {
-            panic!()
-        }
-    }
-}
-
 impl fmt::Display for PcodeObject {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -2458,8 +2450,20 @@ fn build_varnode<'a>(
     let mut fixup_type = None;
 
     match (&vnode_tpl.space_template, &vnode_tpl.offset_template, &vnode_tpl.size_template) {
-        (Val(0), Handle((ix, expr)), Val(0)) => objs[*ix as usize].as_varnode(),
-        (Handle((ix, _)), Handle((ix2, expr)), Val(0)) if ix == ix2 => objs[*ix as usize].as_varnode(),
+        (Val(0), Handle((ix, _)), Val(0)) => {
+            match &objs[*ix as usize] {
+                PcodeObject::Varnode(vn) => vn.clone(),
+                PcodeObject::Handle(h) => h.pointer.clone(), // FIXME
+                _ => panic!(),
+            }
+        },
+        (Handle((ix, _)), Handle((ix2, _)), Val(0)) if ix == ix2 => {
+            match &objs[*ix as usize] {
+                PcodeObject::Varnode(vn) => vn.clone(),
+                PcodeObject::Handle(h) => h.pointer.clone(), // FIXME
+                _ => panic!(),
+            }
+        },
         _ => {
             let (space, ft) = build_space(&vnode_tpl.space_template, objs, ctx);
             fixup_type = fixup_type.or(ft);
@@ -2471,10 +2475,10 @@ fn build_varnode<'a>(
             fixup_type = fixup_type.or(ft);
 
             let name = match space {
-                AddressSpace::Register => ctx.lang.varnode_map.get(&(offset, size)).map(|x| x.to_string()),
+                AddressSpace::Register => ctx.lang.varnode_map.get(&(offset, size)).map(|x| x.clone()),
                 _ => match fixup_type {
-                    Some(FixupType::Start) => Some("fixup_start".to_string()),
-                    Some(FixupType::End) => Some("fixup_end".to_string()),
+                    Some(FixupType::Start) => Some(local_str!("fixup_start")),
+                    Some(FixupType::End) => Some(local_str!("fixup_end")),
                     _ => None,
                 },
             };
@@ -2713,7 +2717,7 @@ pub fn _build_sym<'a>(
                     };
 
                     let varnode = PcodeObject::Varnode(Varnode {
-                        name: name.map(|x| x.to_string()),
+                        name: name.map(|x| x.clone()),
                         space: vnode.space.to_owned(),
                         offset: vnode.offset,
                         size: vnode.size,
@@ -2725,8 +2729,8 @@ pub fn _build_sym<'a>(
             else if let MatchedSymbol::Literal((val, size)) = op {
                 // NOTE: We're using the name as out-of-band data so that the build cache can re-fixup varnodes. Very hacky.
                 let name = match fixup_type {
-                    Some(FixupType::Start) => Some("fixup_start".to_string()),
-                    Some(FixupType::End) => Some("fixup_end".to_string()),
+                    Some(FixupType::Start) => Some(local_str!("fixup_start")),
+                    Some(FixupType::End) => Some(local_str!("fixup_end")),
                     _ => None,
                 };
 
@@ -2974,7 +2978,7 @@ pub struct SleighLanguage {
     pub symbols: HashMap<u32, Symbol>,
     pub spaces: HashMap<String, u64>,
     pub _varnodes: HashMap<String, VarnodeSym>,
-    pub varnode_map: HashMap<(u64, u64), String>,
+    pub varnode_map: HashMap<(u64, u64), LocalStr>,
     pub context_syms: HashMap<String, Context>,
     pub reg_space_size: usize,
     pub insn_table_id: u32,
@@ -2989,7 +2993,7 @@ impl SleighLanguage {
         let mut symbols: HashMap<u32, Symbol> = HashMap::new();
         let mut spaces: HashMap<String, u64> = HashMap::new();
         let mut varnodes: HashMap<String, VarnodeSym> = HashMap::new();
-        let mut varnode_map: HashMap<(u64, u64), String> = HashMap::new();
+        let mut varnode_map: HashMap<(u64, u64), LocalStr> = HashMap::new();
         let mut context_syms: HashMap<String, Context> = HashMap::new();
         let mut reg_space_size: usize = 0;
         let mut insn_table_id = 0;
@@ -3011,7 +3015,7 @@ impl SleighLanguage {
                     if varnode.space == AddressSpace::Register {
                         reg_space_size =
                             reg_space_size.max((varnode.offset + varnode.size) as usize);
-                        varnode_map.insert((varnode.offset, varnode.size), varnode.name.clone());
+                        varnode_map.insert((varnode.offset, varnode.size), varnode.name.to_local_str());
                     }
                 }
                 SymbolBody::Context(ctx) => {

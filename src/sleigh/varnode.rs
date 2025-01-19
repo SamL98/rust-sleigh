@@ -4,6 +4,8 @@ use super::types::{
     // Context
 };
 
+use flexstr::LocalStr;
+
 // use std::cmp::{PartialEq, Eq};
 // use std::hash::{Hash, Hasher};
 use std::collections::HashMap;
@@ -62,7 +64,7 @@ impl Varnode{
 
     fn to_string(&self) -> String {
         match &self.name {
-            Some(name) if name != "fixup_start" && name != "fixup_end" => name.to_owned(),
+            Some(name) if name != "fixup_start" && name != "fixup_end" => name.to_string(),
             _ => match self.space {
                 AddressSpace::Unique => format!("U{:x}:{}", self.offset, self.size),
                 AddressSpace::Const => format!("0x{:x}:{}", self.offset, self.size),
@@ -107,7 +109,7 @@ impl Varnode{
         }
     }
 
-    pub fn subpiece(&self, addend: u64, new_size: u64, varnode_map: &HashMap<(u64, u64), String>) -> Self {
+    pub fn subpiece(&self, addend: u64, new_size: u64, varnode_map: &HashMap<(u64, u64), LocalStr>) -> Self {
         let new_offset = self.offset + addend;
 
         let new_name = if self.space == AddressSpace::Register {
