@@ -1,4 +1,5 @@
 use super::opcode::OpCode;
+use flexstr::LocalStr;
 
 // use std::collections::HashMap;
 
@@ -27,26 +28,17 @@ pub enum AddressSpace {
 
 #[derive(Eq, PartialEq, Hash, Clone)]
 pub struct Varnode {
-    pub name: Option<String>,
+    pub name: Option<LocalStr>,
     pub space: AddressSpace,
     pub offset: u64,
     pub size: u64
 }
 
 #[derive(Eq, PartialEq, Hash, Clone)]
-pub enum PcodeOpInputs {
-    Null,
-    Unary(Varnode),
-    Binary((Varnode, Varnode)),
-    Ternary((Varnode, Varnode, Varnode)),
-    Nary(Vec<Varnode>),
-}
-
-#[derive(Eq, PartialEq, Hash, Clone)]
 pub struct PcodeOp {
     pub seq: SeqNum,
     pub opcode: OpCode,
-    pub inputs: PcodeOpInputs,
+    pub inputs: Vec<Varnode>,
     pub output: Option<Varnode>,
 }
 
@@ -55,7 +47,7 @@ pub struct Instruction {
     pub address: Address,
     pub bit_len: usize,
     pub asm: String,
-    pub ops: Vec<PcodeOp>
+    pub ops: Vec<PcodeOp>,
 }
 
 // pub struct Context {}

@@ -1,6 +1,6 @@
 use crate::arch::get_language;
 use crate::sleigh::opcode::OpCode;
-use crate::sleigh::types::{Address, AddressSpace, PcodeOpInputs, PcodeOp, SeqNum, Varnode};
+use crate::sleigh::types::{Address, AddressSpace, PcodeOp, SeqNum, Varnode};
 
 extern crate bitvec;
 extern crate nom;
@@ -16,6 +16,8 @@ use nom::error::*;
 use nom::multi::*;
 use nom::sequence::*;
 use nom::*;
+
+use flexstr::{local_str, LocalStr, ToLocalStr};
 
 use bitvec::prelude::*;
 
@@ -280,20 +282,18 @@ pub struct OperandExpr {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+pub enum ExprOp {
+    Not, Minus,
+    Xor, Add, Sub, Lshift, Rshift, Mult, And, Or
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Expr {
     Const(i64),
     Operand(OperandExpr),
     Field(Field),
-    Not(Box<Expr>),
-    Minus(Box<Expr>),
-    Xor((Box<Expr>, Box<Expr>)),
-    Add((Box<Expr>, Box<Expr>)),
-    Sub((Box<Expr>, Box<Expr>)),
-    Lshift((Box<Expr>, Box<Expr>)),
-    Rshift((Box<Expr>, Box<Expr>)),
-    Mult((Box<Expr>, Box<Expr>)),
-    And((Box<Expr>, Box<Expr>)),
-    Or((Box<Expr>, Box<Expr>)),
+    Unary((ExprOp, Box<Expr>)),
+    Binary((ExprOp, Box<Expr>, Box<Expr>)),
     End,
     Start,
     Next2,
@@ -361,18 +361,21 @@ impl fmt::Display for OpTemplate {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct HandleTemplate {
-    varnode_template: VarnodeTemplate,
-    exported_template: VarnodeTemplate,
-    indirect_template: VarnodeTemplate,
+    space_template: ConstTemplate,
+    size_template: ConstTemplate,
+    pointer_template: VarnodeTemplate,
+    temp_space_template: ConstTemplate,
+    temp_offset_template: ConstTemplate,
 }
 
 impl fmt::Display for HandleTemplate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if matches!(self.indirect_template.space_template, ConstTemplate::SpaceId(_)) {
-            write!(f, "[{}]({})", self.indirect_template, self.varnode_template)
-        } else {
-            write!(f, "{}", self.varnode_template)
-        }
+        write!(f, "*[{}:{}]({})", self.space_template, self.size_template, self.pointer_template)
+        // if matches!(self.temp_space_template, ConstTemplate::SpaceId(_)) {
+        //     write!(f, "[{}]({})", self.indirect_template, self.varnode_template)
+        // } else {
+        //     write!(f, "{}", self.varnode_template)
+        // }
     }
 }
 
@@ -394,6 +397,17 @@ pub struct VarnodeTemplate {
     space_template: ConstTemplate,
     offset_template: ConstTemplate,
     size_template: ConstTemplate,
+}
+
+impl VarnodeTemplate {
+    fn handle_index(&self) -> Option<usize> {
+        use ConstTemplate::*;
+
+        match (&self.space_template, &self.offset_template, &self.size_template) {
+            (Handle((h1, _)), Handle((h2, _)), Handle((h3, _))) if h1 == h2 && h2 == h3 => Some(*h1 as usize),
+            _ => None
+        }
+    }
 }
 
 impl fmt::Display for VarnodeTemplate {
@@ -700,13 +714,13 @@ fn unary_expr(input: &str) -> Res<&str, Expr> {
 
     let hs = Box::new(hs_expr);
 
-    let expr = match expr_type {
-        "not_exp" => Expr::Not(hs),
-        "minus_exp" => Expr::Minus(hs),
+    let op = match expr_type {
+        "not_exp" => ExprOp::Not,
+        "minus_exp" => ExprOp::Minus,
         _ => todo!(),
     };
 
-    Ok((input, expr))
+    Ok((input, Expr::Unary((op, hs))))
 }
 
 fn binary_expr(input: &str) -> Res<&str, Expr> {
@@ -731,19 +745,19 @@ fn binary_expr(input: &str) -> Res<&str, Expr> {
     let lhs = Box::new(lhs_expr);
     let rhs = Box::new(rhs_expr);
 
-    let expr = match expr_type {
-        "plus_exp" => Expr::Add((lhs, rhs)),
-        "sub_exp" => Expr::Sub((lhs, rhs)),
-        "and_exp" => Expr::And((lhs, rhs)),
-        "or_exp" => Expr::Or((lhs, rhs)),
-        "xor_exp" => Expr::Xor((lhs, rhs)),
-        "lshift_exp" => Expr::Lshift((lhs, rhs)),
-        "rshift_exp" => Expr::Rshift((lhs, rhs)),
-        "mult_exp" => Expr::Mult((lhs, rhs)),
+    let op = match expr_type {
+        "plus_exp" => ExprOp::Add,
+        "sub_exp" => ExprOp::Sub,
+        "and_exp" => ExprOp::And,
+        "or_exp" => ExprOp::Or,
+        "xor_exp" => ExprOp::Xor,
+        "lshift_exp" => ExprOp::Lshift,
+        "rshift_exp" => ExprOp::Rshift,
+        "mult_exp" => ExprOp::Mult,
         _ => todo!(),
     };
 
-    Ok((input, expr))
+    Ok((input, Expr::Binary((op, lhs, rhs))))
 }
 
 fn expr(input: &str) -> Res<&str, Expr> {
@@ -901,29 +915,18 @@ fn handle_template(input: &str) -> Res<&str, ConsTemplate> {
         ),
     )(input)
     .map(|(next, res)| {
-        //println!("op {:?}", res.1);
-        let vn_tmpl = VarnodeTemplate {
-            space_template: res.0.clone(),
+        let pointer_template = VarnodeTemplate {
+            space_template: res.2,
             offset_template: res.3,
-            size_template: res.1.clone(),
-        };
-
-        let ind_tmpl = VarnodeTemplate {
-            space_template: res.5,
-            size_template: res.1,
-            offset_template: res.6,
-        };
-
-        let exp_tmpl = VarnodeTemplate {
-            space_template: res.0,
-            size_template: res.2,
-            offset_template: res.4,
+            size_template: res.4,
         };
 
         let handle_template = HandleTemplate {
-            varnode_template: vn_tmpl,
-            exported_template: exp_tmpl,
-            indirect_template: ind_tmpl,
+            space_template: res.0,
+            size_template: res.1,
+            pointer_template: pointer_template,
+            temp_space_template: res.5,
+            temp_offset_template: res.6,
         };
 
         (next, ConsTemplate::Handle(handle_template))
@@ -1785,18 +1788,6 @@ pub fn read_reg(
     words
 }
 
-// fn write_ctx(
-//     ctx: &Vec<u32>,
-//     ctx_reg: &VarnodeSym,
-//     reg_space: &mut BitVec<u8, Msb0>,
-// ) {
-//     for (i, word) in ctx.iter().enumerate() {
-//         let start = (ctx_reg.offset * 8 + (i as u64) * 32) as usize;
-//         let end = (start + 32) as usize;
-//         reg_space[start..end].store_be(*word);
-//     }
-// }
-
 fn get_word(words: &[u8], start: usize, size: usize) -> u64 {
     let mut word: u64 = 0;
 
@@ -1826,12 +1817,10 @@ fn get_word_le(words: &[u8], start: usize, size: usize) -> u64 {
 }
 
 fn resolve_constructor<'a>(
-    _sym_idx: u32,
     words: &[u8],
     table: &'a Subtable,
     _symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
-    _debug: &mut ResolverDebug,
 ) -> Option<(&'a Constructor, usize)> {
     let mut dtree = &table.decision_tree;
     let mut bits_consumed = 0;
@@ -1858,29 +1847,24 @@ fn resolve_constructor<'a>(
 
                     dtree = &children[idx.min(children.len() - 1)];
                     bits_consumed = bits_consumed.max(start + size);
-                    // println!("insn {} {} {:x} {} {}", start, size, word, bit_start, idx);
                 } else {
                     let ctx_word = ctx[(*start as usize) / 32];
                     let idx = (ctx_word.overflowing_shr(bit_start).0 & ((1 << size) - 1)) as usize;
                     path.push(idx);
 
                     dtree = &children[idx.min(children.len() - 1)];
-                    // println!("ctx {} {}", start, size);
                 }
             }
             DecisionTree::Leaf(pairs) => {
                 for (ct_id, pattern) in pairs {
                     let ct = &table.constructors[*ct_id as usize];
-                    // println!("{:?} {:?}", pattern, words);
+                    // println!("{}:{}", ct.line.0, ct.line.1);
 
                     if match_pattern(pattern, &words, &ctx) {
-                        // println!("{}:{}, {}", ct.line.0, ct.line.1, bits_consumed);
-                        // return Some((ct, bits_consumed as usize));
                         return Some((ct, (ct.length * 8) as usize));
                     }
                 }
 
-                // println!("did not match");
                 return None;
             }
         };
@@ -1888,12 +1872,10 @@ fn resolve_constructor<'a>(
 }
 
 fn resolve_varlist<'a>(
-    _sym_idx: u32,
     words: &[u8],
     varlist: &'a Varlist,
     symbols: &'a HashMap<u32, Symbol>,
     _ctx: &mut Vec<u32>,
-    _debug: &mut ResolverDebug,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
     // println!("{:?}", varlist);
     match &varlist.field {
@@ -1961,7 +1943,6 @@ fn resolve_valuemap<'a>(
     valuemap: &'a Valuemap,
     _symbols: &'a HashMap<u32, Symbol>,
     _ctx: &mut Vec<u32>,
-    _debug: &mut ResolverDebug,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
     match &valuemap.field {
         Field::Token(token) => {
@@ -2027,55 +2008,36 @@ fn evaluate_expr(
                 panic!("{:?}", op);
             }
         },
-        Expr::Xor((lhs, rhs)) => {
+        Expr::Binary((op, lhs, rhs)) => {
             let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
             let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
-            (lhs_val ^ rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
+
+            use ExprOp::*;
+            let result = match op {
+                Xor => lhs_val ^ rhs_val,
+                Add => lhs_val + rhs_val,
+                Sub => lhs_val - rhs_val,
+                Mult => lhs_val * rhs_val,
+                And => lhs_val & rhs_val,
+                Or => lhs_val | rhs_val,
+                Lshift => lhs_val.overflowing_shl(rhs_val as u32).0,
+                Rshift => lhs_val >> rhs_val,
+                _ => panic!("unknown binary opcode {:?}", op),
+            };
+
+            (result, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
         },
-        Expr::Add((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
-            (lhs_val + rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
-        },
-        Expr::Sub((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
-            (lhs_val - rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
-        },
-        Expr::Mult((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
-            // FIXME: Use i128
-            (lhs_val.overflowing_mul(rhs_val).0, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
-        },
-        Expr::And((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
-            (lhs_val & rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
-        },
-        Expr::Or((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
-            (lhs_val | rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
-        },
-        Expr::Lshift((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
-            // FIXME: Use i128
-            (lhs_val.overflowing_shl(rhs_val as u32).0, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
-        },
-        Expr::Rshift((lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(&**lhs, ctx, operands, reg_space);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(&**rhs, ctx, operands, reg_space);
-            (lhs_val >> rhs_val, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
-        },
-        Expr::Not(op) => {
-            let (val, sz, fixme) = evaluate_expr(&**op, ctx, operands, reg_space);
-            (!val, sz, fixme)
-        },
-        Expr::Minus(op) => {
-            let (val, sz, fixme) = evaluate_expr(&**op, ctx, operands, reg_space);
-            (-val, sz, fixme)
+        Expr::Unary((op, hs)) => {
+            let (val, sz, fixme) = evaluate_expr(&**hs, ctx, operands, reg_space);
+
+            use ExprOp::*;
+            let result = match op {
+                Not => !val,
+                Minus => -val,
+                _ => panic!("unknown unary opcode {:?}", op),
+            };
+
+            (result, sz, fixme)
         },
         Expr::Field(Field::Context(ctx_field)) => {
             // FIXME: Use BitVec for context. Use end_byte.
@@ -2103,7 +2065,6 @@ fn resolve_operands<'a>(
     symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
     reg_space: &BitVec<u8, Msb0>,
-    debug: &mut ResolverDebug,
 ) -> (Vec<(MatchedSymbol<'a>, Option<FixupType>)>, usize, bool) {
     let mut matched_ops = vec![];
     let mut bit_end: usize = 0;
@@ -2141,12 +2102,7 @@ fn resolve_operands<'a>(
                 let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
                 matched_ops.push((MatchedSymbol::Literal((val as i64, num_bytes)), None));
             },
-            Some(
-                Expr::Add(_) | Expr::And(_) |
-                Expr::Lshift(_) | Expr::Rshift(_) |
-                Expr::Sub(_) | Expr::Not(_) |
-                Expr::Or(_) | Expr::Mult(_) | Expr::Minus(_)
-            ) => {
+            Some(Expr::Unary(_) | Expr::Binary(_)) => {
                 let (val, sz, fixup_type) = evaluate_expr(operand.expr.as_ref().unwrap(), ctx, &matched_ops, reg_space);
                 matched_ops.push((MatchedSymbol::Literal((val, sz)), fixup_type));
             },
@@ -2174,7 +2130,7 @@ fn resolve_operands<'a>(
                     ctx[op.i as usize] = (existing & !mask) | (v & mask);
                 }
 
-                match _resolve_symbol(&words[base..], pc + base as u64, op_sym, symbols, ctx, reg_space, debug) {
+                match _resolve_symbol(&words[base..], pc + base as u64, op_sym, symbols, ctx, reg_space) {
                     Some((matched_sym, sub_bit_end)) => {
                         let new_bit_end = bit_end.max((base * 8) as usize + sub_bit_end);
                         matched_ops.push((matched_sym, None));
@@ -2201,14 +2157,13 @@ pub fn _resolve_symbol<'a>(
     symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
     reg_space: &BitVec<u8, Msb0>,
-    debug: &mut ResolverDebug,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
     // println!("{:?}", words);
     match &sym.body {
         SymbolBody::Subtable(table) => {
-            match resolve_constructor(sym.id, words, table, symbols, ctx, debug) {
+            match resolve_constructor(words, table, symbols, ctx) {
                 Some((ct, bit_end)) => {
-                    let (operands, ops_bit_end, ok) = resolve_operands(words, pc, ct, symbols, ctx, reg_space, debug);
+                    let (operands, ops_bit_end, ok) = resolve_operands(words, pc, ct, symbols, ctx, reg_space);
                     let bit_len = bit_end.max(ops_bit_end);
 
                     if ok {
@@ -2221,10 +2176,10 @@ pub fn _resolve_symbol<'a>(
             }
         },
         SymbolBody::Varlist(varlist) => {
-            resolve_varlist(sym.id, words, varlist, symbols, ctx, debug)
+            resolve_varlist(words, varlist, symbols, ctx)
         },
         SymbolBody::Valuemap(valuemap) => {
-            resolve_valuemap(words, valuemap, symbols, ctx, debug)
+            resolve_valuemap(words, valuemap, symbols, ctx)
         },
         SymbolBody::Varnode(_) => {
             Some((MatchedSymbol::Symbol(sym), 0))
@@ -2261,23 +2216,14 @@ pub fn resolve_symbol<'a>(
     symbols: &'a HashMap<u32, Symbol>,
     ctx: &mut Vec<u32>,
     reg_space: &BitVec<u8, Msb0>,
-    debug: &mut ResolverDebug,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
-    if let Some((mut matched_sym, bit_len)) = _resolve_symbol(words, pc, sym, symbols, ctx, reg_space, debug) {
+    if let Some((mut matched_sym, bit_len)) = _resolve_symbol(words, pc, sym, symbols, ctx, reg_space) {
         apply_fixups(&mut matched_sym, &None, pc, bit_len);
         Some((matched_sym, bit_len))
     } else {
         None
     }
 }
-
-// fn get_table<'a>(id: u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Subtable {
-//     let sym = &symbols[&id];
-//     match &sym.body {
-//         SymbolBody::Subtable(subtable) => subtable,
-//         _ => panic!(),
-//     }
-// }
 
 fn get_operand<'a>(id: &u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Operand {
     let sym = &symbols[id];
@@ -2298,23 +2244,23 @@ pub enum VarnodeValue<'a> {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Handle {
-    varnode: Varnode,
-    exported: Varnode,
-    indirect: Varnode,
+    space: AddressSpace,
+    pointer: Varnode,
+    temp: Varnode,
 }
 
 impl Handle {
     fn needs_resolving(&self) -> bool {
-        self.exported.offset != 0 || self.indirect.offset != 0
+        self.temp.space != AddressSpace::Dummy
     }
 }
 
 impl fmt::Display for Handle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if !self.needs_resolving() {
-            write!(f, "{}", self.varnode)
+            write!(f, "{}", self.pointer)
         } else {
-            write!(f, "*({}){}", self.indirect, self.varnode)
+            write!(f, "*({}){}", self.temp, self.pointer)
         }
     }
 }
@@ -2336,12 +2282,16 @@ impl fmt::Display for PcodeObject {
     }
 }
 
+pub struct BuildContext<'a> {
+    pc: &'a Address,
+    bit_len: usize,
+    lang: &'a SleighLanguage,
+}
+
 fn build_value<'a>(
     const_tpl: &'a ConstTemplate,
-    pc: u64,
-    bit_len: usize,
     objs: &'a [PcodeObject],
-    varnode_map: &'a HashMap<(u64, u64), String>,
+    ctx: &BuildContext,
 ) -> (VarnodeValue<'a>, Option<FixupType>) {
     match const_tpl {
         ConstTemplate::SpaceId(space) => (VarnodeValue::String(space), None),
@@ -2351,13 +2301,13 @@ fn build_value<'a>(
 
             let mut vn: Cow<'a, Varnode> = Cow::Borrowed(match &objs[ix] {
                 PcodeObject::Varnode(vn) => vn,
-                PcodeObject::Handle(h) if h.needs_resolving() => &h.indirect,
-                PcodeObject::Handle(h) => &h.varnode,
+                PcodeObject::Handle(h) if h.needs_resolving() => &h.temp,
+                PcodeObject::Handle(h) => &h.pointer,
                 _ => panic!("{}", objs[ix])
             });
 
             match expr {
-                Some(HandleExpr::OffsetPlus(addend)) => vn = Cow::Owned(vn.subpiece(*addend as u64, vn.size, varnode_map)),
+                Some(HandleExpr::OffsetPlus(addend)) => vn = Cow::Owned(vn.subpiece(*addend as u64, vn.size, &ctx.lang.varnode_map)),
                 _ => ()
             };
 
@@ -2366,232 +2316,197 @@ fn build_value<'a>(
         // For now just use the const index for intra-pcode branching.
         // I think this is right but we'll see.
         ConstTemplate::Relative(idx) => (VarnodeValue::Rel(*idx as u64), None),
-        ConstTemplate::Start => (VarnodeValue::Int(pc), Some(FixupType::Start)),
-        ConstTemplate::Next => (VarnodeValue::Int(pc + (bit_len / 8) as u64), Some(FixupType::End)),
+        ConstTemplate::Start => (VarnodeValue::Int(ctx.pc.offset), Some(FixupType::Start)),
+        ConstTemplate::Next => (VarnodeValue::Int(ctx.pc.offset + (ctx.bit_len / 8) as u64), Some(FixupType::End)),
         ConstTemplate::CurSpace => (VarnodeValue::Space(AddressSpace::Ram), None), // FIXME
         ConstTemplate::CurSpaceSize => (VarnodeValue::Int(8), None), // FIXME
     }
 }
 
+fn build_offset<'a>(
+    const_tpl: &'a ConstTemplate,
+    objs: &'a [PcodeObject],
+    ctx: &BuildContext,
+) -> (u64, Option<FixupType>) {
+    let (val, ft) = build_value(const_tpl, objs, ctx);
+    match &val {
+        VarnodeValue::Int(sz) => (*sz, ft),
+        VarnodeValue::Op(op) => (op.offset, ft),
+        VarnodeValue::Space(_) => (8, ft), // FIXME
+        VarnodeValue::String(s) => (ctx.lang.spaces[s.as_str()], ft),
+        VarnodeValue::Rel(ix) => (*ix, ft),
+        _ => panic!("Unknown varnode value type for int {:?}", val),
+    }
+}
+
+fn build_size<'a>(
+    const_tpl: &'a ConstTemplate,
+    objs: &'a [PcodeObject],
+    ctx: &BuildContext,
+) -> (u64, Option<FixupType>) {
+    let (val, ft) = build_value(const_tpl, objs, ctx);
+    match &val {
+        VarnodeValue::Int(sz) => (*sz, ft),
+        VarnodeValue::Op(op) => (op.size, ft),
+        VarnodeValue::Space(_) => (8, ft), // FIXME
+        VarnodeValue::String(s) => (ctx.lang.spaces[s.as_str()], ft),
+        _ => panic!("Unknown varnode value type for int {:?}", val),
+    }
+}
+
+fn build_space<'a>(
+    const_tpl: &'a ConstTemplate,
+    objs: &'a [PcodeObject],
+    ctx: &BuildContext,
+) -> (AddressSpace, Option<FixupType>) {
+    match build_value(const_tpl, objs, ctx) {
+        (VarnodeValue::String(s), ft) => (AddressSpace::from_str(s.as_str()), ft),
+        (VarnodeValue::Space(spc), ft) => (spc, ft),
+        (VarnodeValue::Op(op), ft) => (op.space, ft),
+        (VarnodeValue::Int(0), ft) => (AddressSpace::Dummy, ft),
+        _ => panic!(),
+    }
+}
+
+fn sign_extend(val: u64, from: u64, to: u64) -> u64 {
+    let mut result = val;
+
+    let shift = 64 - from * 8;
+    result = (((result << shift) as i64) >> shift) as u64;
+
+    let shift = 64 - to * 8;
+    result = (result << shift) >> shift;
+
+    result
+}
+
 fn build_handle<'a>(
     handle_tpl: &'a HandleTemplate,
-    pc: u64,
-    bit_len: usize,
     objs: &'a [PcodeObject],
-    spaces: &'a HashMap<String, u64>,
-    varnode_map: &'a HashMap<(u64, u64), String>,
+    ctx: &BuildContext,
 ) -> PcodeObject {
-    let varnode = build_varnode(
-        &handle_tpl.varnode_template,
-        pc,
-        bit_len,
-        objs,
-        spaces,
-        varnode_map,
-    );
+    let deref_space = build_space(&handle_tpl.space_template, objs, ctx).0;
+    let deref_size = build_size(&handle_tpl.size_template, objs, ctx).0;
+    let pointer = build_varnode(&handle_tpl.pointer_template, objs, ctx);
+    let temp_space = build_space(&handle_tpl.temp_space_template, objs, ctx).0;
+    let temp_offset = build_offset(&handle_tpl.temp_offset_template, objs, ctx).0;
 
-    let exported = build_varnode(
-        &handle_tpl.exported_template,
-        pc,
-        bit_len,
-        objs,
-        spaces,
-        varnode_map,
-    );
+    let temp = Varnode {
+        name: None,
+        space: temp_space,
+        offset: temp_offset,
+        size: deref_size,
+    };
 
-    let indirect = build_varnode(
-        &handle_tpl.indirect_template,
-        pc,
-        bit_len,
-        objs,
-        spaces,
-        varnode_map,
-    );
+    // println!("Handle: {}\n  ({:?}, {:?}, {}, {:?}, {:?})\n", handle_tpl, deref_space, deref_size, pointer, temp_space, temp_offset);
 
-    if let (PcodeObject::Varnode(vn), PcodeObject::Varnode(ex), PcodeObject::Varnode(ind)) = (&varnode, &exported, &indirect) {
-        let handle = Handle {
-            varnode: vn.clone(),
-            exported: ex.clone(),
-            indirect: ind.clone(),
-        };
+    if deref_space == AddressSpace::Ram && pointer.space == AddressSpace::Const {// && pointer.size == 0 {
+        PcodeObject::Varnode(Varnode {
+            name: pointer.name.clone(),
+            space: deref_space,
+            offset: pointer.offset,
+            size: pointer.size,
+        })
+    } else if !temp.space.is_dummy() && deref_space != AddressSpace::Const {
+        PcodeObject::Handle(Handle {
+            space: deref_space,
+            pointer: pointer,
+            temp: temp,
+        })
+    } else if deref_space == AddressSpace::Const {
+        let mut offset = pointer.offset;
 
-        // if vn.space == AddressSpace::Ram {
-        //     println!("{:?} {} {} {}", handle_tpl, vn, ex, ind);
-        // }
-
-        if handle.needs_resolving() && ex.space != AddressSpace::Const {
-            PcodeObject::Handle(handle)
-        } else {
-            PcodeObject::Varnode(vn.clone())
+        if deref_size > 0 && pointer.size > 0 {
+            offset = sign_extend(offset, pointer.size, deref_size);
         }
-    } else if let PcodeObject::Handle(h) = &varnode {
-        PcodeObject::Handle(h.clone())
+
+        PcodeObject::Varnode(Varnode {
+            name: None,
+            space: deref_space,
+            offset: offset,
+            size: deref_size.max(pointer.size),
+        })
+    } else if deref_space != AddressSpace::Dummy {
+        let name = ctx.lang.varnode_map.get(&(pointer.offset, deref_size)).cloned();
+
+        PcodeObject::Varnode(Varnode {
+            name: name,
+            space: deref_space,
+            offset: pointer.offset,
+            size: deref_size,
+        })
     } else {
-        panic!("({}, {}, {})", varnode, exported, indirect);
+        PcodeObject::Varnode(pointer.clone())
     }
 }
 
 fn build_varnode<'a>(
     vnode_tpl: &'a VarnodeTemplate,
-    pc: u64,
-    bit_len: usize,
     objs: &'a [PcodeObject],
-    spaces: &'a HashMap<String, u64>,
-    varnode_map: &'a HashMap<(u64, u64), String>,
-) -> PcodeObject {
-    // println!("{} {:?}", vnode_tpl, objs);
+    ctx: &BuildContext,
+) -> Varnode {
+    use ConstTemplate::*;
+
     let mut fixup_type = None;
 
-    let (space, offset, size) = match &vnode_tpl.offset_template {
-        ConstTemplate::Handle((h2, expr)) => {
-            // println!("{:?}", objs[*h2 as usize]);
-
-            let (spc, mut off, sz) = match &objs[*h2 as usize] {
-                PcodeObject::Varnode(vn) => {
-                    let (mut size, ft) = if !matches!(vnode_tpl.space_template, ConstTemplate::Handle(_)) {//&& vn.space != AddressSpace::Const {
-                        (vn.size, None)
-                    } else {
-                        match build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map) {
-                            (VarnodeValue::Int(sz), ft) => (sz, ft),
-                            (VarnodeValue::Op(op), ft) => (op.size, ft),
-                            _ => panic!("Unknown size value for {}", vnode_tpl),
-                        }
-                    };
-
-                    fixup_type = fixup_type.or(ft);
-
-                    let (space, mut ft) = if matches!(vnode_tpl.size_template, ConstTemplate::Handle(_)) && size == 0 {
-                        match build_value(&vnode_tpl.space_template, pc, bit_len, objs, varnode_map) {
-                            (VarnodeValue::String(s), ft) => (AddressSpace::from_str(s.as_str()), ft),
-                            (VarnodeValue::Space(spc), ft) => (spc, ft),
-                            (VarnodeValue::Op(op), ft) => (op.space, ft),
-                            (VarnodeValue::Int(0), ft) => (AddressSpace::Dummy, ft),
-                            _ => panic!(),
-                        }
-                    } else {
-                        (vn.space, None)
-                    };
-
-                    fixup_type = fixup_type.or(ft);
-
-                    if vn.space == AddressSpace::Const && size > 0 {
-                        (size, ft) = match build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map) {
-                            (VarnodeValue::Int(sz), ft) => (sz, ft),
-                            (VarnodeValue::Op(op), ft) => (op.size, ft),
-                            _ => panic!("Unknown size value for {}", vnode_tpl),
-                        };
-
-                        fixup_type = fixup_type.or(ft);
-                    }
-
-                    let mut offset = vn.offset;
-
-                    // TODO: Figure out if 4-byte moves into 8-byte register sign extends or zero extends.
-                    if space == AddressSpace::Const && size > vn.size {//&& vn.size > 0 && size <= 8 {
-                        let shift = 64 - vn.size * 8;
-                        offset = (((offset << shift) as i64) >> shift) as u64;
-
-                        let shift = 64 - size * 8;
-                        offset = (offset << shift) >> shift;
-                    }
-
-                    (space, offset, size)
-                },
-                PcodeObject::Handle(h) if h.exported.space != AddressSpace::Register && 
-                    h.exported.offset == 0 && 
-                    h.indirect.offset != 0 => {
-                    (h.exported.space, h.varnode.offset, h.exported.size) // FIXME
-                }
-                PcodeObject::Handle(h) if !h.needs_resolving() => {
-                    (h.varnode.space, h.varnode.offset, h.varnode.size)
-                },
-                PcodeObject::Handle(h) if h.varnode.size == 0 && h.exported.size == 0 && h.exported.space == AddressSpace::Ram => {
-                    (h.exported.space, h.exported.offset, h.indirect.size)
-                },
-                _ => {
-                    // FIXME: Make this nicer.
-                    return objs[*h2 as usize].clone();
-                }
-            };
-
-            match expr {
-                Some(HandleExpr::OffsetPlus(addend)) => {
-                    // println!("{} {}", vnode_tpl, sz);
-                    off += *addend as u64
-                },
-                _ => ()
-            };
-
-            (spc, off, sz)
+    match (&vnode_tpl.space_template, &vnode_tpl.offset_template, &vnode_tpl.size_template) {
+        (Val(0), Handle((ix, _)), Val(0)) => {
+            match &objs[*ix as usize] {
+                PcodeObject::Varnode(vn) => vn.clone(),
+                PcodeObject::Handle(h) => h.pointer.clone(), // FIXME
+                _ => panic!(),
+            }
         },
-        _ =>  {
-            let (mut space, ft) = match build_value(&vnode_tpl.space_template, pc, bit_len, objs, varnode_map) {
-                (VarnodeValue::String(name), ft) => (AddressSpace::from_str(name.as_str()), ft),
-                (VarnodeValue::Space(spc), ft) => (spc, ft),
-                (VarnodeValue::Op(op), ft) => (op.space, ft),
-                (VarnodeValue::Int(0), ft) => (AddressSpace::Dummy, ft),
+        (Handle((ix, _)), Handle((ix2, _)), Val(0)) if ix == ix2 => {
+            match &objs[*ix as usize] {
+                PcodeObject::Varnode(vn) => vn.clone(),
+                PcodeObject::Handle(h) => h.pointer.clone(), // FIXME
                 _ => panic!(),
-            };
-
+            }
+        },
+        _ => {
+            let (space, ft) = build_space(&vnode_tpl.space_template, objs, ctx);
             fixup_type = fixup_type.or(ft);
 
-            let (offset, ft) = match build_value(&vnode_tpl.offset_template, pc, bit_len, objs, varnode_map) {
-                (VarnodeValue::Int(off), ft) => (off, ft),
-                (VarnodeValue::Op(op), ft) => {
-                    (if space == AddressSpace::Const {
-                        match op.size {
-                            1 => ((op.offset as i8) as i64) as u64,
-                            2 => ((op.offset as i16) as i64) as u64,
-                            4 => ((op.offset as i32) as i64) as u64,
-                            8 => ((op.offset as i64) as i64) as u64,
-                            _ => op.offset,
+            let (mut offset, ft) = build_offset(&vnode_tpl.offset_template, objs, ctx);
+            fixup_type = fixup_type.or(ft);
+
+            let (size, ft) = build_size(&vnode_tpl.size_template, objs, ctx);
+            fixup_type = fixup_type.or(ft);
+
+            let name = match space {
+                AddressSpace::Register => ctx.lang.varnode_map.get(&(offset, size)).map(|x| x.clone()),
+                _ => match fixup_type {
+                    Some(FixupType::Start) => Some(local_str!("fixup_start")),
+                    Some(FixupType::End) => Some(local_str!("fixup_end")),
+                    _ => None,
+                },
+            };
+
+            // Need to sign-extend.
+            if space == AddressSpace::Const {
+                if let (Handle((ix, _)), Handle((ix2, _))) = (&vnode_tpl.space_template, &vnode_tpl.offset_template) {
+                    if ix == ix2 {
+                        if let PcodeObject::Varnode(vn) = &objs[*ix as usize] {
+                            offset = sign_extend(offset, vn.size, size);
                         }
-                    } else {
-                        op.offset
-                    }, ft)
-                },
-                (VarnodeValue::Rel(lbl_idx), ft) => (lbl_idx, ft),
-                (VarnodeValue::String(name), ft) => (spaces[name], ft),
-                _ => panic!(),
-            };
+                    }
+                }
+            }
 
-            fixup_type = fixup_type.or(ft);
+            // println!("{}\n  {:?}\n  ({}, {:x}, {})\n", vnode_tpl, objs, space, offset, size);
 
-            let (size, ft) = match build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map) {
-                (VarnodeValue::Int(sz), ft) => (sz, ft),
-                (VarnodeValue::Op(op), ft) => (op.size, ft),
-                (VarnodeValue::String(s), _) if AddressSpace::from_str(s.as_str()) == AddressSpace::Unique => { // FIXME
-                    space = AddressSpace::Unique;
-                    (8, None)
-                },
-                _ => panic!("Unknown size value for {}: {:?}", vnode_tpl, build_value(&vnode_tpl.size_template, pc, bit_len, objs, varnode_map)),
-            };
-
-            fixup_type = fixup_type.or(ft);
-            (space, offset, size)
+            Varnode {
+                name: name,
+                space: space.to_owned(),
+                offset: offset,
+                size: size,
+            }
         }
-    };
-
-    // println!("{} {:?} {} {:x} {}", vnode_tpl, objs, space, offset, size);
-
-    let name = match space {
-        AddressSpace::Register => varnode_map.get(&(offset, size)).map(|x| x.to_string()),
-        _ => match fixup_type {
-            Some(FixupType::Start) => Some("fixup_start".to_string()),
-            Some(FixupType::End) => Some("fixup_end".to_string()),
-            _ => None,
-        },
-    };
-
-    PcodeObject::Varnode(Varnode {
-        name: name,
-        space: space.to_owned(),
-        offset: offset,
-        size: size,
-    })
+    }
 }
 
-fn fix_sizes(opcode: &mut OpCode, inputs: &mut PcodeOpInputs, output: &mut Option<Varnode>, varnode_map: &HashMap<(u64, u64), String>) {
+fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option<Varnode>, ctx: &BuildContext) {
     // TODO: Add more cases.
     // println!("{} {:?}", opcode, inputs);
     if *opcode == OpCode::IntAdd {
@@ -2643,7 +2558,7 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut PcodeOpInputs, output: &mut Optio
                 sz = output_size;
             }
 
-            if sz == 0 {
+            if sz == 0 || *opcode == OpCode::Copy {
                 sz = sz.max(output_size);
             }
         }
@@ -2651,7 +2566,7 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut PcodeOpInputs, output: &mut Optio
         for i in 0..inputs.len() {
             let input = &mut inputs[i];
 
-            if !(i == 1 && *opcode == OpCode::SubPiece) && 
+            if input.space != AddressSpace::Register && !(i == 1 && *opcode == OpCode::SubPiece) && 
                !(i == 0 && *opcode == OpCode::CBranch) && 
                 !(i == 1 && matches!(*opcode, OpCode::IntLeft | OpCode::IntRight | OpCode::IntSRight)) {
                 if input.space == AddressSpace::Const && input.size > 0 && input.size <= 8 && *opcode != OpCode::IntSub && *opcode != OpCode::IntAdd {
@@ -2666,7 +2581,7 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut PcodeOpInputs, output: &mut Optio
             }
         }
 
-        if matches!(*opcode, OpCode::IntAdd | OpCode::IntSub | OpCode::IntMult | OpCode::IntDiv) {
+        if matches!(*opcode, OpCode::IntAdd | OpCode::IntSub | OpCode::IntMult | OpCode::IntDiv | OpCode::Copy) {
             output.as_mut().unwrap().size = sz;
         }
 
@@ -2675,7 +2590,7 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut PcodeOpInputs, output: &mut Optio
         }
 
         if *opcode == OpCode::SubPiece && output_size > inputs[1].size {
-            *output = Some(output.as_ref().unwrap().subpiece(0, inputs[1].size, varnode_map));
+            *output = Some(output.as_ref().unwrap().subpiece(0, inputs[1].size, &ctx.lang.varnode_map));
         }
     } else if *opcode == OpCode::Store {
         inputs[1].size = 8; // FIXME
@@ -2689,18 +2604,12 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut PcodeOpInputs, output: &mut Optio
 
 fn build_pcodeop<'a>(
     mut seq: SeqNum,
-    bit_len: usize,
     op_tpl: &'a OpTemplate,
     objs: &'a [PcodeObject],
-    spaces: &'a HashMap<String, u64>,
-    varnode_map: &'a HashMap<(u64, u64), String>,
     ops: &mut Vec<PcodeOp>,
+    ctx: &BuildContext,
 ) {
-    let pc = seq.pc.offset;
     let mut opcode = OpCode::from_str(op_tpl.code.as_str());
-
-    // println!("{} {:?}", op_tpl, objs);
-    // println!("{}", op_tpl);
 
     let mut input_iter = op_tpl.inputs.iter();
 
@@ -2708,94 +2617,64 @@ fn build_pcodeop<'a>(
         let _ = input_iter.next();
     }
 
-    let mut inputs: PcodeOpInputs = input_iter
-        .map(|tpl| {
-            match build_varnode(&tpl, pc, bit_len, objs, spaces, varnode_map) {
-                PcodeObject::Handle(input_handle) => {
-                    if input_handle.needs_resolving() {
-                        if input_handle.varnode.size == 0 {
-                            Varnode {
-                                name: None,
-                                space: AddressSpace::Ram,
-                                offset: input_handle.varnode.offset,
-                                size: input_handle.indirect.size,
-                            }
-                        } else {
-                            let mut src = input_handle.varnode.clone();
-                            src.size = 8; // FIXME
-                            src.space = input_handle.exported.space;
+    let mut inputs = vec![];
 
-                            ops.push(PcodeOp {
-                                seq: seq.clone(),
-                                opcode: OpCode::Load,
-                                inputs: PcodeOpInputs::Binary((Varnode::dummy(), src)),
-                                output: Some(input_handle.indirect.clone()),
-                            });
+    for tpl in input_iter {
+        if let Some(idx) = tpl.handle_index() {
+            let obj = &objs[idx];
 
-                            seq = seq.next();
-                            input_handle.indirect.clone()
-                        }
+            match obj {
+                PcodeObject::Varnode(vn) => inputs.push(vn.clone()),
+                PcodeObject::Handle(h) => {
+                    if !h.temp.space.is_dummy() {
+                        let load_inputs = vec![Varnode::dummy(), h.pointer.clone()];
+                        ops.push(PcodeOp::new(seq.clone(), OpCode::Load, load_inputs, Some(h.temp.clone())));
+
+                        seq = seq.next();
+                        inputs.push(h.temp.clone());
                     } else {
-                        input_handle.varnode.clone()
+                        inputs.push(h.pointer.clone());
                     }
                 },
-                PcodeObject::Varnode(input_varnode) => {
-                    input_varnode.clone()
-                },
-                _ => Varnode::dummy(),
-            }
-        })
-        .collect();
+                _ => panic!(),
+            };
+        } else {
+            let vn = build_varnode(tpl, objs, ctx);
+            inputs.push(vn);
+        }
+    }
 
-    // println!("{:?}", inputs);
+    let mut output = None;
 
-    let mut output = op_tpl
-        .output
-        .as_ref()
-        .map(|tpl| {
-            match build_varnode(&tpl, pc, bit_len, objs, spaces, varnode_map) {
-                PcodeObject::Handle(output_handle) => {
-                    if output_handle.needs_resolving() {
-                        let src = output_handle.indirect.clone();
-                        let mut dst = output_handle.exported.clone();
-                        dst.size = src.size;
+    if let Some(tpl) = &op_tpl.output {
+        if let Some(idx) = tpl.handle_index() {
+            let obj = &objs[idx];
 
-                        if dst.space != AddressSpace::Ram {
-                            let mut output = Some(output_handle.indirect.clone());
-                            fix_sizes(&mut opcode, &mut inputs, &mut output, varnode_map);
+            match obj {
+                PcodeObject::Varnode(vn) => output = Some(vn.clone()),
+                PcodeObject::Handle(h) => {
+                    if !h.temp.space.is_dummy() {
+                        let mut output = Some(h.temp.clone());
+                        fix_sizes(&mut opcode, &mut inputs, &mut output, ctx);
+                        ops.push(PcodeOp::new(seq.clone(), opcode, inputs.clone(), output));
 
-                            ops.push(PcodeOp {
-                                seq: seq.clone(),
-                                opcode: opcode,
-                                inputs: inputs.clone(),
-                                output: output,
-                            });
-
-                            // HACK: I don't know what I'm doing, but I guess this is right.
-                            if output_handle.varnode.space == AddressSpace::Ram {
-                                dst.offset = output_handle.varnode.offset;
-                            }
-
-                            seq = seq.next();
-                            opcode = OpCode::Store;
-
-                            inputs = PcodeOpInputs::Ternary((Varnode::dummy(), dst, src));
-                            None
-                        } else {
-                            Some(dst)
-                        }
+                        seq = seq.next();
+                        opcode = OpCode::Store;
+                        inputs = vec![Varnode::dummy(), h.pointer.clone(), h.temp.clone()];
                     } else {
-                        Some(output_handle.varnode.clone())
+                        output = Some(h.pointer.clone());
                     }
                 },
-                PcodeObject::Varnode(output_vnode) => {
-                    Some(output_vnode.clone())
-                },
-                _ => Some(Varnode::dummy()),
-            }
-        }).flatten();
+                _ => panic!(),
+            };
+        } else {
+            let vn = build_varnode(tpl, objs, ctx);
+            output = Some(vn);
+        }
+    }
 
-    fix_sizes(&mut opcode, &mut inputs, &mut output, varnode_map);
+    // println!("{} {:?} {:?}", opcode, inputs, output);
+    fix_sizes(&mut opcode, &mut inputs, &mut output, ctx);
 
     let op = PcodeOp {
         seq: seq,
@@ -2809,13 +2688,10 @@ fn build_pcodeop<'a>(
 
 pub fn _build_sym<'a>(
     matched_sym: &'a MatchedSymbol,
-    pc: &Address,
-    bit_len: usize,
-    spaces: &'a HashMap<String, u64>,
-    varnode_map: &'a HashMap<(u64, u64), String>,
     built_pcodeops: &mut Vec<PcodeOp>,
     built_objects: &mut Vec<PcodeObject>,
     order: &mut Vec<usize>,
+    ctx: &BuildContext,
 ) -> (Option<PcodeObject>, usize, usize) {
     let mut sub_op_ranges = vec![];
 
@@ -2836,12 +2712,12 @@ pub fn _build_sym<'a>(
             if let MatchedSymbol::Symbol(sym) = op {
                 if let SymbolBody::Varnode(vnode) = &sym.body {
                     let name = match vnode.space {
-                        AddressSpace::Register => varnode_map.get(&(vnode.offset, vnode.size)),
+                        AddressSpace::Register => ctx.lang.varnode_map.get(&(vnode.offset, vnode.size)),
                         _ => None,
                     };
 
                     let varnode = PcodeObject::Varnode(Varnode {
-                        name: name.map(|x| x.to_string()),
+                        name: name.map(|x| x.clone()),
                         space: vnode.space.to_owned(),
                         offset: vnode.offset,
                         size: vnode.size,
@@ -2853,8 +2729,8 @@ pub fn _build_sym<'a>(
             else if let MatchedSymbol::Literal((val, size)) = op {
                 // NOTE: We're using the name as out-of-band data so that the build cache can re-fixup varnodes. Very hacky.
                 let name = match fixup_type {
-                    Some(FixupType::Start) => Some("fixup_start".to_string()),
-                    Some(FixupType::End) => Some("fixup_end".to_string()),
+                    Some(FixupType::Start) => Some(local_str!("fixup_start")),
+                    Some(FixupType::End) => Some(local_str!("fixup_end")),
                     _ => None,
                 };
 
@@ -2868,7 +2744,7 @@ pub fn _build_sym<'a>(
                 op_handle = Some(varnode);
             } else if let MatchedSymbol::Constructor(_) = op {
                 let sub_obj_start = built_objects.len();
-                (op_handle, sub_op_start, sub_op_size) = _build_sym(op, pc, bit_len, spaces, varnode_map, built_pcodeops, built_objects, order);
+                (op_handle, sub_op_start, sub_op_size) = _build_sym(op, built_pcodeops, built_objects, order, ctx);
                 built_objects.drain(sub_obj_start..built_objects.len());
             }
 
@@ -2906,19 +2782,17 @@ pub fn _build_sym<'a>(
                     let start = built_pcodeops.len();
 
                     let seq = SeqNum {
-                        pc: pc.to_owned(),
+                        pc: ctx.pc.clone(),
                         uniq: (start_op_idx + num_ops) as i32,
                         order: 0,
                     };
 
                     build_pcodeop(
                         seq,
-                        bit_len,
                         &op_template,
                         &built_objects[start_obj_idx..],
-                        spaces,
-                        varnode_map,
                         built_pcodeops,
+                        ctx,
                     );
 
                     let end = built_pcodeops.len();
@@ -2935,16 +2809,8 @@ pub fn _build_sym<'a>(
         // Handle the varnodes after all the operands have been built.
         for stmt in &template.statements {
             if let ConsTemplate::Handle(handle_template) = stmt {
-                let my_handle = build_handle(
-                    &handle_template,
-                    pc.offset,
-                    bit_len,
-                    &built_objects[start_obj_idx..],
-                    spaces,
-                    varnode_map,
-                );
-
-                // println!("{} {} {:?}", handle_template, my_handle, built_objects);
+                let objs = &built_objects[start_obj_idx..];
+                let my_handle = build_handle(&handle_template, objs, ctx);
                 handle = Some(my_handle);
             }
         }
@@ -2974,14 +2840,19 @@ pub fn build_sym<'a>(
     matched_sym: &'a MatchedSymbol,
     pc: &Address,
     bit_len: usize,
-    spaces: &'a HashMap<String, u64>,
-    varnode_map: &'a HashMap<(u64, u64), String>,
+    lang: &'a SleighLanguage,
 ) -> Vec<PcodeOp> {
+    let ctx = BuildContext {
+        lang: lang,
+        pc: pc,
+        bit_len: bit_len,
+    };
+
     let mut ops = vec![];
     let mut objs = vec![];
     let mut order = vec![];
 
-    let (_, ops_start, num_ops) = _build_sym(matched_sym, pc, bit_len, spaces, varnode_map, &mut ops, &mut objs, &mut order);
+    let (_, ops_start, num_ops) = _build_sym(matched_sym, &mut ops, &mut objs, &mut order, &ctx);
 
     let _ = order.drain(0..ops_start);
     order.truncate(num_ops);
@@ -3107,7 +2978,7 @@ pub struct SleighLanguage {
     pub symbols: HashMap<u32, Symbol>,
     pub spaces: HashMap<String, u64>,
     pub _varnodes: HashMap<String, VarnodeSym>,
-    pub varnode_map: HashMap<(u64, u64), String>,
+    pub varnode_map: HashMap<(u64, u64), LocalStr>,
     pub context_syms: HashMap<String, Context>,
     pub reg_space_size: usize,
     pub insn_table_id: u32,
@@ -3122,7 +2993,7 @@ impl SleighLanguage {
         let mut symbols: HashMap<u32, Symbol> = HashMap::new();
         let mut spaces: HashMap<String, u64> = HashMap::new();
         let mut varnodes: HashMap<String, VarnodeSym> = HashMap::new();
-        let mut varnode_map: HashMap<(u64, u64), String> = HashMap::new();
+        let mut varnode_map: HashMap<(u64, u64), LocalStr> = HashMap::new();
         let mut context_syms: HashMap<String, Context> = HashMap::new();
         let mut reg_space_size: usize = 0;
         let mut insn_table_id = 0;
@@ -3144,7 +3015,7 @@ impl SleighLanguage {
                     if varnode.space == AddressSpace::Register {
                         reg_space_size =
                             reg_space_size.max((varnode.offset + varnode.size) as usize);
-                        varnode_map.insert((varnode.offset, varnode.size), varnode.name.clone());
+                        varnode_map.insert((varnode.offset, varnode.size), varnode.name.to_local_str());
                     }
                 }
                 SymbolBody::Context(ctx) => {
