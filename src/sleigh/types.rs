@@ -47,7 +47,7 @@ pub struct Instruction {
     pub address: Address,
     pub bit_len: usize,
     pub asm: String,
-    pub ops: Vec<PcodeOp>
+    pub ops: Vec<PcodeOp>,
 }
 
 // pub struct Context {}
