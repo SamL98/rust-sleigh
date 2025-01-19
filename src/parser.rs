@@ -2366,6 +2366,18 @@ fn build_space<'a>(
     }
 }
 
+fn sign_extend(val: u64, from: u64, to: u64) -> u64 {
+    let mut result = val;
+
+    let shift = 64 - from * 8;
+    result = (((result << shift) as i64) >> shift) as u64;
+
+    let shift = 64 - to * 8;
+    result = (result << shift) >> shift;
+
+    result
+}
+
 fn build_handle<'a>(
     handle_tpl: &'a HandleTemplate,
     objs: &'a [PcodeObject],
@@ -2384,7 +2396,7 @@ fn build_handle<'a>(
         size: deref_size,
     };
 
-    println!("Handle: {}\n  ({:?}, {:?}, {}, {:?}, {:?})\n", handle_tpl, deref_space, deref_size, pointer, temp_space, temp_offset);
+    // println!("Handle: {}\n  ({:?}, {:?}, {}, {:?}, {:?})\n", handle_tpl, deref_space, deref_size, pointer, temp_space, temp_offset);
 
     if deref_space == AddressSpace::Ram && pointer.space == AddressSpace::Const {// && pointer.size == 0 {
         PcodeObject::Varnode(Varnode {
@@ -2403,11 +2415,7 @@ fn build_handle<'a>(
         let mut offset = pointer.offset;
 
         if deref_size > 0 && pointer.size > 0 {
-            let shift = 64 - pointer.size * 8;
-            offset = (((offset << shift) as i64) >> shift) as u64;
-
-            let shift = 64 - deref_size * 8;
-            offset = (offset << shift) >> shift;
+            offset = sign_extend(offset, pointer.size, deref_size);
         }
 
         PcodeObject::Varnode(Varnode {
@@ -2478,29 +2486,13 @@ fn build_varnode<'a>(
                 if let (Handle((ix, _)), Handle((ix2, _))) = (&vnode_tpl.space_template, &vnode_tpl.offset_template) {
                     if ix == ix2 {
                         if let PcodeObject::Varnode(vn) = &objs[*ix as usize] {
-                            let shift = 64 - vn.size * 8;
-                            offset = (((offset << shift) as i64) >> shift) as u64;
-
-                            let shift = 64 - size * 8;
-                            offset = (offset << shift) >> shift;
+                            offset = sign_extend(offset, vn.size, size);
                         }
                     }
                 }
             }
 
-            // Apply offset expressions.
-            // if let Handle((_, Some(expr))) = &vnode_tpl.offset_template {
-            //     use HandleExpr::*;
-
-            //     match expr {
-            //         OffsetPlus(addend) => {
-            //             println!("adding {} to {:x}", addend, offset);
-            //             offset += *addend as u64
-            //         },
-            //     }
-            // }
-
-            println!("{}\n  {:?}\n  ({}, {:x}, {})\n", vnode_tpl, objs, space, offset, size);
+            // println!("{}\n  {:?}\n  ({}, {:x}, {})\n", vnode_tpl, objs, space, offset, size);
 
             Varnode {
                 name: name,
@@ -2642,11 +2634,8 @@ fn build_pcodeop<'a>(
                         });
 
                         seq = seq.next();
-
-                        println!("new temp {}", h.temp);
                         inputs.push(h.temp.clone());
                     } else {
-                        println!("pointer {}", h.temp);
                         inputs.push(h.pointer.clone());
                     }
                 },
@@ -2683,7 +2672,6 @@ fn build_pcodeop<'a>(
                         opcode = OpCode::Store;
                         inputs = vec![Varnode::dummy(), h.pointer.clone(), h.temp.clone()];
                     } else {
-                        println!("pointer output {}", h.temp);
                         output = Some(h.pointer.clone());
                     }
                 },
@@ -2695,7 +2683,7 @@ fn build_pcodeop<'a>(
         }
     }
 
-    println!("{} {:?} {:?}", opcode, inputs, output);
+    // println!("{} {:?} {:?}", opcode, inputs, output);
     fix_sizes(&mut opcode, &mut inputs, &mut output, ctx);
 
     let op = PcodeOp {
