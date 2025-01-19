@@ -21,17 +21,12 @@ use flexstr::{local_str, LocalStr, ToLocalStr};
 
 use bitvec::prelude::*;
 
+use debug_macro::DebugPrint;
+
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::borrow::Cow;
-
-use {
-    std::fs,
-    // std::fs::File,
-};
-
-static SLEIGH_PATH: &'static str = "./Ghidra/Processors/x86/data/languages";
 
 pub type Res<T, U> = IResult<T, U, Error<T>>;
 
@@ -299,7 +294,7 @@ pub enum Expr {
     Next2,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, DebugPrint)]
 pub struct Constructor {
     pub _parent: u32,
     pub _first: i32,
@@ -1668,10 +1663,6 @@ fn string(input: &str) -> Res<&str, &str> {
     delimited(char('"'), take_until("\""), char('"'))(input)
 }
 
-pub fn read_file(filename: &str) -> String {
-    fs::read_to_string(format!("{}/{}", SLEIGH_PATH, filename)).expect("Could not read file")
-}
-
 #[derive(Default, Clone)]
 pub struct ResolverDebug {}
 
@@ -2335,7 +2326,6 @@ fn build_offset<'a>(
         VarnodeValue::Space(_) => (8, ft), // FIXME
         VarnodeValue::String(s) => (ctx.lang.spaces[s.as_str()], ft),
         VarnodeValue::Rel(ix) => (*ix, ft),
-        _ => panic!("Unknown varnode value type for int {:?}", val),
     }
 }
 
@@ -2636,7 +2626,7 @@ fn build_pcodeop<'a>(
                         inputs.push(h.pointer.clone());
                     }
                 },
-                _ => panic!(),
+                _ => panic!("unexpected dummy varnode at 0x{:x}", ctx.pc.offset),
             };
         } else {
             let vn = build_varnode(tpl, objs, ctx);
@@ -2986,9 +2976,10 @@ pub struct SleighLanguage {
 }
 
 impl SleighLanguage {
-    pub fn create<'a>(arch_family: &str, lang_id: &str, sla_contents: &'a str) -> SleighLanguage {
-        let lang = get_language(arch_family, lang_id).unwrap();
-        let (_, sla) = program(sla_contents).finish().unwrap();
+    pub fn create<'a>(lang_id: &str) -> SleighLanguage {
+        let arch_family = lang_id.split(":").next().unwrap();
+        let (lang, sla_contents) = get_language(arch_family, lang_id).unwrap();
+        let (_, sla) = program(&sla_contents).finish().unwrap();
 
         let mut symbols: HashMap<u32, Symbol> = HashMap::new();
         let mut spaces: HashMap<String, u64> = HashMap::new();

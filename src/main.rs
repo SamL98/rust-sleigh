@@ -16,7 +16,9 @@ use bitvec::prelude::*;
 use std::time::Instant;
 use std::collections::HashMap;
 use std::thread;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::fs::File;
+use std::io::Read;
 
 fn parse_hex(s: &str) -> Result<u64, String> {
     Ok(u64hex(s))
@@ -41,11 +43,13 @@ struct Args {
 
     #[arg(short, long, default_value_t = false)]
     verbose: bool,
-}
 
-// const FILE_BYTES: &[u8] = include_bytes!("/Users/samlerner/Projects/cracks/roots/Payload/Random Roots.app/Random Roots");
-const FILE_BYTES: &[u8] = include_bytes!("../test_assets/understand_x64");
-// const FILE_BYTES: &[u8] = include_bytes!("../test_assets/ireal_x64");
+    #[arg(short, long)]
+    language_id: String,
+
+    #[arg(short, long)]
+    file_name: String,
+}
 
 struct Disassembler<'a> {
     args: Args,
@@ -221,7 +225,7 @@ impl<'a> Disassembler<'a> {
                 &self.lang.symbols,
                 &mut ctx,
                 &self.reg_space,
-            ).map(|(matched_symbol, mut num_bits)|{
+            ).map(|(_, mut num_bits)|{
                 if num_bits % self.lang.bit_align != 0 {
                     num_bits += num_bits - (num_bits % self.lang.bit_align);
                 }
@@ -245,16 +249,16 @@ impl<'a> Disassembler<'a> {
         let starts = Arc::new(starts);
 
         let mut handles = vec![];
-        let max_insns = self.args.num.unwrap_or(0xffffffffffffffff) as usize;
+        // let max_insns = self.args.num.unwrap_or(0xffffffffffffffff) as usize;
         let chunk_size = starts.len() / num_threads;
 
         for i in 0..num_threads {
             let buf = buf.clone();
             let starts = starts.clone();
+            let language_id = self.args.language_id.clone();
 
             let handle = thread::spawn(move || {
-                let contents = read_file("x86-64.sla");
-                let lang = SleighLanguage::create("x86", "x86:LE:64:default", &contents);
+                let lang = SleighLanguage::create(&language_id);
                 let mut disasm = Disassembler::new(Args::default(), &lang);
                 let mut ctx = read_reg(&disasm.lang.context_reg, &disasm.reg_space);
 
@@ -285,12 +289,21 @@ impl<'a> Disassembler<'a> {
 fn main() {
     let args = Args::parse();
 
-    let mut buf = &FILE_BYTES[0xe070..0x1cd72e5];
-    let mut orig_pc = 0x10000e070;
+    let mut file = File::open(&args.file_name).unwrap();
+    let mut bytes = vec![];
+    file.read_to_end(&mut bytes).unwrap();
+
+    // let mut buf = &bytes[0xe070..0x1cd72e5];
+    // let mut orig_pc = 0x10000e070;
+
+    let data_addr = 0x52b8;
+    let data_size = 0xb2b80;
+    let mut buf = &bytes[data_addr..data_addr + data_size];
+    let mut orig_pc = 0x1000052b8;
 
     // let data_addr = 0x5bb0;
     // let data_size = 0x49d65a;
-    // let mut buf = &FILE_BYTES[data_addr..data_addr + data_size];
+    // let mut buf = &bytes[data_addr..data_addr + data_size];
     // let mut orig_pc = 0x100005bb0;
 
     if let Some(addr) = args.start_addr {
@@ -302,8 +315,7 @@ fn main() {
         buf = &buf[..(addr - orig_pc) as usize];
     }
 
-    let contents = read_file("x86-64.sla");
-    let lang = SleighLanguage::create("x86", "x86:LE:64:default", &contents);
+    let lang = SleighLanguage::create(&args.language_id);
 
     let start = Instant::now();
     let print_time = args.time;
@@ -356,8 +368,7 @@ mod tests {
         let mut ghidra_disasm_iter = ghidra_disasm.disassemble(buf, data_addr as u64);
 
         // Create my context.
-        let contents = read_file("x86-64.sla");
-        let lang = SleighLanguage::create("x86", "x86:LE:64:default", &contents);
+        let lang = SleighLanguage::create("x86", "x86:LE:64:default");
         let mut disasm = Disassembler::new(Args::default(), &lang);
         let mut disasm_iter = disasm.disassemble(buf, data_addr as u64);
 

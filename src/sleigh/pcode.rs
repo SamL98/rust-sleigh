@@ -9,7 +9,6 @@ use super::opcode::OpCode;
 // use super::varnode::*;
 
 use std::fmt;
-use std::ops::{Index, IndexMut};
 // use std::mem;
 
 impl PcodeOp {

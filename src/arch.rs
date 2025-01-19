@@ -136,7 +136,7 @@ impl Architecture {
     }
 }*/
 
-pub fn get_language(arch_name: &str, language_id: &str) -> Option<Language> {
+pub fn get_language(arch_name: &str, language_id: &str) -> Option<(Language, String)> {
     // let mut ghidra_root_envvar = ".".to_string();
     let ghidra_root_envvar = ".";
 
@@ -155,10 +155,11 @@ pub fn get_language(arch_name: &str, language_id: &str) -> Option<Language> {
     let ldef = Element::from_reader(ldef_contents.as_bytes()).unwrap();
 
     for language_elem in ldef.find_all("language") {
-        if let Some(lang_id) = language_elem.get_attr("id") {
+        if let (Some(lang_id), Some(sla_file)) = (language_elem.get_attr("id"), language_elem.get_attr("slafile")) {
             if lang_id.eq(language_id) {
                 let language = Language::new(&arch_path, language_elem);
-                return Some(language);
+                let sla = read_file(arch_path.join(sla_file), &arch_path);
+                return Some((language, sla));
             }
         }
     }
