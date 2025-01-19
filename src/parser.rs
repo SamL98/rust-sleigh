@@ -2270,6 +2270,16 @@ pub enum PcodeObject {
     Handle(Handle),
 }
 
+impl PcodeObject {
+    fn as_varnode(&self) -> Varnode {
+        if let PcodeObject::Varnode(vn) = self {
+            vn.clone()
+        } else {
+            panic!()
+        }
+    }
+}
+
 impl fmt::Display for PcodeObject {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -2448,20 +2458,8 @@ fn build_varnode<'a>(
     let mut fixup_type = None;
 
     match (&vnode_tpl.space_template, &vnode_tpl.offset_template, &vnode_tpl.size_template) {
-        (Val(0), Handle((ix, expr)), Val(0)) => {
-            if let PcodeObject::Varnode(vn) = &objs[*ix as usize] {
-                vn.clone()
-            } else {
-                panic!()
-            }
-        },
-        (Handle((ix, _)), Handle((ix2, expr)), Val(0)) if ix == ix2 => {
-            if let PcodeObject::Varnode(vn) = &objs[*ix as usize] {
-                vn.clone()
-            } else {
-                panic!()
-            }
-        }
+        (Val(0), Handle((ix, expr)), Val(0)) => objs[*ix as usize].as_varnode(),
+        (Handle((ix, _)), Handle((ix2, expr)), Val(0)) if ix == ix2 => objs[*ix as usize].as_varnode(),
         _ => {
             let (space, ft) = build_space(&vnode_tpl.space_template, objs, ctx);
             fixup_type = fixup_type.or(ft);
@@ -2625,13 +2623,8 @@ fn build_pcodeop<'a>(
                 PcodeObject::Varnode(vn) => inputs.push(vn.clone()),
                 PcodeObject::Handle(h) => {
                     if !h.temp.space.is_dummy() {
-                        // TODO: Handle dummy handle space.
-                        ops.push(PcodeOp {
-                            seq: seq.clone(),
-                            opcode: OpCode::Load,
-                            inputs: vec![Varnode::dummy(), h.pointer.clone()],
-                            output: Some(h.temp.clone()),
-                        });
+                        let load_inputs = vec![Varnode::dummy(), h.pointer.clone()];
+                        ops.push(PcodeOp::new(seq.clone(), OpCode::Load, load_inputs, Some(h.temp.clone())));
 
                         seq = seq.next();
                         inputs.push(h.temp.clone());
@@ -2657,16 +2650,9 @@ fn build_pcodeop<'a>(
                 PcodeObject::Varnode(vn) => output = Some(vn.clone()),
                 PcodeObject::Handle(h) => {
                     if !h.temp.space.is_dummy() {
-                        // TODO: Handle dummy handle space.
                         let mut output = Some(h.temp.clone());
                         fix_sizes(&mut opcode, &mut inputs, &mut output, ctx);
-
-                        ops.push(PcodeOp {
-                            seq: seq.clone(),
-                            opcode: opcode,
-                            inputs: inputs.clone(),
-                            output: output,
-                        });
+                        ops.push(PcodeOp::new(seq.clone(), opcode, inputs.clone(), output));
 
                         seq = seq.next();
                         opcode = OpCode::Store;

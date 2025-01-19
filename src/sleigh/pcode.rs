@@ -1,5 +1,5 @@
 use super::types::{
-    // SeqNum, 
+    SeqNum, 
     Varnode, 
     PcodeOp, 
     // Context,
@@ -121,6 +121,15 @@ impl PcodeOp {
 impl PcodeOp {
     pub fn to_string(&self) -> String {
         format!("{}{}", self.fmt_output(), self.fmt_inputs())
+    }
+
+    pub fn new(seq: SeqNum, opcode: OpCode, inputs: Vec<Varnode>, output: Option<Varnode>) -> Self {
+        Self {
+            seq: seq,
+            opcode: opcode,
+            inputs: inputs,
+            output: output,
+        }
     }
 }
 
