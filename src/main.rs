@@ -14,7 +14,7 @@ use crate::sleigh::types::{Address, PcodeOp, Instruction};
 use bitvec::prelude::*;
 
 use std::time::Instant;
-use std::collections::HashMap;
+use std::collections::{HashSet, HashMap};
 use std::thread;
 use std::sync::Arc;
 use std::fs::File;
@@ -41,14 +41,14 @@ struct Args {
     #[arg(short, long)]
     parallel: bool,
 
-    #[arg(short, long, default_value_t = false)]
-    verbose: bool,
-
     #[arg(short, long)]
     language_id: String,
 
     #[arg(short, long)]
     file_name: String,
+
+    #[arg(short = 'm', long = "log")]
+    log_modules: Vec<String>,
 }
 
 struct Disassembler<'a> {
@@ -56,6 +56,26 @@ struct Disassembler<'a> {
     lang: &'a SleighLanguage,
     reg_space: BitVec<u8, Msb0>,
     build_cache: HashMap<MatchedSymbol<'a>, Vec<PcodeOp>>,
+    log_modules: HashSet<String>,
+    depth: usize,
+}
+
+impl Logger for Disassembler<'_> {
+    fn should_log(&self) -> bool {
+        self.log_modules.contains("disassembler")
+    }
+
+    fn depth(&self) -> usize {
+        self.depth
+    }
+
+    fn inc_depth(&mut self) {
+        self.depth += 1
+    }
+
+    fn dec_depth(&mut self) {
+        self.depth -= 1
+    }
 }
 
 struct DisassemblyIter<'a> {
@@ -92,11 +112,9 @@ impl<'a> Iterator for DisassemblyIter<'a> {
 
         let (rv, num_bits) = match self.disasm.disassemble_one(&self.data[self.bits_consumed / 8..], pc, &mut self.ctx.clone()) {
             Some(insn) => {
-                if self.disasm.args.verbose {
-                    println!("0x{:x} {}: {}", insn.address.offset, insn.asm, insn.bit_len);
-                    for op in &insn.ops {
-                        println!("    {}", op);
-                    }
+                log!(&self.disasm, "0x{:x} {}: {}", insn.address.offset, insn.asm, insn.bit_len);
+                for op in &insn.ops {
+                    log!(&self.disasm, "    {}", op);
                 }
 
                 let bit_len = insn.bit_len;
@@ -130,11 +148,15 @@ impl<'a> Disassembler<'a> {
             }
         }
 
+        let log_modules = HashSet::from_iter(args.log_modules.clone());
+
         Self {
             args: args,
             lang: lang,
             reg_space: reg_space,
             build_cache: HashMap::default(),
+            log_modules: log_modules,
+            depth: 0,
         }
     }
 
@@ -143,9 +165,10 @@ impl<'a> Disassembler<'a> {
             data,
             pc.offset,
             &self.lang.symbols[&self.lang.insn_table_id],
-            &self.lang.symbols,
+            &self.lang,
             ctx,
             &self.reg_space,
+            &self.log_modules,
         ).map(|(matched_symbol, mut num_bits)|{
             if num_bits % self.lang.bit_align != 0 {
                 // TODO: bit-hacking.
@@ -222,9 +245,10 @@ impl<'a> Disassembler<'a> {
                 buf,
                 pc,
                 &self.lang.symbols[&self.lang.insn_table_id],
-                &self.lang.symbols,
+                &self.lang,
                 &mut ctx,
                 &self.reg_space,
+                &self.log_modules,
             ).map(|(_, mut num_bits)|{
                 if num_bits % self.lang.bit_align != 0 {
                     num_bits += num_bits - (num_bits % self.lang.bit_align);
