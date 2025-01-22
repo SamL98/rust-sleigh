@@ -2169,6 +2169,7 @@ fn resolve_operands<'a, 'b>(
                     let existing = ctx.ctx[op.i as usize];
                     let mask = op.mask;
 
+                    // TODO: Handle no-flow context symbols.
                     let (val, _, _) = evaluate_expr(&op.expr, &ctx.ctx, &matched_ops, &ctx.reg_space);
                     let v = (val as u32) << op.shift;
                     ctx.ctx[op.i as usize] = (existing & !mask) | (v & mask);

@@ -60,6 +60,11 @@ fn main() {
     // let data_addr = 0x52b8;
     // let data_size = 0xb2b80;
     // let mut orig_pc = 0x1000052b8;
+
+    // let data_addr = 11200;
+    // let data_size = 0x3439f4;
+    // let mut orig_pc = 0x100002bc0;
+
     let data_addr = 11200;
     let data_size = 0x3439f4;
     let mut orig_pc = 0x100002bc0;

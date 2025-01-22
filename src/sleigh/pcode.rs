@@ -47,6 +47,7 @@ impl<T: VarnodeIface> Op<OpCode, T> {
                                                            .map(|x| format!("{}", x))
                                                            .collect::<Vec<String>>()
                                                            .join(", ")),
+            &OpCode::MultiEqual => self.fmt_func("phi"),
             &OpCode::CPoolRef => self.fmt_func("cpool"),
             &OpCode::FloatAbs => self.fmt_func("abs"),
             &OpCode::FloatCeil => self.fmt_func("ceil"),

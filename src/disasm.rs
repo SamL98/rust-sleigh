@@ -10,7 +10,7 @@ use std::thread;
 pub struct Disassembler<'a> {
     language_id: String,
     compiler_id: String,
-    ctx: Vec<u32>,
+    pub ctx: Vec<u32>,
     num: Option<u64>,
     log_modules: HashSet<String>,
     lang: &'a SleighLanguage,
@@ -68,9 +68,10 @@ impl<'a, 'b> Iterator for DisassemblyIter<'a, 'b> {
             println!("0x{:x} / 0x{:x}", pc.offset - self.orig_pc, self.data.len());
         }
 
+        let mut ctx = self.disasm.ctx.clone();
         let off = pc.offset;
 
-        let (rv, num_bits) = match self.disasm.disassemble_one(&self.data[self.bits_consumed / 8..], pc) {
+        let (rv, num_bits) = match self.disasm.disassemble_one(&self.data[self.bits_consumed / 8..], pc, &mut ctx) {
             Some(insn) => {
                 log!(&self.disasm, "0x{:x} {}: {}", insn.address.offset, insn.asm, insn.bit_len);
                 for op in &insn.ops {
@@ -130,15 +131,13 @@ impl<'a> Disassembler<'a> {
         }
     }
 
-    pub fn disassemble_one(&mut self, data: &[u8], pc: Address) -> Option<Instruction> {
-        let mut ctx = self.ctx.clone();
-
+    pub fn disassemble_one(&mut self, data: &[u8], pc: Address, ctx: &mut Vec<u32>) -> Option<Instruction> {
         resolve_symbol(
             data,
             pc.offset,
             &self.lang.symbols[&self.lang.insn_table_id],
             &self.lang,
-            &mut ctx,
+            ctx,
             &self.reg_space,
             &self.log_modules,
         ).map(|(matched_symbol, mut num_bits)|{
@@ -266,7 +265,9 @@ impl<'a> Disassembler<'a> {
                         offset: *start,
                     };
 
-                    if let Some(insn) = disasm.disassemble_one(&buf[(*start - orig_pc) as usize..], pc) {
+                    let mut ctx = disasm.ctx.clone();
+
+                    if let Some(insn) = disasm.disassemble_one(&buf[(*start - orig_pc) as usize..], pc, &mut ctx) {
                     }
                 }
             });
