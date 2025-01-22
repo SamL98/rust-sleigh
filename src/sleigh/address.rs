@@ -44,3 +44,9 @@ impl fmt::Debug for Address {
         write!(f, "{}", self.to_string())
     }
 }
+
+impl fmt::Display for Address {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.to_string())
+    }
+}
