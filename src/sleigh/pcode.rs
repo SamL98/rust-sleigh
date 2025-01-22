@@ -1,17 +1,11 @@
-use super::types::{
-    SeqNum, 
-    Varnode, 
-    PcodeOp, 
-    // Context,
-    // Address
-};
+use super::types::*;
 use super::opcode::OpCode;
-// use super::varnode::*;
+use super::varnode::VarnodeIface;
 
 use std::fmt;
 // use std::mem;
 
-impl PcodeOp {
+impl<T: VarnodeIface> Op<OpCode, T> {
     fn fmt_unary(&self, opstr: &str) -> String {
         format!("{}({})", opstr, self.inputs[0])
     }
@@ -115,14 +109,18 @@ impl PcodeOp {
             None        => "".to_string()
         }
     }
+
+    pub fn is_call(&self) -> bool {
+        return self.opcode == OpCode::Call || self.opcode == OpCode::CallInd;
+    }
 }
 
-impl PcodeOp {
+impl<T: VarnodeIface> Op<OpCode, T> {
     pub fn to_string(&self) -> String {
         format!("{}{}", self.fmt_output(), self.fmt_inputs())
     }
 
-    pub fn new(seq: SeqNum, opcode: OpCode, inputs: Vec<Varnode>, output: Option<Varnode>) -> Self {
+    pub fn new(seq: SeqNum, opcode: OpCode, inputs: Vec<T>, output: Option<T>) -> Self {
         Self {
             seq: seq,
             opcode: opcode,
@@ -132,13 +130,55 @@ impl PcodeOp {
     }
 }
 
-impl fmt::Debug for PcodeOp {
+impl<T: VarnodeIface> BlockElement for Op<OpCode, T> {
+    fn returns(&self) -> bool {
+        return self.opcode == OpCode::Return;
+    }
+
+    fn branches(&self) -> bool {
+        return match self.opcode {
+            OpCode::Branch | OpCode::CBranch | OpCode::BranchInd => true,
+            _ => false,
+        };
+    }
+
+    fn terminates(&self) -> bool {
+        return self.branches() || self.returns();
+    }
+
+    fn is_conditional(&self) -> bool {
+        return self.opcode == OpCode::CBranch;
+    }
+
+    fn target(&self) -> Option<Address> {
+        // TODO: Actually make BRANCHIND read from memory.
+        if self.branches()
+            && self.inputs.len() > 0
+            && self.inputs[0].is_ram()
+            && self.opcode != OpCode::BranchInd
+        {
+            let address = Address {
+                space: self.inputs[0].space().to_owned(),
+                offset: self.inputs[0].offset(),
+            };
+            return Some(address);
+        } else {
+            return None;
+        }
+    }
+
+    fn has_fallthrough(&self) -> bool {
+        !(self.returns() || (self.branches() && !self.is_conditional()))
+    }
+}
+
+impl<T: VarnodeIface> fmt::Debug for Op<OpCode, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.to_string())
     }
 }
 
-impl fmt::Display for PcodeOp {
+impl<T: VarnodeIface> fmt::Display for Op<OpCode, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.to_string())
     }

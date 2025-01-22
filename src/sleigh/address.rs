@@ -30,12 +30,12 @@ impl Address {
         format!("0x{:x}", self.offset)
     }
 
-    // pub fn adding(&self, addend: u64) -> Address {
-    //     return Address {
-    //         space: self.space.clone(),
-    //         offset: self.offset + addend
-    //     };
-    // }
+    pub fn add(&self, addend: u64) -> Address {
+        return Address {
+            space: self.space.clone(),
+            offset: self.offset + addend
+        };
+    }
 }
 
 

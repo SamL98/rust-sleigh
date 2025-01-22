@@ -1,3 +1,6 @@
+use std::fmt::{Debug, Display};
+use std::hash::Hash;
+
 use super::opcode::OpCode;
 use flexstr::LocalStr;
 
@@ -5,7 +8,7 @@ use flexstr::LocalStr;
 
 #[derive(Eq, PartialEq, Hash, Clone)]
 pub struct Address {
-    pub space: String,
+    pub space: AddressSpace,
     pub offset: u64
 }
 
@@ -35,12 +38,17 @@ pub struct Varnode {
 }
 
 #[derive(Eq, PartialEq, Hash, Clone)]
-pub struct PcodeOp {
+pub struct Op<
+    O: Debug + Display + Clone + Eq + PartialEq + Hash,
+    T: Debug + Display + Clone + Eq + PartialEq + Hash,
+> {
     pub seq: SeqNum,
-    pub opcode: OpCode,
-    pub inputs: Vec<Varnode>,
-    pub output: Option<Varnode>,
+    pub opcode: O,
+    pub inputs: Vec<T>,
+    pub output: Option<T>,
 }
+
+pub type PcodeOp = Op<OpCode, Varnode>;
 
 #[derive(Eq, PartialEq, Hash, Clone)]
 pub struct Instruction {
@@ -50,4 +58,11 @@ pub struct Instruction {
     pub ops: Vec<PcodeOp>,
 }
 
-// pub struct Context {}
+pub trait BlockElement {
+    fn returns(&self) -> bool;
+    fn branches(&self) -> bool;
+    fn target(&self) -> Option<Address>;
+    fn terminates(&self) -> bool;
+    fn is_conditional(&self) -> bool;
+    fn has_fallthrough(&self) -> bool;
+}

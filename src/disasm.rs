@@ -1,4 +1,4 @@
-use crate::sleigh::types::{Address, PcodeOp, Instruction};
+use crate::sleigh::types::*;
 use crate::parser::*;
 use crate::log;
 
@@ -9,6 +9,8 @@ use std::thread;
 
 pub struct Disassembler<'a> {
     language_id: String,
+    compiler_id: String,
+    ctx: Vec<u32>,
     num: Option<u64>,
     log_modules: HashSet<String>,
     lang: &'a SleighLanguage,
@@ -35,16 +37,15 @@ impl Logger for Disassembler<'_> {
     }
 }
 
-pub struct DisassemblyIter<'a> {
-    disasm: &'a mut Disassembler<'a>,
+pub struct DisassemblyIter<'a, 'b> {
+    disasm: &'b mut Disassembler<'a>,
     orig_pc: u64,
     data: &'a [u8],
-    ctx: Vec<u32>,
     bits_consumed: usize,
     num_insns: usize,
 }
 
-impl<'a> Iterator for DisassemblyIter<'a> {
+impl<'a, 'b> Iterator for DisassemblyIter<'a, 'b> {
     type Item = Option<Instruction>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -59,7 +60,7 @@ impl<'a> Iterator for DisassemblyIter<'a> {
         }
 
         let pc = Address {
-            space: "ram".to_owned(),
+            space: AddressSpace::Ram,
             offset: (self.orig_pc as usize + self.bits_consumed / 8) as u64,
         };
 
@@ -67,7 +68,9 @@ impl<'a> Iterator for DisassemblyIter<'a> {
             println!("0x{:x} / 0x{:x}", pc.offset - self.orig_pc, self.data.len());
         }
 
-        let (rv, num_bits) = match self.disasm.disassemble_one(&self.data[self.bits_consumed / 8..], pc, &mut self.ctx.clone()) {
+        let off = pc.offset;
+
+        let (rv, num_bits) = match self.disasm.disassemble_one(&self.data[self.bits_consumed / 8..], pc) {
             Some(insn) => {
                 log!(&self.disasm, "0x{:x} {}: {}", insn.address.offset, insn.asm, insn.bit_len);
                 for op in &insn.ops {
@@ -92,6 +95,7 @@ impl<'a> Iterator for DisassemblyIter<'a> {
 impl<'a> Disassembler<'a> {
     pub fn new(
         language_id: String,
+        compiler_id: String,
         num: Option<u64>,
         log_modules: &Vec<String>,
         lang: &'a SleighLanguage,
@@ -111,9 +115,12 @@ impl<'a> Disassembler<'a> {
         }
 
         let log_modules = HashSet::from_iter(log_modules.clone());
+        let ctx = read_reg(&lang.context_reg, &reg_space);
 
         Self {
             language_id,
+            compiler_id,
+            ctx,
             num,
             lang,
             reg_space,
@@ -123,13 +130,15 @@ impl<'a> Disassembler<'a> {
         }
     }
 
-    pub fn disassemble_one(&mut self, data: &[u8], pc: Address, ctx: &mut Vec<u32>) -> Option<Instruction> {
+    pub fn disassemble_one(&mut self, data: &[u8], pc: Address) -> Option<Instruction> {
+        let mut ctx = self.ctx.clone();
+
         resolve_symbol(
             data,
             pc.offset,
             &self.lang.symbols[&self.lang.insn_table_id],
             &self.lang,
-            ctx,
+            &mut ctx,
             &self.reg_space,
             &self.log_modules,
         ).map(|(matched_symbol, mut num_bits)|{
@@ -183,14 +192,11 @@ impl<'a> Disassembler<'a> {
         })
     }
 
-    pub fn disassemble(&'a mut self, buf: &'a [u8], orig_pc: u64) -> DisassemblyIter {
-        let ctx = read_reg(&self.lang.context_reg, &self.reg_space);
-
+    pub fn disassemble<'b>(&'b mut self, buf: &'a [u8], orig_pc: u64) -> DisassemblyIter<'a, 'b> {
         DisassemblyIter {
             disasm: self,
             orig_pc: orig_pc,
             data: buf,
-            ctx: ctx,
             bits_consumed: 0,
             num_insns: 0,
         }
@@ -243,12 +249,12 @@ impl<'a> Disassembler<'a> {
             let buf = buf.clone();
             let starts = starts.clone();
             let language_id = self.language_id.clone();
+            let compiler_id = self.compiler_id.clone();
             let num = self.num.clone();
 
             let handle = thread::spawn(move || {
-                let lang = SleighLanguage::create(&language_id);
-                let mut disasm = Disassembler::new(language_id, num, &vec![], &lang);
-                let mut ctx = read_reg(&disasm.lang.context_reg, &disasm.reg_space);
+                let lang = SleighLanguage::create(&language_id, &compiler_id);
+                let mut disasm = Disassembler::new(language_id, compiler_id, num, &vec![], &lang);
 
                 for (j, start) in starts[i * chunk_size .. (i + 1) * chunk_size].iter().enumerate() {
                     if j % 0x10000 == 0 {
@@ -256,11 +262,11 @@ impl<'a> Disassembler<'a> {
                     }
 
                     let pc = Address {
-                        space: "ram".to_owned(),
+                        space: AddressSpace::Ram,
                         offset: *start,
                     };
 
-                    if let Some(insn) = disasm.disassemble_one(&buf[(*start - orig_pc) as usize..], pc, &mut ctx) {
+                    if let Some(insn) = disasm.disassemble_one(&buf[(*start - orig_pc) as usize..], pc) {
                     }
                 }
             });

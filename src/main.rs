@@ -1,5 +1,5 @@
 mod arch;
-mod parser;
+pub mod parser;
 mod sleigh;
 mod utils;
 pub mod disasm;
@@ -82,15 +82,16 @@ fn main() {
     let start = Instant::now();
     let print_time = args.time;
     let lang_id = args.language_id.clone();
+    let comp_id = "gcc".to_string();
     let num = args.num.clone();
 
-    let lang = SleighLanguage::create(&lang_id);
+    let lang = SleighLanguage::create(&lang_id, &comp_id);
 
     if args.parallel {
-        let mut disasm = Disassembler::new(lang_id, num, &args.log_modules, &lang);
+        let mut disasm = Disassembler::new(lang_id, comp_id, num, &args.log_modules, &lang);
         disasm.parallel_disassemble(&buf, orig_pc);
     } else {
-        let mut disasm = Disassembler::new(lang_id, num, &args.log_modules, &lang);
+        let mut disasm = Disassembler::new(lang_id, comp_id, num, &args.log_modules, &lang);
         for _ in disasm.disassemble(&buf, orig_pc) {}
     }
 
@@ -135,8 +136,9 @@ mod tests {
 
         // Create my context.
         let lang_id = "x86:LE:64:default".to_string();
-        let lang = SleighLanguage::create(&lang_id);
-        let mut disasm = Disassembler::new(lang_id, None, &vec![], &lang);
+        let comp_id = "gcc".to_string();
+        let lang = SleighLanguage::create(&lang_id, &comp_id);
+        let mut disasm = Disassembler::new(lang_id, comp_id, None, &vec![], &lang);
         let mut disasm_iter = disasm.disassemble(buf, data_addr as u64);
 
         while let (Some(insn), Some(ghidra_insn)) = (disasm_iter.next(), ghidra_disasm_iter.next()) {

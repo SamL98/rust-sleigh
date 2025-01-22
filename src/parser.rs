@@ -1,5 +1,6 @@
-use crate::arch::get_language;
+use crate::arch::{get_sla, get_language};
 use crate::sleigh::opcode::OpCode;
+use crate::sleigh::varnode::VarnodeIface;
 use crate::sleigh::types::{Address, AddressSpace, PcodeOp, SeqNum, Varnode};
 
 extern crate bitvec;
@@ -3032,21 +3033,23 @@ pub struct SleighLanguage {
     pub _varnodes: HashMap<String, VarnodeSym>,
     pub varnode_map: HashMap<(u64, u64), LocalStr>,
     pub context_syms: HashMap<String, Context>,
+    pub reg_sizes: Vec<Vec<Varnode>>,
     pub reg_space_size: usize,
     pub insn_table_id: u32,
     pub context_reg: VarnodeSym,
 }
 
 impl SleighLanguage {
-    pub fn create<'a>(lang_id: &str) -> SleighLanguage {
+    pub fn create<'a>(lang_id: &str, compiler_id: &str) -> SleighLanguage {
         let arch_family = lang_id.split(":").next().unwrap();
-        let (lang, sla_contents) = get_language(arch_family, lang_id).unwrap();
+        let sla_contents = get_sla(arch_family, lang_id).unwrap();
         let (_, sla) = program(&sla_contents).finish().unwrap();
 
         let mut symbols: HashMap<u32, Symbol> = HashMap::new();
         let mut spaces: HashMap<String, u64> = HashMap::new();
         let mut varnodes: HashMap<String, VarnodeSym> = HashMap::new();
         let mut varnode_map: HashMap<(u64, u64), LocalStr> = HashMap::new();
+        let mut rev_varnode_map: HashMap<String, (u64, u64)> = HashMap::new();
         let mut context_syms: HashMap<String, Context> = HashMap::new();
         let mut reg_space_size: usize = 0;
         let mut insn_table_id = 0;
@@ -3066,9 +3069,9 @@ impl SleighLanguage {
                     varnodes.insert(varnode.name.clone(), varnode.clone());
 
                     if varnode.space == AddressSpace::Register {
-                        reg_space_size =
-                            reg_space_size.max((varnode.offset + varnode.size) as usize);
+                        reg_space_size = reg_space_size.max((varnode.offset + varnode.size) as usize);
                         varnode_map.insert((varnode.offset, varnode.size), varnode.name.to_local_str());
+                        rev_varnode_map.insert(varnode.name.clone(), (varnode.offset, varnode.size));
                     }
                 }
                 SymbolBody::Context(ctx) => {
@@ -3081,6 +3084,36 @@ impl SleighLanguage {
         }
 
         let ctx_reg = varnodes["contextreg"].clone();
+        let lang = get_language(arch_family, lang_id, compiler_id, &rev_varnode_map).unwrap();
+
+        let mut registers = HashMap::new();
+        let mut max_off = 0;
+
+        for ((start, sz), name) in &varnode_map {
+            let register = Varnode {
+                name: Some(name.clone()),
+                space: AddressSpace::Register,
+                offset: *start,
+                size: *sz,
+            };
+
+            registers.insert((*start, *sz), register.clone());
+            max_off = max_off.max(*start + *sz as u64);
+        }
+
+        let mut reg_sizes: Vec<Vec<Varnode>> = Vec::with_capacity(max_off as usize);
+
+        for _ in 0..max_off {
+            reg_sizes.push(vec![]);
+        }
+
+        for reg in registers.values() {
+            reg_sizes[reg.offset as usize].push(reg.clone());
+        }
+
+        for i in 0..reg_sizes.len() {
+            reg_sizes[i].sort_by(|a, b| a.size.cmp(&b.size));
+        }
 
         SleighLanguage {
             language: lang,
@@ -3090,6 +3123,7 @@ impl SleighLanguage {
             _varnodes: varnodes,
             varnode_map: varnode_map,
             context_syms: context_syms,
+            reg_sizes: reg_sizes,
             reg_space_size: reg_space_size,
             insn_table_id: insn_table_id,
             context_reg: ctx_reg,
