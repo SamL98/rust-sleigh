@@ -30,16 +30,22 @@ impl Address {
         format!("0x{:x}", self.offset)
     }
 
-    // pub fn adding(&self, addend: u64) -> Address {
-    //     return Address {
-    //         space: self.space.clone(),
-    //         offset: self.offset + addend
-    //     };
-    // }
+    pub fn add(&self, addend: u64) -> Address {
+        return Address {
+            space: self.space.clone(),
+            offset: self.offset + addend
+        };
+    }
 }
 
 
 impl fmt::Debug for Address {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.to_string())
+    }
+}
+
+impl fmt::Display for Address {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.to_string())
     }

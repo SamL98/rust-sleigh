@@ -1,5 +1,6 @@
-use crate::arch::get_language;
+use crate::arch::{get_sla, get_language};
 use crate::sleigh::opcode::OpCode;
+use crate::sleigh::varnode::VarnodeIface;
 use crate::sleigh::types::{Address, AddressSpace, PcodeOp, SeqNum, Varnode};
 
 extern crate bitvec;
@@ -21,17 +22,12 @@ use flexstr::{local_str, LocalStr, ToLocalStr};
 
 use bitvec::prelude::*;
 
-use std::collections::HashMap;
+use debug_macro::DebugPrint;
+
+use std::collections::{HashSet, HashMap};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::borrow::Cow;
-
-use {
-    std::fs,
-    // std::fs::File,
-};
-
-static SLEIGH_PATH: &'static str = "./Ghidra/Processors/x86/data/languages";
 
 pub type Res<T, U> = IResult<T, U, Error<T>>;
 
@@ -299,7 +295,7 @@ pub enum Expr {
     Next2,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, DebugPrint)]
 pub struct Constructor {
     pub _parent: u32,
     pub _first: i32,
@@ -1668,13 +1664,6 @@ fn string(input: &str) -> Res<&str, &str> {
     delimited(char('"'), take_until("\""), char('"'))(input)
 }
 
-pub fn read_file(filename: &str) -> String {
-    fs::read_to_string(format!("{}/{}", SLEIGH_PATH, filename)).expect("Could not read file")
-}
-
-#[derive(Default, Clone)]
-pub struct ResolverDebug {}
-
 fn match_ctx_pattern_block(block: &PatternBlock, words: &Vec<u32>) -> bool {
     let mut word_idx = (block.offset / 4) as usize;
     let byte_idx = block.offset % 4;
@@ -1816,15 +1805,64 @@ fn get_word_le(words: &[u8], start: usize, size: usize) -> u64 {
     word
 }
 
-fn resolve_constructor<'a>(
+pub struct ResolveContext<'a, 'b> {
+    lang: &'a SleighLanguage,
+    ctx: &'b mut Vec<u32>,
+    reg_space: &'b BitVec<u8, Msb0>,
+    log_modules: &'b HashSet<String>,
+    depth: usize,
+}
+
+pub trait Logger {
+    fn should_log(&self) -> bool;
+    fn depth(&self) -> usize;
+    fn inc_depth(&mut self);
+    fn dec_depth(&mut self);
+}
+
+impl Logger for ResolveContext<'_, '_> {
+    fn should_log(&self) -> bool {
+        self.log_modules.contains("resolver")
+    }
+
+    fn depth(&self) -> usize {
+        self.depth
+    }
+
+    fn inc_depth(&mut self) {
+        self.depth += 1
+    }
+
+    fn dec_depth(&mut self) {
+        self.depth -= 1
+    }
+}
+
+#[macro_export]
+macro_rules! log {
+    ($context:expr, $fmt:expr) => {
+        if $context.should_log() {
+            print!("{}", " ".repeat($context.depth() * 3));
+            println!($fmt);
+        }
+    };
+    ($context:expr, $fmt:expr, $($arg:tt)*) => {
+        if $context.should_log() {
+            print!("{}", " ".repeat($context.depth() * 3));
+            println!($fmt, $($arg)*);
+        }
+    };
+}
+
+fn resolve_constructor<'a, 'b>(
     words: &[u8],
     table: &'a Subtable,
-    _symbols: &'a HashMap<u32, Symbol>,
-    ctx: &mut Vec<u32>,
+    ctx: &ResolveContext<'a, 'b>,
 ) -> Option<(&'a Constructor, usize)> {
     let mut dtree = &table.decision_tree;
     let mut bits_consumed = 0;
     let mut path = vec![];
+    let mut result = None;
 
     loop {
         match dtree {
@@ -1848,7 +1886,7 @@ fn resolve_constructor<'a>(
                     dtree = &children[idx.min(children.len() - 1)];
                     bits_consumed = bits_consumed.max(start + size);
                 } else {
-                    let ctx_word = ctx[(*start as usize) / 32];
+                    let ctx_word = ctx.ctx[(*start as usize) / 32];
                     let idx = (ctx_word.overflowing_shr(bit_start).0 & ((1 << size) - 1)) as usize;
                     path.push(idx);
 
@@ -1858,24 +1896,30 @@ fn resolve_constructor<'a>(
             DecisionTree::Leaf(pairs) => {
                 for (ct_id, pattern) in pairs {
                     let ct = &table.constructors[*ct_id as usize];
-                    // println!("{}:{}", ct.line.0, ct.line.1);
 
-                    if match_pattern(pattern, &words, &ctx) {
-                        return Some((ct, (ct.length * 8) as usize));
+                    if match_pattern(pattern, &words, &ctx.ctx) {
+                        log!(ctx, "Matched constructor on line {}:{}", ct.line.0, ct.line.1);
+                        result = Some((ct, (ct.length * 8) as usize));
+                        break;
                     }
                 }
 
-                return None;
+                if result.is_none() {
+                    log!(ctx, "Didn't match constructor");
+                }
+
+                break;
             }
         };
     }
+
+    result
 }
 
-fn resolve_varlist<'a>(
+fn resolve_varlist<'a, 'b>(
     words: &[u8],
     varlist: &'a Varlist,
-    symbols: &'a HashMap<u32, Symbol>,
-    _ctx: &mut Vec<u32>,
+    ctx: &ResolveContext<'a, 'b>,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
     // println!("{:?}", varlist);
     match &varlist.field {
@@ -1899,7 +1943,7 @@ fn resolve_varlist<'a>(
             let idx = ((token_word >> start) & ((1 << size) - 1)) as usize;
 
             varlist.vars[idx].map(|var_idx| {
-                let var = &symbols[&var_idx];
+                let var = &ctx.lang.symbols[&var_idx];
 
                 // Not super sure if this size calculation is right but it seems to work.
                 let bit_end = (token.end_byte * 8 + (8 - (token.end_bit % 8) - 1) + size) as usize;
@@ -1910,11 +1954,10 @@ fn resolve_varlist<'a>(
     }
 }
 
-fn resolve_nametab<'a>(
+fn resolve_nametab<'a, 'b>(
     words: &[u8],
     nametab: &'a NameTable,
-    _symbols: &'a HashMap<u32, Symbol>,
-    _ctx: &mut Vec<u32>,
+    _ctx: &ResolveContext<'a, 'b>,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
     match &nametab.field {
         Field::Token(token) => {
@@ -1938,11 +1981,10 @@ fn resolve_nametab<'a>(
     }
 }
 
-fn resolve_valuemap<'a>(
+fn resolve_valuemap<'a, 'b>(
     words: &[u8],
     valuemap: &'a Valuemap,
-    _symbols: &'a HashMap<u32, Symbol>,
-    _ctx: &mut Vec<u32>,
+    _ctx: &ResolveContext<'a, 'b>,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
     match &valuemap.field {
         Field::Token(token) => {
@@ -2058,13 +2100,11 @@ fn evaluate_expr(
     }
 }
 
-fn resolve_operands<'a>(
+fn resolve_operands<'a, 'b>(
     words: &[u8],
     pc: u64,
     ct: &'a Constructor,
-    symbols: &'a HashMap<u32, Symbol>,
-    ctx: &mut Vec<u32>,
-    reg_space: &BitVec<u8, Msb0>,
+    ctx: &mut ResolveContext<'a, 'b>,
 ) -> (Vec<(MatchedSymbol<'a>, Option<FixupType>)>, usize, bool) {
     let mut matched_ops = vec![];
     let mut bit_end: usize = 0;
@@ -2072,7 +2112,7 @@ fn resolve_operands<'a>(
     let mut ok = true;
 
     for op_idx in &ct.operands {
-        let operand = get_operand(&op_idx, &symbols);
+        let operand = get_operand(&op_idx, &ctx.lang.symbols);
 
         match &operand.expr {
             Some(Expr::Field(Field::Token(expr))) => {
@@ -2091,19 +2131,23 @@ fn resolve_operands<'a>(
                 let val = ((word >> expr.start_bit) & mask) as i64;
 
                 matched_ops.push((MatchedSymbol::Literal((val, num_bytes)), None));
-                let byte_start = (bit_end + (expr.start_byte as usize)) / 8; // FIXME
+                let byte_start = bit_end / 8 + expr.start_byte as usize; // FIXME
                 bit_end = bit_end.max(byte_start * 8);
                 total_bit_end = total_bit_end.max(byte_start * 8 + size as usize);
+
+                log!(ctx, "Bit end is ({}, {}) after token operand", bit_end, total_bit_end);
+                log!(ctx, "Start: ({}, {}), Shift: {}", expr.start_bit, expr.end_bit, expr.shift);
+                log!(ctx, "Words: {:x?}, Val: 0x{:x}", &words[byte_start..(byte_start + 4)], val);
             },
             Some(Expr::Field(Field::Context(expr))) => {
                 let size = expr.end_bit - expr.start_bit + 1;
                 let bit_start = 32 - (expr.start_bit + size);
-                let val = (ctx[(expr.start_bit / 32) as usize] >> bit_start) & ((1 << size) - 1);
+                let val = (ctx.ctx[(expr.start_bit / 32) as usize] >> bit_start) & ((1 << size) - 1);
                 let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
                 matched_ops.push((MatchedSymbol::Literal((val as i64, num_bytes)), None));
             },
             Some(Expr::Unary(_) | Expr::Binary(_)) => {
-                let (val, sz, fixup_type) = evaluate_expr(operand.expr.as_ref().unwrap(), ctx, &matched_ops, reg_space);
+                let (val, sz, fixup_type) = evaluate_expr(operand.expr.as_ref().unwrap(), &ctx.ctx, &matched_ops, &ctx.reg_space);
                 matched_ops.push((MatchedSymbol::Literal((val, sz)), fixup_type));
             },
             Some(Expr::Const(val)) => {
@@ -2111,7 +2155,7 @@ fn resolve_operands<'a>(
                 matched_ops.push((MatchedSymbol::Literal((*val, 8)), None));
             }
             None => {
-                let op_sym = &symbols[&operand.subsym];
+                let op_sym = &ctx.lang.symbols[&operand.subsym];
 
                 // TODO: Figure out if thise guess is right.
                 let base = if operand.base == -1 {
@@ -2122,15 +2166,16 @@ fn resolve_operands<'a>(
 
                 // Before recursively resolving a symbol, we first need to modify the context.
                 for op in &ct.context_ops {
-                    let existing = ctx[op.i as usize];
+                    let existing = ctx.ctx[op.i as usize];
                     let mask = op.mask;
 
-                    let (val, _, _) = evaluate_expr(&op.expr, ctx, &matched_ops, reg_space);
+                    // TODO: Handle no-flow context symbols.
+                    let (val, _, _) = evaluate_expr(&op.expr, &ctx.ctx, &matched_ops, &ctx.reg_space);
                     let v = (val as u32) << op.shift;
-                    ctx[op.i as usize] = (existing & !mask) | (v & mask);
+                    ctx.ctx[op.i as usize] = (existing & !mask) | (v & mask);
                 }
 
-                match _resolve_symbol(&words[base..], pc + base as u64, op_sym, symbols, ctx, reg_space) {
+                match _resolve_symbol(&words[base..], pc + base as u64, op_sym, ctx) {
                     Some((matched_sym, sub_bit_end)) => {
                         let new_bit_end = bit_end.max((base * 8) as usize + sub_bit_end);
                         matched_ops.push((matched_sym, None));
@@ -2139,6 +2184,8 @@ fn resolve_operands<'a>(
                         if operand.base == -1 {
                             bit_end = total_bit_end;
                         }
+
+                        log!(ctx, "After resolving operand, new bit end is {}, total bit end: {}", bit_end, total_bit_end);
                     },
                     None => ok = false,
                 };
@@ -2150,21 +2197,23 @@ fn resolve_operands<'a>(
     (matched_ops, bit_end.max(total_bit_end), ok)
 }
 
-pub fn _resolve_symbol<'a>(
+pub fn _resolve_symbol<'a, 'b>(
     words: &[u8],
     pc: u64,
     sym: &'a Symbol,
-    symbols: &'a HashMap<u32, Symbol>,
-    ctx: &mut Vec<u32>,
-    reg_space: &BitVec<u8, Msb0>,
+    ctx: &mut ResolveContext<'a, 'b>,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
-    // println!("{:?}", words);
-    match &sym.body {
+    ctx.inc_depth();
+    
+    let result = match &sym.body {
         SymbolBody::Subtable(table) => {
-            match resolve_constructor(words, table, symbols, ctx) {
+            log!(ctx, "Resolving sub-table {}", table.name);
+
+            match resolve_constructor(words, table, ctx) {
                 Some((ct, bit_end)) => {
-                    let (operands, ops_bit_end, ok) = resolve_operands(words, pc, ct, symbols, ctx, reg_space);
+                    let (operands, ops_bit_end, ok) = resolve_operands(words, pc, ct, ctx);
                     let bit_len = bit_end.max(ops_bit_end);
+                    log!(ctx, "After all operands, bit end is {}, constructor took {} bits", bit_len, bit_end);
 
                     if ok {
                         Some((MatchedSymbol::Constructor((ct, operands)), bit_len))
@@ -2176,19 +2225,22 @@ pub fn _resolve_symbol<'a>(
             }
         },
         SymbolBody::Varlist(varlist) => {
-            resolve_varlist(words, varlist, symbols, ctx)
+            resolve_varlist(words, varlist, ctx)
         },
         SymbolBody::Valuemap(valuemap) => {
-            resolve_valuemap(words, valuemap, symbols, ctx)
+            resolve_valuemap(words, valuemap, ctx)
         },
         SymbolBody::Varnode(_) => {
             Some((MatchedSymbol::Symbol(sym), 0))
         },
         SymbolBody::Nametab(nametab) => {
-            resolve_nametab(words, nametab, symbols, ctx)
+            resolve_nametab(words, nametab, ctx)
         },
         _ => todo!("{:?}", sym.body),
-    }
+    };
+
+    ctx.dec_depth();
+    result
 }
 
 fn apply_fixups(matched_sym: &mut MatchedSymbol, fixup_type: &Option<FixupType>, pc: u64, bit_len: usize) {
@@ -2209,15 +2261,18 @@ fn apply_fixups(matched_sym: &mut MatchedSymbol, fixup_type: &Option<FixupType>,
     }
 }
 
-pub fn resolve_symbol<'a>(
+pub fn resolve_symbol<'a, 'b>(
     words: &[u8],
     pc: u64,
     sym: &'a Symbol,
-    symbols: &'a HashMap<u32, Symbol>,
-    ctx: &mut Vec<u32>,
-    reg_space: &BitVec<u8, Msb0>,
+    lang: &'a SleighLanguage,
+    ctx: &'b mut Vec<u32>,
+    reg_space: &'b BitVec<u8, Msb0>,
+    log_modules: &'b HashSet<String>,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
-    if let Some((mut matched_sym, bit_len)) = _resolve_symbol(words, pc, sym, symbols, ctx, reg_space) {
+    let mut ctx = ResolveContext { lang, ctx, reg_space, log_modules, depth: 0 };
+
+    if let Some((mut matched_sym, bit_len)) = _resolve_symbol(words, pc, sym, &mut ctx) {
         apply_fixups(&mut matched_sym, &None, pc, bit_len);
         Some((matched_sym, bit_len))
     } else {
@@ -2335,7 +2390,6 @@ fn build_offset<'a>(
         VarnodeValue::Space(_) => (8, ft), // FIXME
         VarnodeValue::String(s) => (ctx.lang.spaces[s.as_str()], ft),
         VarnodeValue::Rel(ix) => (*ix, ft),
-        _ => panic!("Unknown varnode value type for int {:?}", val),
     }
 }
 
@@ -2636,7 +2690,7 @@ fn build_pcodeop<'a>(
                         inputs.push(h.pointer.clone());
                     }
                 },
-                _ => panic!(),
+                _ => panic!("unexpected dummy varnode at 0x{:x}", ctx.pc.offset),
             };
         } else {
             let vn = build_varnode(tpl, objs, ctx);
@@ -2980,20 +3034,23 @@ pub struct SleighLanguage {
     pub _varnodes: HashMap<String, VarnodeSym>,
     pub varnode_map: HashMap<(u64, u64), LocalStr>,
     pub context_syms: HashMap<String, Context>,
+    pub reg_sizes: Vec<Vec<Varnode>>,
     pub reg_space_size: usize,
     pub insn_table_id: u32,
     pub context_reg: VarnodeSym,
 }
 
 impl SleighLanguage {
-    pub fn create<'a>(arch_family: &str, lang_id: &str, sla_contents: &'a str) -> SleighLanguage {
-        let lang = get_language(arch_family, lang_id).unwrap();
-        let (_, sla) = program(sla_contents).finish().unwrap();
+    pub fn create<'a>(lang_id: &str, compiler_id: &str) -> SleighLanguage {
+        let arch_family = lang_id.split(":").next().unwrap();
+        let sla_contents = get_sla(arch_family, lang_id).unwrap();
+        let (_, sla) = program(&sla_contents).finish().unwrap();
 
         let mut symbols: HashMap<u32, Symbol> = HashMap::new();
         let mut spaces: HashMap<String, u64> = HashMap::new();
         let mut varnodes: HashMap<String, VarnodeSym> = HashMap::new();
         let mut varnode_map: HashMap<(u64, u64), LocalStr> = HashMap::new();
+        let mut rev_varnode_map: HashMap<String, (u64, u64)> = HashMap::new();
         let mut context_syms: HashMap<String, Context> = HashMap::new();
         let mut reg_space_size: usize = 0;
         let mut insn_table_id = 0;
@@ -3013,9 +3070,9 @@ impl SleighLanguage {
                     varnodes.insert(varnode.name.clone(), varnode.clone());
 
                     if varnode.space == AddressSpace::Register {
-                        reg_space_size =
-                            reg_space_size.max((varnode.offset + varnode.size) as usize);
+                        reg_space_size = reg_space_size.max((varnode.offset + varnode.size) as usize);
                         varnode_map.insert((varnode.offset, varnode.size), varnode.name.to_local_str());
+                        rev_varnode_map.insert(varnode.name.clone(), (varnode.offset, varnode.size));
                     }
                 }
                 SymbolBody::Context(ctx) => {
@@ -3028,6 +3085,36 @@ impl SleighLanguage {
         }
 
         let ctx_reg = varnodes["contextreg"].clone();
+        let lang = get_language(arch_family, lang_id, compiler_id, &rev_varnode_map).unwrap();
+
+        let mut registers = HashMap::new();
+        let mut max_off = 0;
+
+        for ((start, sz), name) in &varnode_map {
+            let register = Varnode {
+                name: Some(name.clone()),
+                space: AddressSpace::Register,
+                offset: *start,
+                size: *sz,
+            };
+
+            registers.insert((*start, *sz), register.clone());
+            max_off = max_off.max(*start + *sz as u64);
+        }
+
+        let mut reg_sizes: Vec<Vec<Varnode>> = Vec::with_capacity(max_off as usize);
+
+        for _ in 0..max_off {
+            reg_sizes.push(vec![]);
+        }
+
+        for reg in registers.values() {
+            reg_sizes[reg.offset as usize].push(reg.clone());
+        }
+
+        for i in 0..reg_sizes.len() {
+            reg_sizes[i].sort_by(|a, b| a.size.cmp(&b.size));
+        }
 
         SleighLanguage {
             language: lang,
@@ -3037,6 +3124,7 @@ impl SleighLanguage {
             _varnodes: varnodes,
             varnode_map: varnode_map,
             context_syms: context_syms,
+            reg_sizes: reg_sizes,
             reg_space_size: reg_space_size,
             insn_table_id: insn_table_id,
             context_reg: ctx_reg,

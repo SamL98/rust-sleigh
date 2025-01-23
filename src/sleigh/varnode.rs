@@ -8,9 +8,10 @@ use flexstr::LocalStr;
 
 // use std::cmp::{PartialEq, Eq};
 // use std::hash::{Hash, Hasher};
+use std::fmt::{self, Debug, Display};
 use std::collections::HashMap;
 use std::clone::Clone;
-use std::fmt;
+use std::hash::Hash;
 
 impl AddressSpace {
     pub fn from_str(s: &str) -> Self {
@@ -52,6 +53,18 @@ impl fmt::Display for AddressSpace {
     }
 }
 
+pub trait VarnodeIface: Debug + Display + Clone + Eq + PartialEq + Hash {
+    fn is_negative(&self) -> bool;
+    fn is_ram(&self) -> bool;
+    fn is_const(&self) -> bool;
+    fn is_reg(&self) -> bool;
+    fn space(&self) -> AddressSpace;
+    fn offset(&self) -> u64;
+    fn size(&self) -> u64;
+    fn succeeds(&self, other: &Self) -> bool;
+    fn with_size(&self, size: u64, name: Option<LocalStr>) -> Self;
+}
+
 impl Varnode{
     pub fn dummy() -> Self {
         Self {
@@ -74,27 +87,6 @@ impl Varnode{
             }
         }
     }
-
-    pub fn is_negative(&self) -> bool {
-        // println!("{:x} {} {}", self.offset, self.size, self.offset >> ((self.size * 8) - 1));
-        self.space == AddressSpace::Const && self.offset >> ((self.size * 8) - 1) != 0
-
-        // match self.size {
-        //     1 if (*val >> 7) != 0 => ((*val ^ 0xff) as u64 + 1, "-"),
-        //     2 if (*val >> 15) != 0 => ((*val ^ 0xffff) as u64 + 1, "-"),
-        //     4 if (*val >> 31) != 0 => ((*val ^ 0xffffffff) as u64 + 1, "-"),
-        //     8 if (*val >> 63) != 0 => ((*val ^ 0xffffffffffffffffu64 as i64) as u64 + 1, "-"),
-        //     _ => (*val as u64, ""),
-        // }
-    }
-
-    // pub fn is_ram(&self) -> bool {
-    //     self.space == AddressSpace::Ram
-    // }
-
-    // pub fn is_const(&self) -> bool {
-    //     self.space == AddressSpace::Const
-    // }
 
     pub fn negate(&self) -> Varnode {
         let shift = 64 - self.size * 8;
@@ -123,6 +115,50 @@ impl Varnode{
             space: self.space.clone(),
             offset: new_offset,
             size: new_size,
+        }
+    }
+}
+
+impl VarnodeIface for Varnode {
+    fn is_negative(&self) -> bool {
+        self.is_const() && self.offset >> ((self.size * 8) - 1) != 0
+    }
+
+    fn is_ram(&self) -> bool {
+        self.space == AddressSpace::Ram
+    }
+
+    fn is_reg(&self) -> bool {
+        self.space == AddressSpace::Register
+    }
+
+    fn is_const(&self) -> bool {
+        self.space == AddressSpace::Const
+    }
+
+    fn space(&self) -> AddressSpace {
+        self.space
+    }
+
+    fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    fn size(&self) -> u64 {
+        self.size
+    }
+
+    fn succeeds(&self, other: &Self) -> bool {
+        self.space == other.space &&
+            self.offset == other.offset + 1
+    }
+
+    fn with_size(&self, size: u64, name: Option<LocalStr>) -> Self {
+        Self {
+            name: name,
+            space: self.space,
+            offset: self.offset,
+            size: size,
         }
     }
 }
