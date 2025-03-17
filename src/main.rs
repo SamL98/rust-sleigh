@@ -65,9 +65,14 @@ fn main() {
     // let data_size = 0x3439f4;
     // let mut orig_pc = 0x100002bc0;
 
-    let data_addr = 11200;
-    let data_size = 0x3439f4;
-    let mut orig_pc = 0x100002bc0;
+    // let data_addr = 11200;
+    // let data_size = 0x3439f4;
+    // let mut orig_pc = 0x100002bc0;
+
+    let data_addr = 0x3dc0;
+    let data_size = 0x100;
+    let mut orig_pc = 0x100003dc0;
+
     let mut buf = &bytes[data_addr..data_addr + data_size];
 
     // let data_addr = 0x5bb0;

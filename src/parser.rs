@@ -2954,6 +2954,11 @@ pub fn build_sym<'a>(
         }
     }
 
+    // Fixup the seqnums.
+    for (i, op) in ops.iter_mut().enumerate() {
+        op.seq.uniq = i as i32;
+    }
+
     ops
 }
 

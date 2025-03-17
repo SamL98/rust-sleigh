@@ -75,7 +75,7 @@ impl<'a, 'b> Iterator for DisassemblyIter<'a, 'b> {
             Some(insn) => {
                 log!(&self.disasm, "0x{:x} {}: {}", insn.address.offset, insn.asm, insn.bit_len);
                 for op in &insn.ops {
-                    log!(&self.disasm, "    {}", op);
+                    log!(&self.disasm, "    {}: {}", op.seq, op);
                 }
 
                 let bit_len = insn.bit_len;
