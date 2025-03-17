@@ -117,6 +117,15 @@ impl Varnode{
             size: new_size,
         }
     }
+
+    pub fn adding(&self, addend: u64) -> Self {
+        Self {
+            name: None,
+            space: self.space.clone(),
+            offset: self.offset + addend,
+            size: self.size,
+        }
+    }
 }
 
 impl VarnodeIface for Varnode {

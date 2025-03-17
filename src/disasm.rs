@@ -13,7 +13,7 @@ pub struct Disassembler<'a> {
     pub ctx: Vec<u32>,
     num: Option<u64>,
     log_modules: HashSet<String>,
-    lang: &'a SleighLanguage,
+    pub lang: &'a SleighLanguage,
     reg_space: BitVec<u8, Msb0>,
     build_cache: HashMap<MatchedSymbol<'a>, Vec<PcodeOp>>,
     depth: usize,
