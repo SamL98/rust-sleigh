@@ -28,7 +28,7 @@ impl<T: VarnodeIface> Op<OpCode, T> {
             &OpCode::Load => format!("*{}", self.inputs[1]),
             &OpCode::Branch => format!("goto {}", self.inputs[0]),
             &OpCode::BranchInd => format!("goto [{}]", self.inputs[0]),
-            &OpCode::Call => format!("call({})", self.inputs.iter()
+            &OpCode::Call => format!("FUN_{:x}({})", self.inputs[0].offset(), self.inputs[1..].iter()
                                                      .map(|x| format!("{}", x))
                                                      .collect::<Vec<String>>()
                                                      .join(", ")),
@@ -36,7 +36,7 @@ impl<T: VarnodeIface> Op<OpCode, T> {
                 let mut input_iter = self.inputs.iter();
                 let _ = input_iter.next();
 
-                format!("call(*({}), {})", self.inputs[0], 
+                format!("*({})({})", self.inputs[0], 
                     input_iter
                         .map(|x| format!("{}", x))
                         .collect::<Vec<String>>()
