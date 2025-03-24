@@ -5,6 +5,7 @@ use std::fmt;
 pub enum OpCode {
     Copy = 1,
     Load,
+    AddrOf,
     Store,
     Branch,
     CBranch,
@@ -101,6 +102,7 @@ impl OpCode {
         match self {
             &OpCode::Copy => "Copy",
             &OpCode::Load => "Load",
+            &OpCode::AddrOf => "AddrOf",
             &OpCode::Store => "Store",
             &OpCode::Branch => "Branch",
             &OpCode::CBranch => "CBranch",

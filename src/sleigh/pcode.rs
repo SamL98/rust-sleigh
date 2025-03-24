@@ -26,6 +26,7 @@ impl<T: VarnodeIface> Op<OpCode, T> {
             &OpCode::Copy => format!("{}", self.inputs[0]),
             &OpCode::Store => format!("*{} = {}", self.inputs[1], self.inputs[2]),
             &OpCode::Load => format!("*{}", self.inputs[1]),
+            &OpCode::AddrOf => format!("&{}", self.inputs[0]),
             &OpCode::Branch => format!("goto {}", self.inputs[0]),
             &OpCode::BranchInd => format!("goto [{}]", self.inputs[0]),
             &OpCode::Call => format!("FUN_{:x}({})", self.inputs[0].offset(), self.inputs[1..].iter()
