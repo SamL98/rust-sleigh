@@ -63,6 +63,7 @@ pub trait VarnodeIface: Debug + Display + Clone + Eq + PartialEq + Hash {
     fn size(&self) -> u64;
     fn succeeds(&self, other: &Self) -> bool;
     fn with_size(&self, size: u64, name: Option<LocalStr>) -> Self;
+    fn fmt_call_target(&self) -> String;
 }
 
 impl Varnode{
@@ -169,6 +170,10 @@ impl VarnodeIface for Varnode {
             offset: self.offset,
             size: size,
         }
+    }
+
+    fn fmt_call_target(&self) -> String {
+        format!("FUN_{:x}", self.offset())
     }
 }
 
