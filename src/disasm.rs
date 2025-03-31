@@ -69,7 +69,6 @@ impl<'a, 'b> Iterator for DisassemblyIter<'a, 'b> {
         }
 
         let mut ctx = self.disasm.ctx.clone();
-        let off = pc.offset;
 
         let (rv, num_bits) = match self.disasm.disassemble_one(&self.data[self.bits_consumed / 8..], pc, &mut ctx) {
             Some(insn) => {
@@ -267,7 +266,7 @@ impl<'a> Disassembler<'a> {
 
                     let mut ctx = disasm.ctx.clone();
 
-                    if let Some(insn) = disasm.disassemble_one(&buf[(*start - orig_pc) as usize..], pc, &mut ctx) {
+                    if let Some(_insn) = disasm.disassemble_one(&buf[(*start - orig_pc) as usize..], pc, &mut ctx) {
                     }
                 }
             });

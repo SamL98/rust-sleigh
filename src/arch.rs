@@ -1,5 +1,4 @@
 use crate::sleigh::types::{AddressSpace, Varnode};
-use crate::utils::*;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
