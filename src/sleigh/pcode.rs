@@ -109,7 +109,7 @@ impl<T: VarnodeIface> Op<OpCode, T> {
 
     fn fmt_output(&self) -> String {
         match &self.output {
-            Some(vnode) => format!("{} = ", vnode),
+            Some(vnode) => format!("{} = ", vnode.fmt_output()),
             None        => "".to_string()
         }
     }
