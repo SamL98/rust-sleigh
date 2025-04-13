@@ -20,11 +20,12 @@ impl BlockElement for Instruction {
     }
 
     fn target(&self) -> Option<Address> {
-        if self.branches() {
-            self.ops.last().map(|o| o.target()).flatten()
-        } else {
-            return None;
+        for op in &self.ops {
+            if op.branches() {
+                return op.target();
+            }
         }
+        None
     }
 
     fn has_fallthrough(&self) -> bool {

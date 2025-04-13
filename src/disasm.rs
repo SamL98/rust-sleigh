@@ -1,4 +1,6 @@
 use crate::sleigh::types::*;
+use crate::sleigh::opcode::*;
+use crate::sleigh::varnode::*;
 use crate::parser::*;
 use crate::log;
 
@@ -164,12 +166,28 @@ impl<'a> Disassembler<'a> {
 
                 new_ops
             } else {
-                let ops = build_sym(
+                let mut ops = build_sym(
                     &matched_symbol,
                     &pc,
                     num_bits,
                     &self.lang,
                 );
+
+                for i in 0..ops.len() {
+                    if ops[i].opcode == OpCode::Call && i >= 2 {
+                        if ops[i - 2].opcode == OpCode::IntSub &&
+                            &ops[i - 2].inputs[0] == &self.lang.language.cspec.stack_pointer &&
+                            ops[i - 2].inputs[1].is_const() &&
+                            ops[i - 2].inputs[1].offset == self.lang.language.cspec.default_proto().stackshift {
+                            ops.remove(i - 2);
+                            break;
+                        }
+                    }
+                }
+
+                for (i, op) in ops.iter_mut().enumerate() {
+                    op.seq.uniq = i as i32;
+                }
 
                 should_insert = true;
                 ops
