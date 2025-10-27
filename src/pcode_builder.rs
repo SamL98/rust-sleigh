@@ -486,7 +486,7 @@ pub fn _build_sym<'a>(
             let mut sub_op_start = 0;
             let mut sub_op_size = 0;
 
-            if let MatchedSymbol::Symbol(sym) = op {
+            if let MatchedSymbol::Symbol(sym, _) = op {
                 if let SymbolBody::Varnode(vnode) = &sym.body {
                     let name = match vnode.space {
                         AddressSpace::Register => ctx.lang.varnode_map.get(&(vnode.offset, vnode.size)),
@@ -701,7 +701,7 @@ pub fn _build_text(matched_sym: &MatchedSymbol, text: &mut String, ops: &[PcodeO
                 }
             }
         },
-        MatchedSymbol::Symbol(sym) => {
+        MatchedSymbol::Symbol(sym, _) => {
             if let SymbolBody::Varnode(vnode) = &sym.body {
                 text.push_str(&vnode.name);
             }

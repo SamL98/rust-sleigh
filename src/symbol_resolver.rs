@@ -85,7 +85,7 @@ fn match_pattern(pattern: &DecisionPattern, insn_words: &[u8], ctx_words: &Vec<u
 #[derive(Debug, Clone)]
 pub enum MatchedSymbol<'a> {
     Constructor((&'a Constructor, Vec<(MatchedSymbol<'a>, Option<FixupType>)>)),
-    Symbol(&'a Symbol),
+    Symbol(&'a Symbol, usize),
     Literal((i64, usize)),
     String(&'a str),
 }
@@ -102,7 +102,7 @@ impl Hash for MatchedSymbol<'_> {
                     op.hash(state);
                 }
             },
-            Symbol(sym) => sym.id.hash(state),
+            Symbol(sym, _) => sym.id.hash(state),
             Literal((val, sz)) => (val, sz).hash(state),
             String(s) => s.hash(state),
         }
@@ -127,7 +127,7 @@ impl PartialEq for MatchedSymbol<'_> {
 
                 return true;
             },
-            (Symbol(sym1), Symbol(sym2)) => sym1.id == sym2.id,
+            (Symbol(sym1, _), Symbol(sym2, _)) => sym1.id == sym2.id,
             (Literal((v1, sz1)), Literal((v2, sz2))) => v1 == v2 && sz1 == sz2,
             (String(s1), String(s2)) => s1 == s2,
             _ => false,
@@ -224,7 +224,7 @@ fn resolve_varlist<'a, 'b>(
 
                 // Not super sure if this size calculation is right but it seems to work.
                 let bit_end = (token.end_byte * 8 + (8 - (token.end_bit % 8) - 1) + size) as usize;
-                ((MatchedSymbol::Symbol(var)), bit_end)
+                ((MatchedSymbol::Symbol(var, idx)), bit_end)
             })
         },
         Field::Context(token) => {
@@ -251,7 +251,7 @@ fn resolve_varlist<'a, 'b>(
 
                 // Not super sure if this size calculation is right but it seems to work.
                 let bit_end = (token.end_byte * 8 + (8 - (token.end_bit % 8) - 1) + size) as usize;
-                ((MatchedSymbol::Symbol(var)), bit_end)
+                ((MatchedSymbol::Symbol(var, idx)), bit_end)
             })
         }
     }
@@ -335,12 +335,9 @@ fn evaluate_expr(
                 };
 
                 (signed_val, *sz, None)
-            } else if let MatchedSymbol::Symbol(sym) = op {
+            } else if let MatchedSymbol::Symbol(sym, idx) = op {
                 if let SymbolBody::Varnode(_vnode_sym) = &sym.body {
-                    // let words = read_reg(vnode_sym, reg_space);
-                    // TODO: How to handle SIMD values???
-                    println!("doing vnode expr value hack. probably bad");
-                    (0, 8, None)
+                    (*idx as i64, 8, None)
                 } else {
                     panic!("{:?}", op);
                 }
@@ -551,7 +548,7 @@ pub fn _resolve_symbol<'a, 'b>(
             resolve_valuemap(words, valuemap, ctx)
         },
         SymbolBody::Varnode(_) => {
-            Some((MatchedSymbol::Symbol(sym), 0))
+            Some((MatchedSymbol::Symbol(sym, 0), 0)) // NOTE: dummy index value here.
         },
         SymbolBody::Nametab(nametab) => {
             resolve_nametab(words, nametab, ctx)
