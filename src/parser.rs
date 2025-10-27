@@ -1919,22 +1919,27 @@ fn resolve_varlist<'a, 'b>(
     varlist: &'a Varlist,
     ctx: &ResolveContext<'a, 'b>,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
-    // println!("{:?}", varlist);
     match &varlist.field {
         Field::Token(token) => {
             let num_bytes = (token.end_byte - token.start_byte + 1) as usize;
             let sb = token.start_byte as usize;
-            let mut token_word: u32 = 0;
+            // let mut token_word: u32 = 0;
 
-            for i in 0..num_bytes {
-                token_word <<= 8;
+            // for i in 0..num_bytes {
+            //     token_word <<= 8;
 
-                if sb + i < words.len() {
-                    token_word |= words[sb + i] as u32;
-                } else {
-                    token_word |= 0;
-                }
-            }
+            //     if sb + i < words.len() {
+            //         token_word |= words[sb + i] as u32;
+            //     } else {
+            //         token_word |= 0;
+            //     }
+            // }
+
+            let token_word = if token.big_endian {
+                get_word(words, sb, num_bytes)
+            } else {
+                get_word_le(words, sb, num_bytes)
+            };
 
             let start = token.start_bit - token.start_byte * 8;
             let size = token.end_bit - token.start_bit + 1;
@@ -2155,16 +2160,19 @@ fn resolve_operands<'a, 'b>(
 
                 // TODO: Figure out if this is right. I'm just guessing.
                 let word = if !expr.big_endian {
-                    get_word_le(words, bit_end / 8 + expr.start_byte as usize, num_bytes)
+                    // get_word_le(words, bit_end / 8 + expr.start_byte as usize, num_bytes)
+                    get_word_le(words, expr.start_byte as usize, num_bytes)
                 } else {
-                    get_word(words, bit_end / 8 + expr.start_byte as usize, num_bytes)
+                    // get_word(words, bit_end / 8 + expr.start_byte as usize, num_bytes)
+                    get_word(words, expr.start_byte as usize, num_bytes)
                 };
 
                 let mask = 0xffffffffffffffff_u64 >> ((8 - num_bytes) * 8);
-                // let val = (((word >> expr.start_bit) & mask) >> expr.shift) as i64;
-                let val = ((word >> expr.start_bit) & mask) as i64;
+                let start_bit = expr.start_bit % 8;
+                let val = (((word >> start_bit) & mask) >> expr.shift) as i64;
+                // let val = ((word >> expr.start_bit) & mask) as i64;
 
-                // let byte_start = bit_end / 8 + expr.start_byte as usize; // FIXME
+                let byte_start = expr.start_byte as usize; // FIXME
                 // bit_end = bit_end.max(byte_start * 8);
                 // // total_bit_end = total_bit_end.max(byte_start * 8 + size as usize);
                 bit_end = (expr.start_byte * 8 + size) as usize;
@@ -2173,9 +2181,9 @@ fn resolve_operands<'a, 'b>(
                 matched_ops.push((MatchedSymbol::Literal((val, num_bytes)), None));
                 bit_ends.push(bit_end);
 
-                log!(ctx, "Bit end is ({}, {}) after token operand", bit_end, total_bit_end);
-                // log!(ctx, "Start: ({}, {}), Shift: {}", expr.start_bit, expr.end_bit, expr.shift);
-                // log!(ctx, "Words: {:x?}, Val: 0x{:x}", &words[byte_start..(byte_start + 4)], val);
+                log!(ctx, "Bit end is ({}, {}) after token operand, {}", bit_end, total_bit_end, val);
+                log!(ctx, "Start: ({}, {}), Shift: {}", expr.start_bit, expr.end_bit, expr.shift);
+                log!(ctx, "Words: {:x?}, Val: 0x{:x}", &words[byte_start..(byte_start + 4)], val);
             },
             Some(Expr::Field(Field::Context(expr))) => {
                 let size = expr.end_bit - expr.start_bit + 1;
