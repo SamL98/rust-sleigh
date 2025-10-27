@@ -2,6 +2,7 @@ use crate::sleigh::types::{AddressSpace, Varnode};
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::env;
 
 use flexstr::IntoLocalStr;
 use elementtree::Element;
@@ -266,8 +267,18 @@ pub fn get_sla(arch_name: &str, language_id: &str) -> Option<String> {
     None
 }
 
-pub fn get_language(arch_name: &str, language_id: &str, compiler_id: &str, registers: &HashMap<String, (u64, u64)>) -> Option<Language> {
-    let ghidra_root_path = Path::new(file!()).parent().unwrap().parent().unwrap();
+pub fn get_language(
+    arch_name: &str,
+    language_id: &str,
+    compiler_id: &str,
+    registers: &HashMap<String, (u64, u64)>,
+) -> Option<Language> {
+    let ghidra_path_env = env::var("GHIDRA_PATH");
+
+    let ghidra_root_path = match &ghidra_path_env {
+        Ok(p) => Path::new(p),
+        Err(_) => Path::new(file!()).parent().unwrap().parent().unwrap(),
+    };
 
     let arch_path = ghidra_root_path.join("Ghidra")
                                     .join("Processors")
