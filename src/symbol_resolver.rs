@@ -357,7 +357,7 @@ fn evaluate_expr(
                 Xor => lhs_val ^ rhs_val,
                 Add => lhs_val + rhs_val,
                 Sub => lhs_val - rhs_val,
-                Mult => lhs_val * rhs_val,
+                Mult => lhs_val.overflowing_mul(rhs_val).0,
                 And => lhs_val & rhs_val,
                 Or => lhs_val | rhs_val,
                 Lshift => {
@@ -460,8 +460,9 @@ fn resolve_operands<'a, 'b>(
                 bit_ends.push(0);
             },
             Some(Expr::Unary(_) | Expr::Binary(_)) => {
+                log!(ctx, "Evaluating expr {:?}", operand.expr);
                 let (val, sz, fixup_type) = evaluate_expr(operand.expr.as_ref().unwrap(), &ctx.ctx, &matched_ops, &ctx.reg_space);
-                log!(ctx, "Evaluating expr {:?} = {}", operand.expr, val);
+                log!(ctx, "  => {}", val);
                 matched_ops.push((MatchedSymbol::Literal((val, sz)), fixup_type));
                 bit_ends.push(0);
             },
