@@ -1,6 +1,4 @@
 use crate::sleigh::types::*;
-use crate::sleigh::opcode::*;
-use crate::sleigh::varnode::*;
 use crate::parser::*;
 use crate::log;
 
@@ -48,7 +46,7 @@ pub struct DisassemblyIter<'a, 'b> {
 }
 
 impl<'a, 'b> Iterator for DisassemblyIter<'a, 'b> {
-    type Item = Option<Instruction>;
+    type Item = Instruction;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.bits_consumed >= self.data.len() * 8 {
@@ -61,36 +59,33 @@ impl<'a, 'b> Iterator for DisassemblyIter<'a, 'b> {
             }
         }
 
-        let pc = Address {
-            space: AddressSpace::Ram,
-            offset: (self.orig_pc as usize + self.bits_consumed / 8) as u64,
-        };
-
-        if pc.offset % 0x1000 == 0 {
-            println!("0x{:x} / 0x{:x}", pc.offset - self.orig_pc, self.data.len());
-        }
-
         let mut ctx = self.disasm.ctx.clone();
 
-        let (rv, num_bits) = match self.disasm.disassemble_one(&self.data[self.bits_consumed / 8..], pc, &mut ctx) {
-            Some(insn) => {
-                log!(&self.disasm, "0x{:x} {}: {}", insn.address.offset, insn.asm, insn.bit_len);
-                for op in &insn.ops {
-                    log!(&self.disasm, "    {}: {}", op.seq, op);
+        while self.bits_consumed / 8 < self.data.len() {
+            let pc = Address {
+                space: AddressSpace::Ram,
+                offset: (self.orig_pc as usize + self.bits_consumed / 8) as u64,
+            };
+
+            match self.disasm.disassemble_one(&self.data[self.bits_consumed / 8..], pc, &mut ctx) {
+                Some(insn) => {
+                    log!(&self.disasm, "0x{:x} {}: {}", insn.address.offset, insn.asm, insn.bit_len);
+                    for op in &insn.ops {
+                        log!(&self.disasm, "    {}: {}", op.seq, op);
+                    }
+
+                    self.bits_consumed += insn.bit_len;
+                    self.num_insns += 1;
+
+                    return Some(insn);
+                },
+                None => {
+                    self.bits_consumed += self.disasm.lang.bit_align;
                 }
+            };
+        }
 
-                let bit_len = insn.bit_len;
-                (Some(insn), bit_len)
-            },
-            None => {
-                (None, self.disasm.lang.bit_align)
-            }
-        };
-
-        self.bits_consumed += num_bits;
-        self.num_insns += 1;
-
-        Some(rv)
+        None
     }
 }
 
@@ -172,18 +167,6 @@ impl<'a> Disassembler<'a> {
                     num_bits,
                     &self.lang,
                 );
-
-                for i in 0..ops.len() {
-                    if ops[i].opcode == OpCode::Call && i >= 2 {
-                        if ops[i - 2].opcode == OpCode::IntSub &&
-                            &ops[i - 2].inputs[0] == &self.lang.language.cspec.stack_pointer &&
-                            ops[i - 2].inputs[1].is_const() &&
-                            ops[i - 2].inputs[1].offset == self.lang.language.cspec.default_proto().stackshift {
-                            ops.remove(i - 2);
-                            break;
-                        }
-                    }
-                }
 
                 for (i, op) in ops.iter_mut().enumerate() {
                     op.seq.uniq = i as i32;

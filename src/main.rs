@@ -7,10 +7,11 @@ pub mod disasm;
 extern crate bitvec;
 extern crate nom;
 
+use object::{Object, ObjectSection, SectionKind};
 use clap::Parser;
 
-use crate::parser::*;
 use crate::disasm::Disassembler;
+use crate::parser::*;
 
 use std::time::Instant;
 use std::fs::File;
@@ -41,72 +42,98 @@ struct Args {
     language_id: String,
 
     #[arg(short, long)]
+    compiler_id: String,
+
+    #[arg(short, long)]
     file_name: String,
 
     #[arg(short = 'm', long = "log")]
     log_modules: Vec<String>,
+
+    #[arg(long = "print-asm")]
+    print_asm: bool,
+
+    #[arg(long = "print-pcode")]
+    print_pcode: bool,
 }
 
 fn main() {
     let args = Args::parse();
 
+    let lang_id = args.language_id.clone();
+    let comp_id = args.compiler_id.clone();
+    let lang = SleighLanguage::create(&lang_id, &comp_id);
+
     let mut file = File::open(&args.file_name).unwrap();
     let mut bytes = vec![];
     file.read_to_end(&mut bytes).unwrap();
 
-    // let mut buf = &bytes[0xe070..0x1cd72e5];
-    // let mut orig_pc = 0x10000e070;
-
-    // let data_addr = 0x52b8;
-    // let data_size = 0xb2b80;
-    // let mut orig_pc = 0x1000052b8;
-
-    // let data_addr = 11200;
-    // let data_size = 0x3439f4;
-    // let mut orig_pc = 0x100002bc0;
-
-    // let data_addr = 11200;
-    // let data_size = 0x3439f4;
-    // let mut orig_pc = 0x100002bc0;
-
-    let data_addr = 0x3dc0;
-    let data_size = 0x100;
-    let mut orig_pc = 0x100003dc0;
-
-    let mut buf = &bytes[data_addr..data_addr + data_size];
-
-    // let data_addr = 0x5bb0;
-    // let data_size = 0x49d65a;
-    // let mut buf = &bytes[data_addr..data_addr + data_size];
-    // let mut orig_pc = 0x100005bb0;
-
-    if let Some(addr) = args.start_addr {
-        buf = &buf[(addr - orig_pc) as usize..];
-        orig_pc = addr;
-    }
-
-    if let Some(addr) = args.end_addr {
-        buf = &buf[..(addr - orig_pc) as usize];
-    }
-
     let start = Instant::now();
     let print_time = args.time;
-    let lang_id = args.language_id.clone();
-    let comp_id = "gcc".to_string();
     let num = args.num.clone();
 
-    let lang = SleighLanguage::create(&lang_id, &comp_id);
+    let mut disasm = Disassembler::new(lang_id, comp_id, num, &args.log_modules, &lang);
 
-    if args.parallel {
-        let mut disasm = Disassembler::new(lang_id, comp_id, num, &args.log_modules, &lang);
-        disasm.parallel_disassemble(&buf, orig_pc);
-    } else {
-        let mut disasm = Disassembler::new(lang_id, comp_id, num, &args.log_modules, &lang);
-        for _ in disasm.disassemble(&buf, orig_pc) {}
+    let obj = object::File::parse(&*bytes).unwrap();
+    let mut num_bytes = 0;
+    let mut num_insns = 0;
+
+    let mut start_addr = args.start_addr.clone().unwrap_or(u64::MAX);
+    let end_addr = args.end_addr.clone().unwrap_or(u64::MAX);
+    let max_insns = args.num.clone().unwrap_or(u64::MAX);
+
+    'outer: for section in obj.sections() {
+        if section.kind() == SectionKind::Text {
+            let mut addr = section.address();
+            let size = section.size();
+
+            if let Some((off, _)) = section.file_range() {
+                let mut start = off as usize;
+                let end = (off + size) as usize;
+
+                if start_addr != u64::MAX {
+                    if start_addr < addr || start_addr >= (addr + size) {
+                        continue;
+                    }
+
+                    let delta = start_addr - addr;
+                    start += delta as usize;
+                    addr += delta;
+                    start_addr = addr + size;
+                }
+
+                for insn in disasm.disassemble(&bytes[start..end], addr) {
+                    num_insns += 1;
+                    num_bytes += insn.bit_len / 8;
+
+                    if args.print_asm {
+                        println!("0x{:x}: {}", insn.address.offset, insn.asm);
+                    }
+
+                    if args.print_pcode {
+                        for op in &insn.ops {
+                            println!("    {}: {}", op.seq, op);
+                        }
+                    }
+
+                    if num_insns > max_insns || (end_addr != u64::MAX && insn.address.offset >= end_addr) {
+                        break 'outer;
+                    }
+                }
+            }
+        }
     }
 
+    // if args.parallel {
+    //     let mut disasm = Disassembler::new(lang_id, comp_id, num, &args.log_modules, &lang);
+    //     disasm.parallel_disassemble(&buf, orig_pc);
+    // } else {
+    //     let mut disasm = Disassembler::new(lang_id, comp_id, num, &args.log_modules, &lang);
+    //     for _ in disasm.disassemble(&buf, orig_pc) {}
+    // }
+
     if print_time {
-        println!("Disassembly took {}s", ((Instant::now() - start).as_millis() as f64) / 1000.0);
+        println!("Disassembled {} bytes in {}s", num_bytes, ((Instant::now() - start).as_millis() as f64) / 1000.0);
     }
 }
 

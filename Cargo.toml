@@ -16,7 +16,7 @@ glob = "0.3.1"
 elementtree = "1.2.3"
 clap = { version = "4.5.26", features = ["derive"] }
 flexstr = "0.9.2"
-debug_macro = { git = "https://github.com/SamL98/rust-lldb-po" }
+object = "0.35.0"
 
 [dev-dependencies]
 ghidra_sleigh = { path = "ghidra_sleigh" }

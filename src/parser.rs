@@ -22,8 +22,6 @@ use flexstr::{local_str, LocalStr, ToLocalStr};
 
 use bitvec::prelude::*;
 
-use debug_macro::DebugPrint;
-
 use std::collections::{HashSet, HashMap};
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -295,7 +293,7 @@ pub enum Expr {
     Next2,
 }
 
-#[derive(Debug, Clone, DebugPrint)]
+#[derive(Debug, Clone)]
 pub struct Constructor {
     pub _parent: u32,
     pub _first: i32,
@@ -1949,8 +1947,34 @@ fn resolve_varlist<'a, 'b>(
                 let bit_end = (token.end_byte * 8 + (8 - (token.end_bit % 8) - 1) + size) as usize;
                 ((MatchedSymbol::Symbol(var)), bit_end)
             })
+        },
+        Field::Context(token) => {
+            let num_bytes = (token.end_byte - token.start_byte + 1) as usize;
+            let sb = token.start_byte as usize;
+            let mut token_word: u32 = 0;
+
+            for i in 0..num_bytes {
+                token_word <<= 8;
+
+                if sb + i < words.len() {
+                    token_word |= words[sb + i] as u32;
+                } else {
+                    token_word |= 0;
+                }
+            }
+
+            let start = token.start_bit - token.start_byte * 8;
+            let size = token.end_bit - token.start_bit + 1;
+            let idx = ((token_word >> start) & ((1 << size) - 1)) as usize;
+
+            varlist.vars[idx].map(|var_idx| {
+                let var = &ctx.lang.symbols[&var_idx];
+
+                // Not super sure if this size calculation is right but it seems to work.
+                let bit_end = (token.end_byte * 8 + (8 - (token.end_bit % 8) - 1) + size) as usize;
+                ((MatchedSymbol::Symbol(var)), bit_end)
+            })
         }
-        _ => todo!(),
     }
 }
 
@@ -2107,15 +2131,24 @@ fn resolve_operands<'a, 'b>(
     ctx: &mut ResolveContext<'a, 'b>,
 ) -> (Vec<(MatchedSymbol<'a>, Option<FixupType>)>, usize, bool) {
     let mut matched_ops = vec![];
+    let mut bit_ends = vec![];
     let mut bit_end: usize = 0;
     let mut total_bit_end: usize = 0;
     let mut ok = true;
 
     for op_idx in &ct.operands {
         let operand = get_operand(&op_idx, &ctx.lang.symbols);
+        log!(ctx, "Base: {}, MinLen: {}, RelOff: {}", operand.base, operand.min_len, operand.off);
 
         match &operand.expr {
             Some(Expr::Field(Field::Token(expr))) => {
+                log!(ctx, "StartBit: {}, EndBit: {}, StartByte: {}, EndByte: {}, Shift: {}",
+                    expr.start_bit,
+                    expr.end_bit,
+                    expr.start_byte,
+                    expr.end_byte,
+                    expr.shift);
+
                 // TODO: Handle shift field.
                 let size = expr.end_bit - expr.start_bit + 1;
                 let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
@@ -2128,16 +2161,21 @@ fn resolve_operands<'a, 'b>(
                 };
 
                 let mask = 0xffffffffffffffff_u64 >> ((8 - num_bytes) * 8);
+                // let val = (((word >> expr.start_bit) & mask) >> expr.shift) as i64;
                 let val = ((word >> expr.start_bit) & mask) as i64;
 
+                // let byte_start = bit_end / 8 + expr.start_byte as usize; // FIXME
+                // bit_end = bit_end.max(byte_start * 8);
+                // // total_bit_end = total_bit_end.max(byte_start * 8 + size as usize);
+                bit_end = (expr.start_byte * 8 + size) as usize;
+                total_bit_end = total_bit_end.max(bit_end);
+
                 matched_ops.push((MatchedSymbol::Literal((val, num_bytes)), None));
-                let byte_start = bit_end / 8 + expr.start_byte as usize; // FIXME
-                bit_end = bit_end.max(byte_start * 8);
-                total_bit_end = total_bit_end.max(byte_start * 8 + size as usize);
+                bit_ends.push(bit_end);
 
                 log!(ctx, "Bit end is ({}, {}) after token operand", bit_end, total_bit_end);
-                log!(ctx, "Start: ({}, {}), Shift: {}", expr.start_bit, expr.end_bit, expr.shift);
-                log!(ctx, "Words: {:x?}, Val: 0x{:x}", &words[byte_start..(byte_start + 4)], val);
+                // log!(ctx, "Start: ({}, {}), Shift: {}", expr.start_bit, expr.end_bit, expr.shift);
+                // log!(ctx, "Words: {:x?}, Val: 0x{:x}", &words[byte_start..(byte_start + 4)], val);
             },
             Some(Expr::Field(Field::Context(expr))) => {
                 let size = expr.end_bit - expr.start_bit + 1;
@@ -2145,23 +2183,28 @@ fn resolve_operands<'a, 'b>(
                 let val = (ctx.ctx[(expr.start_bit / 32) as usize] >> bit_start) & ((1 << size) - 1);
                 let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
                 matched_ops.push((MatchedSymbol::Literal((val as i64, num_bytes)), None));
+                bit_ends.push(0);
             },
             Some(Expr::Unary(_) | Expr::Binary(_)) => {
                 let (val, sz, fixup_type) = evaluate_expr(operand.expr.as_ref().unwrap(), &ctx.ctx, &matched_ops, &ctx.reg_space);
                 matched_ops.push((MatchedSymbol::Literal((val, sz)), fixup_type));
+                bit_ends.push(0);
             },
             Some(Expr::Const(val)) => {
                 // TODO: Fix size.
                 matched_ops.push((MatchedSymbol::Literal((*val, 8)), None));
+                bit_ends.push(0);
             }
             None => {
                 let op_sym = &ctx.lang.symbols[&operand.subsym];
 
                 // TODO: Figure out if thise guess is right.
-                let base = if operand.base == -1 {
+                let base = if operand.base < 0 {
                     operand.off as usize
+                    // total_bit_end / 8
                 } else {
-                    bit_end / 8
+                    // bit_end / 8
+                    bit_ends[operand.base as usize]
                 };
 
                 // Before recursively resolving a symbol, we first need to modify the context.
@@ -2179,13 +2222,15 @@ fn resolve_operands<'a, 'b>(
                     Some((matched_sym, sub_bit_end)) => {
                         let new_bit_end = bit_end.max((base * 8) as usize + sub_bit_end);
                         matched_ops.push((matched_sym, None));
-                        total_bit_end = new_bit_end;
+                        bit_ends.push(new_bit_end);
+                        // total_bit_end = new_bit_end;
+                        total_bit_end = total_bit_end.max(new_bit_end);
 
-                        if operand.base == -1 {
-                            bit_end = total_bit_end;
-                        }
+                        // if operand.base == -1 {
+                        //     bit_end = total_bit_end;
+                        // }
 
-                        log!(ctx, "After resolving operand, new bit end is {}, total bit end: {}", bit_end, total_bit_end);
+                        log!(ctx, "After resolving operand, new bit end is {}, total bit end: {}", new_bit_end, total_bit_end);
                     },
                     None => ok = false,
                 };
