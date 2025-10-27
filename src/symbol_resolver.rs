@@ -424,36 +424,33 @@ fn resolve_operands<'a, 'b>(
                     expr.end_byte,
                     expr.shift);
 
-                // TODO: Handle shift field.
                 let size = expr.end_bit - expr.start_bit + 1;
                 let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
+                let mut sb = expr.start_byte as usize;
 
-                // TODO: Figure out if this is right. I'm just guessing.
+                if operand.base >= 0 {
+                    sb += (bit_ends[operand.base as usize] / 8) as usize;
+                }
+
                 let word = if !expr.big_endian {
-                    // get_word_le(words, bit_end / 8 + expr.start_byte as usize, num_bytes)
-                    get_word_le(words, expr.start_byte as usize, num_bytes)
+                    get_word_le(words, sb, num_bytes)
                 } else {
-                    // get_word(words, bit_end / 8 + expr.start_byte as usize, num_bytes)
-                    get_word(words, expr.start_byte as usize, num_bytes)
+                    get_word(words, sb, num_bytes)
                 };
 
                 let mask = 0xffffffffffffffff_u64 >> ((8 - num_bytes) * 8);
                 let start_bit = expr.start_bit % 8;
                 let val = (((word >> start_bit) & mask) >> expr.shift) as i64;
-                // let val = ((word >> expr.start_bit) & mask) as i64;
 
-                let byte_start = expr.start_byte as usize; // FIXME
-                // bit_end = bit_end.max(byte_start * 8);
-                // // total_bit_end = total_bit_end.max(byte_start * 8 + size as usize);
-                bit_end = (expr.start_byte * 8 + size) as usize;
+                bit_end = sb * 8 + (size as usize);
                 total_bit_end = total_bit_end.max(bit_end);
 
                 matched_ops.push((MatchedSymbol::Literal((val, num_bytes)), None));
                 bit_ends.push(bit_end);
 
-                log!(ctx, "Bit end is ({}, {}) after token operand, {}", bit_end, total_bit_end, val);
-                log!(ctx, "Start: ({}, {}), Shift: {}", expr.start_bit, expr.end_bit, expr.shift);
-                log!(ctx, "Words: {:x?}, Val: 0x{:x}", &words[byte_start..(byte_start + 4)], val);
+                log!(ctx, "Bit end is ({}, {}) after token operand", bit_end, total_bit_end);
+                log!(ctx, "  Start: ({}, {}), Shift: {}", expr.start_bit, expr.end_bit, expr.shift);
+                log!(ctx, "  Words: {:x?}, Val: 0x{:x}", &words[sb..(sb + 4)], val);
             },
             Some(Expr::Field(Field::Context(expr))) => {
                 let size = expr.end_bit - expr.start_bit + 1;
@@ -479,9 +476,7 @@ fn resolve_operands<'a, 'b>(
                 // TODO: Figure out if thise guess is right.
                 let base = if operand.base < 0 {
                     operand.off as usize
-                    // total_bit_end / 8
                 } else {
-                    // bit_end / 8
                     bit_ends[operand.base as usize] / 8
                 };
 
