@@ -4,13 +4,12 @@ use crate::sleigh::types::*;
 
 use crate::sla_parser::*;
 use crate::symbol_resolver::*;
-use crate::logger::*;
 
 use std::collections::HashMap;
 use std::borrow::Cow;
 use std::fmt;
 
-use flexstr::{local_str, LocalStr, ToLocalStr};
+use flexstr::local_str;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum VarnodeValue<'a> {

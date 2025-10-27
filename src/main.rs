@@ -127,14 +127,6 @@ fn main() {
         }
     }
 
-    // if args.parallel {
-    //     let mut disasm = Disassembler::new(lang_id, comp_id, num, &args.log_modules, &lang);
-    //     disasm.parallel_disassemble(&buf, orig_pc);
-    // } else {
-    //     let mut disasm = Disassembler::new(lang_id, comp_id, num, &args.log_modules, &lang);
-    //     for _ in disasm.disassemble(&buf, orig_pc) {}
-    // }
-
     if print_time {
         println!("Disassembled {} bytes in {}s", num_bytes, ((Instant::now() - start).as_millis() as f64) / 1000.0);
     }

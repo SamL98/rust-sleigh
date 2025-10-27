@@ -11,14 +11,6 @@ impl SeqNum {
         }
     }
 
-    pub fn prev(&self) -> Self {
-        Self {
-            pc: self.pc.clone(),
-            uniq: self.uniq - 1,
-            order: self.order,
-        }
-    }
-
     fn to_string(&self) -> String {
         format!("{}:{}", self.pc, self.uniq)
     }

@@ -411,6 +411,7 @@ fn resolve_operands<'a, 'b>(
     let mut ok = true;
 
     for op_idx in &ct.operands {
+        // TODO: Handle min_len.
         let operand = get_operand(&op_idx, &ctx.lang.symbols);
         log!(ctx, "Base: {}, MinLen: {}, RelOff: {}", operand.base, operand.min_len, operand.off);
 
@@ -481,7 +482,7 @@ fn resolve_operands<'a, 'b>(
                     // total_bit_end / 8
                 } else {
                     // bit_end / 8
-                    bit_ends[operand.base as usize]
+                    bit_ends[operand.base as usize] / 8
                 };
 
                 // Before recursively resolving a symbol, we first need to modify the context.
@@ -516,7 +517,8 @@ fn resolve_operands<'a, 'b>(
         }
     }
 
-    (matched_ops, bit_end.max(total_bit_end), ok)
+    // (matched_ops, bit_end.max(total_bit_end), ok)
+    (matched_ops, total_bit_end, ok)
 }
 
 pub fn _resolve_symbol<'a, 'b>(

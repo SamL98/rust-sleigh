@@ -35,16 +35,6 @@ impl BlockElement for Instruction {
     }
 }
 
-impl Instruction {
-    pub fn fallthrough(&self) -> Option<Address> {
-        if self.has_fallthrough() {
-            return Some(self.address.add(self.bit_len as u64 / 8));
-        } else {
-            return None;
-        }
-    }
-}
-
 impl fmt::Display for Instruction {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.asm)

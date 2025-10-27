@@ -26,7 +26,6 @@ impl<T: VarnodeIface> Op<OpCode, T> {
             &OpCode::Copy => format!("{}", self.inputs[0]),
             &OpCode::Store => format!("*{} = {}", self.inputs[1], self.inputs[2]),
             &OpCode::Load => format!("*{}", self.inputs[1]),
-            &OpCode::AddrOf => format!("&{}", self.inputs[0]),
             &OpCode::Branch => format!("goto {}", self.inputs[0]),
             &OpCode::BranchInd => format!("goto [{}]", self.inputs[0]),
             &OpCode::Call => format!("{}({})", self.inputs[0].fmt_call_target(), self.inputs[1..].iter()
@@ -82,10 +81,8 @@ impl<T: VarnodeIface> Op<OpCode, T> {
             &OpCode::IntDiv => self.fmt_binary("/"),
             &OpCode::IntEqual => self.fmt_binary("=="),
             &OpCode::IntLess => self.fmt_binary("<"),
-            &OpCode::IntGreater => self.fmt_binary(">"),
             &OpCode::IntLeft => self.fmt_binary("<<"),
             &OpCode::IntLessEqual => self.fmt_binary("<="),
-            &OpCode::IntGreaterEqual => self.fmt_binary(">="),
             &OpCode::IntMult => self.fmt_binary("*"),
             &OpCode::IntNegate => self.fmt_unary("~"),
             &OpCode::IntNotEqual => self.fmt_binary("!="),
@@ -112,10 +109,6 @@ impl<T: VarnodeIface> Op<OpCode, T> {
             Some(vnode) => format!("{} = ", vnode.fmt_output()),
             None        => "".to_string()
         }
-    }
-
-    pub fn is_call(&self) -> bool {
-        return self.opcode == OpCode::Call || self.opcode == OpCode::CallInd;
     }
 }
 

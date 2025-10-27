@@ -8,9 +8,8 @@ use crate::log;
 
 use std::collections::{HashSet, HashMap};
 use bitvec::prelude::*;
-use std::sync::Arc;
-use std::thread;
 
+#[allow(dead_code)]
 pub struct Disassembler<'a> {
     language_id: String,
     compiler_id: String,
@@ -202,85 +201,6 @@ impl<'a> Disassembler<'a> {
             data: buf,
             bits_consumed: 0,
             num_insns: 0,
-        }
-    }
-
-    fn get_instruction_starts(&mut self, buf: &[u8], orig_pc: u64) -> Vec<u64> {
-        let mut ctx = read_reg(&self.lang.context_reg, &self.reg_space);
-        let mut starts = vec![];
-        let mut bits_consumed = 0;
-
-        while bits_consumed < buf.len() * 8 {
-            let pc = orig_pc + bits_consumed as u64 / 8;
-
-            let num_bits = resolve_symbol(
-                buf,
-                pc,
-                &self.lang.symbols[&self.lang.insn_table_id],
-                &self.lang,
-                &mut ctx,
-                &self.reg_space,
-                &self.log_modules,
-            ).map(|(_, mut num_bits)|{
-                if num_bits % self.lang.bit_align != 0 {
-                    num_bits += num_bits - (num_bits % self.lang.bit_align);
-                }
-                num_bits
-            }).unwrap_or(self.lang.bit_align);
-
-            starts.push(pc);
-            bits_consumed += num_bits;
-        }
-
-        starts
-    }
-
-    pub fn parallel_disassemble(&mut self, buf: &[u8], orig_pc: u64) {
-        let starts = self.get_instruction_starts(buf, orig_pc);
-        println!("Calculated {} instruction starts", starts.len());
-
-        let num_threads = 8;
-
-        let buf = Arc::new(buf.to_vec());
-        let starts = Arc::new(starts);
-
-        let mut handles = vec![];
-        // let max_insns = self.args.num.unwrap_or(0xffffffffffffffff) as usize;
-        let chunk_size = starts.len() / num_threads;
-
-        for i in 0..num_threads {
-            let buf = buf.clone();
-            let starts = starts.clone();
-            let language_id = self.language_id.clone();
-            let compiler_id = self.compiler_id.clone();
-            let num = self.num.clone();
-
-            let handle = thread::spawn(move || {
-                let lang = SleighLanguage::create(&language_id, &compiler_id);
-                let mut disasm = Disassembler::new(language_id, compiler_id, num, &vec![], &lang);
-
-                for (j, start) in starts[i * chunk_size .. (i + 1) * chunk_size].iter().enumerate() {
-                    if j % 0x10000 == 0 {
-                        println!("{} / {}", j, chunk_size);
-                    }
-
-                    let pc = Address {
-                        space: AddressSpace::Ram,
-                        offset: *start,
-                    };
-
-                    let mut ctx = disasm.ctx.clone();
-
-                    if let Some(_insn) = disasm.disassemble_one(&buf[(*start - orig_pc) as usize..], pc, &mut ctx) {
-                    }
-                }
-            });
-
-            handles.push(handle);
-        }
-
-        for handle in handles.into_iter() {
-            handle.join().unwrap();
         }
     }
 }

@@ -1,7 +1,5 @@
 use crate::arch::{get_sla, get_language};
-use crate::sleigh::opcode::OpCode;
-use crate::sleigh::varnode::VarnodeIface;
-use crate::sleigh::types::{Address, AddressSpace, PcodeOp, SeqNum, Varnode};
+use crate::sleigh::types::*;
 
 extern crate bitvec;
 extern crate nom;
@@ -18,11 +16,11 @@ use nom::multi::*;
 use nom::sequence::*;
 use nom::*;
 
-use flexstr::{local_str, LocalStr, ToLocalStr};
+use flexstr::{LocalStr, ToLocalStr};
 
 use bitvec::prelude::*;
 
-use std::collections::{HashSet, HashMap};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::fmt;
 
@@ -1717,6 +1715,7 @@ pub struct FuncInfo {
     pub num_params: Option<usize>,
 }
 
+#[allow(dead_code)]
 pub struct SleighLanguage {
     pub language: Language,
     pub bit_align: usize,

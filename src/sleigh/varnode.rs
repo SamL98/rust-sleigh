@@ -25,18 +25,6 @@ impl AddressSpace {
             _ => panic!("unknown space {}", s),
         }
     }
-
-    // pub fn try_from_str(s: &str) -> Option<Self> {
-    //     use AddressSpace::*;
-    //     match s {
-    //         "ram" => Some(Ram),
-    //         "register" => Some(Register),
-    //         "const" => Some(Const),
-    //         "unique" => Some(Unique),
-    //         "dummy" => Some(Dummy),
-    //         _ => None,
-    //     }
-    // }
 }
 
 impl fmt::Display for AddressSpace {
@@ -53,6 +41,7 @@ impl fmt::Display for AddressSpace {
     }
 }
 
+#[allow(dead_code)]
 pub trait VarnodeIface: Debug + Display + Clone + Eq + PartialEq + Hash {
     fn is_negative(&self) -> bool;
     fn is_ram(&self) -> bool;
@@ -117,15 +106,6 @@ impl Varnode{
             space: self.space.clone(),
             offset: new_offset,
             size: new_size,
-        }
-    }
-
-    pub fn adding(&self, addend: u64) -> Self {
-        Self {
-            name: None,
-            space: self.space.clone(),
-            offset: self.offset + addend,
-            size: self.size,
         }
     }
 }

@@ -104,6 +104,7 @@ pub struct CompilerSpec {
     pub prototypes: HashMap<String, Prototype>,
 }
 
+#[allow(dead_code)]
 impl CompilerSpec {
     fn new(cspec_path: &PathBuf, registers: &HashMap<String, (u64, u64)>) -> Self {
         let cspec_contents = fs::read_to_string(cspec_path.to_str().unwrap()).expect("Could not read cspec");
@@ -170,6 +171,7 @@ impl ProcessorSpec {
     }
 }
 
+#[allow(dead_code)]
 pub struct Language {
     pub _name: String,
     pub _sla_path: PathBuf,
