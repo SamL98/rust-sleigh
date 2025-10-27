@@ -5,7 +5,6 @@ extern crate bitvec;
 extern crate nom;
 
 use super::arch::Language;
-// use super::patterns::PcodePattern;
 
 use nom::branch::*;
 use nom::bytes::complete::*;

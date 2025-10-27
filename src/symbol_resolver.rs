@@ -360,7 +360,10 @@ fn evaluate_expr(
                 Mult => lhs_val * rhs_val,
                 And => lhs_val & rhs_val,
                 Or => lhs_val | rhs_val,
-                Lshift => lhs_val.overflowing_shl(rhs_val as u32).0,
+                Lshift => {
+                    let (r, o) = lhs_val.overflowing_shl(rhs_val as u32);
+                    if o { 0 } else { r }
+                },
                 Rshift => lhs_val >> rhs_val,
                 _ => panic!("unknown binary opcode {:?}", op),
             };
@@ -417,12 +420,7 @@ fn resolve_operands<'a, 'b>(
 
         match &operand.expr {
             Some(Expr::Field(Field::Token(expr))) => {
-                log!(ctx, "StartBit: {}, EndBit: {}, StartByte: {}, EndByte: {}, Shift: {}",
-                    expr.start_bit,
-                    expr.end_bit,
-                    expr.start_byte,
-                    expr.end_byte,
-                    expr.shift);
+                log!(ctx, "{:?}", expr);
 
                 let size = expr.end_bit - expr.start_bit + 1;
                 let num_bytes = (expr.end_byte - expr.start_byte + 1) as usize;
@@ -438,9 +436,10 @@ fn resolve_operands<'a, 'b>(
                     get_word(words, sb, num_bytes)
                 };
 
-                let mask = 0xffffffffffffffff_u64 >> ((8 - num_bytes) * 8);
+                let mask = (1_u64 << size) - 1;
                 let start_bit = expr.start_bit % 8;
-                let val = (((word >> start_bit) & mask) >> expr.shift) as i64;
+                // let val = (((word >> start_bit) & mask) >> expr.shift) as i64;
+                let val = ((word >> start_bit) & mask) as i64;
 
                 bit_end = sb * 8 + (size as usize);
                 total_bit_end = total_bit_end.max(bit_end);
@@ -462,6 +461,7 @@ fn resolve_operands<'a, 'b>(
             },
             Some(Expr::Unary(_) | Expr::Binary(_)) => {
                 let (val, sz, fixup_type) = evaluate_expr(operand.expr.as_ref().unwrap(), &ctx.ctx, &matched_ops, &ctx.reg_space);
+                log!(ctx, "Evaluating expr {:?} = {}", operand.expr, val);
                 matched_ops.push((MatchedSymbol::Literal((val, sz)), fixup_type));
                 bit_ends.push(0);
             },
@@ -593,6 +593,7 @@ pub fn resolve_symbol<'a, 'b>(
 
     if let Some((mut matched_sym, bit_len)) = _resolve_symbol(words, pc, sym, &mut ctx) {
         apply_fixups(&mut matched_sym, &None, pc, bit_len);
+        // println!("{:#?}", matched_sym);
         Some((matched_sym, bit_len))
     } else {
         None

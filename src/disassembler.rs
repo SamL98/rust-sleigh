@@ -6,7 +6,7 @@ use crate::pcode_builder::*;
 use crate::logger::Logger;
 use crate::log;
 
-use std::collections::{HashSet, HashMap};
+use std::collections::HashSet;
 use bitvec::prelude::*;
 
 #[allow(dead_code)]
@@ -18,7 +18,6 @@ pub struct Disassembler<'a> {
     log_modules: HashSet<String>,
     pub lang: &'a SleighLanguage,
     reg_space: BitVec<u8, Msb0>,
-    build_cache: HashMap<MatchedSymbol<'a>, Vec<PcodeOp>>,
     depth: usize,
 }
 
@@ -69,6 +68,7 @@ impl<'a, 'b> Iterator for DisassemblyIter<'a, 'b> {
                 space: AddressSpace::Ram,
                 offset: (self.orig_pc as usize + self.bits_consumed / 8) as u64,
             };
+            // println!("{}: {:x?} {:x?}", pc, &self.data[self.bits_consumed / 8..self.bits_consumed / 8 + 8], ctx);
 
             match self.disasm.disassemble_one(&self.data[self.bits_consumed / 8..], pc, &mut ctx) {
                 Some(insn) => {
@@ -84,6 +84,9 @@ impl<'a, 'b> Iterator for DisassemblyIter<'a, 'b> {
                 },
                 None => {
                     self.bits_consumed += self.disasm.lang.bit_align;
+
+                    // Don't re-use the tainted context from the failed translation.
+                    ctx = self.disasm.ctx.clone();
                 }
             };
         }
@@ -124,7 +127,6 @@ impl<'a> Disassembler<'a> {
             num,
             lang,
             reg_space,
-            build_cache: HashMap::default(),
             log_modules,
             depth: 0,
         }
@@ -145,45 +147,18 @@ impl<'a> Disassembler<'a> {
                 num_bits += num_bits - (num_bits % self.lang.bit_align);
             }
 
-            let mut should_insert = false;
+            let mut pcodeops = build_sym(
+                &matched_symbol,
+                &pc,
+                num_bits,
+                &self.lang,
+            );
 
-            let pcodeops = if let Some(ops) = self.build_cache.get(&matched_symbol) {
-                let mut new_ops = ops.clone();
-
-                for op in new_ops.iter_mut() {
-                    for i in 0..op.inputs.len() {
-                        let input = &mut op.inputs[i];
-
-                        if input.name.as_ref().map(|n| n == "fixup_start" || n == "fixup_end").unwrap_or(false) {
-                            input.offset += pc.offset - op.seq.pc.offset; // TODO: Make this work for signed integers.
-                        }
-                    }
-
-                    op.seq.pc.offset = pc.offset;
-                }
-
-                new_ops
-            } else {
-                let mut ops = build_sym(
-                    &matched_symbol,
-                    &pc,
-                    num_bits,
-                    &self.lang,
-                );
-
-                for (i, op) in ops.iter_mut().enumerate() {
-                    op.seq.uniq = i as i32;
-                }
-
-                should_insert = true;
-                ops
-            };
+            for (i, op) in pcodeops.iter_mut().enumerate() {
+                op.seq.uniq = i as i32;
+            }
 
             let asm = build_text(&matched_symbol, &pcodeops);
-
-            if should_insert {
-                self.build_cache.insert(matched_symbol, pcodeops.clone());
-            }
 
             Instruction {
                 address: pc,

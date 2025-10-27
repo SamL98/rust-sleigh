@@ -13,9 +13,9 @@ extern crate nom;
 use crate::sla_parser::*;
 use crate::disassembler::Disassembler;
 
+use std::io::{Read, Write};
 use std::time::Instant;
 use std::fs::File;
-use std::io::Read;
 
 use object::{Object, ObjectSection, SectionKind};
 use clap::Parser;
@@ -85,6 +85,8 @@ fn main() {
     let end_addr = args.end_addr.clone().unwrap_or(u64::MAX);
     let max_insns = args.num.clone().unwrap_or(u64::MAX);
 
+    let print_progress = !(args.print_asm || args.print_pcode) && args.log_modules.is_empty();
+
     'outer: for section in obj.sections() {
         if section.kind() == SectionKind::Text {
             let mut addr = section.address();
@@ -105,9 +107,26 @@ fn main() {
                     start_addr = addr + size;
                 }
 
+                const NUM_TICKS: usize = 30;
+                let mut prev_num_ticks = 0;
+
+                if print_progress {
+                    print!("[{}]", ".".repeat(NUM_TICKS));
+                    let _ = std::io::stdout().flush().unwrap();
+                }
+
                 for insn in disasm.disassemble(&bytes[start..end], addr) {
                     num_insns += 1;
                     num_bytes += insn.bit_len / 8;
+
+                    if print_progress {
+                        let num_ticks = (((insn.address.offset - addr) as f64 / (end - start) as f64) * (NUM_TICKS as f64)) as usize;
+                        if num_ticks != prev_num_ticks {
+                            print!("\x1b[2K\r[{}{}]", "+".repeat(num_ticks), ".".repeat(NUM_TICKS - num_ticks));
+                            let _ = std::io::stdout().flush().unwrap();
+                            prev_num_ticks = num_ticks;
+                        }
+                    }
 
                     if args.print_asm {
                         println!("0x{:x}: {}", insn.address.offset, insn.asm);
@@ -123,12 +142,21 @@ fn main() {
                         break 'outer;
                     }
                 }
+
+                if print_progress {
+                    print!("\n");
+                }
             }
         }
     }
 
     if print_time {
-        println!("Disassembled {} bytes in {}s", num_bytes, ((Instant::now() - start).as_millis() as f64) / 1000.0);
+        println!(
+            "Disassembled {} bytes ({} instructions) in {}s",
+            num_bytes, 
+            num_insns,
+            ((Instant::now() - start).as_millis() as f64) / 1000.0
+        );
     }
 }
 
