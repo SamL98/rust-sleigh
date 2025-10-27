@@ -1,21 +1,24 @@
-mod arch;
-pub mod parser;
-mod sleigh;
 mod utils;
-pub mod disasm;
+mod logger;
+mod sleigh;
+mod arch;
+mod sla_parser;
+mod symbol_resolver;
+mod pcode_builder;
+mod disassembler;
 
 extern crate bitvec;
 extern crate nom;
 
-use object::{Object, ObjectSection, SectionKind};
-use clap::Parser;
-
-use crate::disasm::Disassembler;
-use crate::parser::*;
+use crate::sla_parser::*;
+use crate::disassembler::Disassembler;
 
 use std::time::Instant;
 use std::fs::File;
 use std::io::Read;
+
+use object::{Object, ObjectSection, SectionKind};
+use clap::Parser;
 
 fn parse_hex(s: &str) -> Result<u64, String> {
     Ok(u64hex(s))

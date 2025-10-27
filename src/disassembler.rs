@@ -1,5 +1,9 @@
 use crate::sleigh::types::*;
-use crate::parser::*;
+
+use crate::sla_parser::*;
+use crate::symbol_resolver::*;
+use crate::pcode_builder::*;
+use crate::logger::Logger;
 use crate::log;
 
 use std::collections::{HashSet, HashMap};
