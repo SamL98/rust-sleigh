@@ -8,3 +8,4 @@ foo
 *.svg
 profile.json
 /ghidra_sleigh/target/
+/ghidra_sleigh/
