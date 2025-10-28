@@ -2,7 +2,7 @@
 This project attempts to implement a binary lifter for [SLEIGH](https://ghidra.re/ghidra_docs/languages/html/sleigh.html) processor modules in pure Rust.
 
 The project depends on the slaspec/sinc files being pre-compiled into sla (XML) which is by default the case in any Ghidra release.
-The sla files are byte default read from the `$GHIDRA_PATH` environment variable which is expected to have the following directory structure:
+The sla files are by default read from the `$GHIDRA_PATH` environment variable which is expected to have the following directory structure:
 
 - $GHIDRA_PATH
   - Ghidra
