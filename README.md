@@ -4,6 +4,7 @@ This project attempts to implement a binary lifter for [SLEIGH](https://ghidra.r
 The project depends on the slaspec/sinc files being pre-compiled into sla (XML) which is by default the case in any Ghidra release.
 The sla files are by default read from the `$GHIDRA_PATH` environment variable which is expected to have the following directory structure:
 
+```
 - $GHIDRA_PATH
   - Ghidra
     - Processors
@@ -11,6 +12,7 @@ The sla files are by default read from the `$GHIDRA_PATH` environment variable w
         - data
           - languages
             - sla, ldefs, pspec, and cspec files
+```
 
 This is also the default directory structure for Ghidra so if you have Ghidra installed, you shouldn't need to do anything.
 
