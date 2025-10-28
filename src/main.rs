@@ -50,10 +50,10 @@ struct Args {
     #[arg(short = 'm', long = "log")]
     log_modules: Vec<String>,
 
-    #[arg(long = "print-asm")]
+    #[arg(long = "print_asm")]
     print_asm: bool,
 
-    #[arg(long = "print-pcode")]
+    #[arg(long = "print_pcode")]
     print_pcode: bool,
 }
 
