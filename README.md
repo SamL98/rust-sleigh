@@ -33,3 +33,5 @@ From the project root, run `cargo run [--release] -- <arguments>` with the follo
 
 ## Notes
 Lifting has currently only been tested with the `x86:LE:64:default` and `AARCH64:le:64:v8A` languages. The project has been written to handle generic SLEIGH, so it should work on some other architectures as well. Although probably architectures with a delay slot won't work.
+
+Also, most of the inner working were either figured out by brute force or by trying to understand the analogous code in Ghidra. Therefore, there are likely bugs or inconsistencies. If you encounter one, please file an issue.
