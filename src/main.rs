@@ -39,9 +39,6 @@ struct Args {
     time: bool,
 
     #[arg(short, long)]
-    parallel: bool,
-
-    #[arg(short, long)]
     language_id: String,
 
     #[arg(short, long)]
