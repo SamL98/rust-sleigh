@@ -30,4 +30,4 @@ From the project root, run `cargo run [--release] -- <arguments>` with the follo
 * `-m/--log`: [Optional,Repeated] Turns on logging for different modules. Currently you can pass `disassembler` or `resolver`.
 
 ## Notes
-Lifting has currently only been tested with the `x86:LE:64:default` and `AARCH64:le:64:v8A` languages. The project has been written to handle generic SLEIGH, so it should work on other some architectures as well. Although probably architectures with a delay slot won't work.
+Lifting has currently only been tested with the `x86:LE:64:default` and `AARCH64:le:64:v8A` languages. The project has been written to handle generic SLEIGH, so it should work on some other architectures as well. Although probably architectures with a delay slot won't work.
