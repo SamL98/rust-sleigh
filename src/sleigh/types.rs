@@ -57,12 +57,3 @@ pub struct Instruction {
     pub asm: String,
     pub ops: Vec<PcodeOp>,
 }
-
-pub trait BlockElement {
-    fn returns(&self) -> bool;
-    fn branches(&self) -> bool;
-    fn target(&self) -> Option<Address>;
-    fn terminates(&self) -> bool;
-    fn is_conditional(&self) -> bool;
-    fn has_fallthrough(&self) -> bool;
-}

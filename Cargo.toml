@@ -1,12 +1,12 @@
 workspace = { members = [ "ghidra_sleigh"] }
 
 [package]
-name = "sleigh"
+name = "pcode"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "sleigh"
+name = "pcode"
 path = "src/main.rs"
 
 [dependencies]

@@ -433,7 +433,7 @@ fn resolve_operands<'a, 'b>(
                     get_word(words, sb, num_bytes)
                 };
 
-                let mask = (1_u64 << size) - 1;
+                let mask = if size >= 64 { u64::MAX } else { (1_u64 << size) - 1 };
                 let start_bit = expr.start_bit % 8;
                 // let val = (((word >> start_bit) & mask) >> expr.shift) as i64;
                 let val = ((word >> start_bit) & mask) as i64;
