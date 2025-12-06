@@ -5,12 +5,9 @@ use crate::log;
 use std::collections::{HashSet, HashMap};
 use std::hash::{Hash, Hasher};
 
-use bitvec::prelude::*;
-
 pub struct ResolveContext<'a, 'b> {
     lang: &'a SleighLanguage,
     ctx: &'b mut Vec<u32>,
-    reg_space: &'b BitVec<u8, Msb0>,
     log_modules: &'b HashSet<String>,
     depth: usize,
 }
@@ -41,7 +38,7 @@ fn get_operand<'a>(id: &u32, symbols: &'a HashMap<u32, Symbol>) -> &'a Operand {
     }
 }
 
-fn match_ctx_pattern_block(block: &PatternBlock, words: &Vec<u32>) -> bool {
+fn match_ctx_pattern_block(block: &PatternBlock, words: &[u32]) -> bool {
     let mut word_idx = (block.offset / 4) as usize;
     let byte_idx = block.offset % 4;
 
@@ -318,7 +315,6 @@ fn evaluate_expr(
     expr: &Expr,
     ctx: &Vec<u32>,
     operands: &Vec<(MatchedSymbol, Option<FixupType>)>,
-    reg_space: &BitVec<u8, Msb0>,
 ) -> (i64, usize, Option<FixupType>) {
     match expr {
         Expr::Const(val) => (*val, 8, None), // FIXME
@@ -346,8 +342,8 @@ fn evaluate_expr(
             }
         },
         Expr::Binary((op, lhs, rhs)) => {
-            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(lhs, ctx, operands, reg_space);
-            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(rhs, ctx, operands, reg_space);
+            let (lhs_val, lhs_sz, lhs_fixme) = evaluate_expr(lhs, ctx, operands);
+            let (rhs_val, rhs_sz, rhs_fixme) = evaluate_expr(rhs, ctx, operands);
 
             use ExprOp::*;
             let result = match op {
@@ -368,7 +364,7 @@ fn evaluate_expr(
             (result, lhs_sz.max(rhs_sz), lhs_fixme.or(rhs_fixme)) // FIXME
         },
         Expr::Unary((op, hs)) => {
-            let (val, sz, fixme) = evaluate_expr(hs, ctx, operands, reg_space);
+            let (val, sz, fixme) = evaluate_expr(hs, ctx, operands);
 
             use ExprOp::*;
             let result = match op {
@@ -458,7 +454,7 @@ fn resolve_operands<'a, 'b>(
             },
             Some(Expr::Unary(_) | Expr::Binary(_)) => {
                 log!(ctx, "Evaluating expr {:?}", operand.expr);
-                let (val, sz, fixup_type) = evaluate_expr(operand.expr.as_ref().unwrap(), ctx.ctx, &matched_ops, ctx.reg_space);
+                let (val, sz, fixup_type) = evaluate_expr(operand.expr.as_ref().unwrap(), ctx.ctx, &matched_ops);
                 log!(ctx, "  => {}", val);
                 matched_ops.push((MatchedSymbol::Literal((val, sz)), fixup_type));
                 bit_ends.push(0);
@@ -484,7 +480,7 @@ fn resolve_operands<'a, 'b>(
                     let mask = op.mask;
 
                     // TODO: Handle no-flow context symbols.
-                    let (val, _, _) = evaluate_expr(&op.expr, ctx.ctx, &matched_ops, ctx.reg_space);
+                    let (val, _, _) = evaluate_expr(&op.expr, ctx.ctx, &matched_ops);
                     let v = (val as u32) << op.shift;
                     ctx.ctx[op.i as usize] = (existing & !mask) | (v & mask);
                 }
@@ -584,10 +580,9 @@ pub fn resolve_symbol<'a, 'b>(
     sym: &'a Symbol,
     lang: &'a SleighLanguage,
     ctx: &'b mut Vec<u32>,
-    reg_space: &'b BitVec<u8, Msb0>,
     log_modules: &'b HashSet<String>,
 ) -> Option<(MatchedSymbol<'a>, usize)> {
-    let mut ctx = ResolveContext { lang, ctx, reg_space, log_modules, depth: 0 };
+    let mut ctx = ResolveContext { lang, ctx, log_modules, depth: 0 };
 
     if let Some((mut matched_sym, bit_len)) = _resolve_symbol(words, pc, sym, &mut ctx) {
         apply_fixups(&mut matched_sym, &None, pc, bit_len);

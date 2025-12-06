@@ -1,4 +1,5 @@
 use crate::sleigh::types::{AddressSpace, Varnode};
+use crate::utils::parse_int;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -13,16 +14,6 @@ use {
     // std::fs::File,
     // glob::glob,
 };
-
-fn parse_int(input: &str) -> u64 {
-    if input.starts_with("0x") {
-        u64::from_str_radix(&input[2..], 16).unwrap()
-    } else if input.starts_with("0b") {
-        u64::from_str_radix(&input[2..], 2).unwrap()
-    } else {
-        input.parse().unwrap()
-    }
-}
 
 #[derive(Eq, PartialEq, Debug, Clone)]
 pub struct Prototype {
@@ -58,7 +49,7 @@ impl Prototype {
             },
             "varnode" => Varnode {
                 name: None,
-                space: AddressSpace::from_str(varnode_tag.get_attr("space").unwrap()),
+                space: varnode_tag.get_attr("space").unwrap().parse::<AddressSpace>().unwrap(),
                 offset: parse_int(varnode_tag.get_attr("offset").unwrap()),
                 size: parse_int(varnode_tag.get_attr("size").unwrap()),
             },
@@ -107,7 +98,7 @@ pub struct CompilerSpec {
 
 #[allow(dead_code)]
 impl CompilerSpec {
-    fn new(cspec_path: &PathBuf, registers: &HashMap<String, (u64, u64)>) -> Self {
+    fn new(cspec_path: &Path, registers: &HashMap<String, (u64, u64)>) -> Self {
         let cspec_contents = fs::read_to_string(cspec_path.to_str().unwrap()).expect("Could not read cspec");
         let cspec_elem = Element::from_reader(cspec_contents.as_bytes()).unwrap();
 
@@ -181,7 +172,7 @@ pub struct Language {
 }
 
 impl Language {
-    fn new(arch_path: &PathBuf, lang: &Element, compiler_id: &str, registers: &HashMap<String, (u64, u64)>) -> Language {
+    fn new(arch_path: &Path, lang: &Element, compiler_id: &str, registers: &HashMap<String, (u64, u64)>) -> Language {
         let name = lang.get_attr("id").unwrap().to_string();
 
         let sla_filename = lang.get_attr("slafile").unwrap();

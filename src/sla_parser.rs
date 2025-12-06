@@ -520,19 +520,19 @@ pub fn u64hex(s: &str) -> u64 {
 }
 
 pub fn u64dec(s: &str) -> u64 {
-    u64::from_str_radix(s, 10).unwrap()
+    s.parse::<u64>().unwrap()
 }
 
 pub fn u32dec(s: &str) -> u32 {
-    u32::from_str_radix(s, 10).unwrap()
-}
-
-fn i32dec(s: &str) -> i32 {
-    i32::from_str_radix(s, 10).unwrap()
+    s.parse::<u32>().unwrap()
 }
 
 fn i64dec(s: &str) -> i64 {
-    i64::from_str_radix(s, 10).unwrap()
+    s.parse::<i64>().unwrap()
+}
+
+fn i32dec(s: &str) -> i32 {
+    s.parse::<i32>().unwrap()
 }
 
 fn scope(input: &str) -> Res<&str, Symbol> {
@@ -1263,7 +1263,7 @@ fn varnode_sym(input: &str) -> Res<&str, Symbol> {
         let varnode = VarnodeSym {
             name: attrs[0].1.to_string(),
             scope: u32hex(attrs[2].1),
-            space: AddressSpace::from_str(attrs[3].1),
+            space: attrs[3].1.parse::<AddressSpace>().unwrap(),
             offset: u64hex(attrs[4].1),
             size: u64dec(attrs[5].1),
         };
@@ -1636,10 +1636,10 @@ pub fn program(input: &str) -> Res<&str, Program> {
     .map(|(next, res)| {
         let (_, attrs) = attrs(res.0).finish().unwrap();
         let prog = Program {
-            version: u32::from_str_radix(attrs[0].1, 10).unwrap(),
+            version: u32dec(attrs[0].1),
             bigendian: attrs[1].1.parse::<bool>().unwrap(),
-            align: u32::from_str_radix(attrs[2].1, 10).unwrap(),
-            uniqbase: u64::from_str_radix(&attrs[3].1[2..], 16).unwrap(),
+            align: u32dec(attrs[2].1),
+            uniqbase: u64hex(attrs[3].1),
             default_space: res.2.0.to_string(),
             spaces: res.2 .1,
             symbols: res.3,
@@ -1727,7 +1727,7 @@ pub struct SleighLanguage {
 }
 
 impl SleighLanguage {
-    pub fn create<'a>(lang_id: &str, compiler_id: &str) -> SleighLanguage {
+    pub fn create(lang_id: &str, compiler_id: &str) -> SleighLanguage {
         let arch_family = lang_id.split(":").next().unwrap();
         let sla_contents = get_sla(arch_family, lang_id).unwrap();
         let (_, sla) = program(&sla_contents).finish().unwrap();
@@ -1798,8 +1798,8 @@ impl SleighLanguage {
             reg_sizes[reg.offset as usize].push(reg.clone());
         }
 
-        for i in 0..reg_sizes.len() {
-            reg_sizes[i].sort_by(|a, b| a.size.cmp(&b.size));
+        for sizes in &mut reg_sizes {
+            sizes.sort_by(|a, b| a.size.cmp(&b.size));
         }
 
         SleighLanguage {

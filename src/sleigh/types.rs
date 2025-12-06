@@ -4,21 +4,6 @@ use std::hash::Hash;
 use super::opcode::OpCode;
 use flexstr::LocalStr;
 
-// use std::collections::HashMap;
-
-#[derive(Eq, PartialEq, Hash, Clone)]
-pub struct Address {
-    pub space: AddressSpace,
-    pub offset: u64
-}
-
-#[derive(Eq, PartialEq, Hash, Clone)]
-pub struct SeqNum {
-    pub pc: Address,
-    pub uniq: i32,
-    pub order: u32
-}
-
 #[repr(u8)]
 #[derive(Eq, PartialEq, Hash, Copy, Clone, Debug)]
 pub enum AddressSpace {
@@ -29,7 +14,20 @@ pub enum AddressSpace {
     Dummy,
 }
 
-#[derive(Eq, PartialEq, Hash, Clone)]
+#[derive(Eq, PartialEq, Hash, Clone, Debug)]
+pub struct Address {
+    pub space: AddressSpace,
+    pub offset: u64
+}
+
+#[derive(Eq, PartialEq, Hash, Clone, Debug)]
+pub struct SeqNum {
+    pub pc: Address,
+    pub uniq: i32,
+    pub order: u32
+}
+
+#[derive(Eq, PartialEq, Hash, Clone, Debug)]
 pub struct Varnode {
     pub name: Option<LocalStr>,
     pub space: AddressSpace,
@@ -37,7 +35,7 @@ pub struct Varnode {
     pub size: u64
 }
 
-#[derive(Eq, PartialEq, Hash, Clone)]
+#[derive(Eq, PartialEq, Hash, Clone, Debug)]
 pub struct Op<
     O: Debug + Display + Clone + Eq + PartialEq + Hash,
     T: Debug + Display + Clone + Eq + PartialEq + Hash,

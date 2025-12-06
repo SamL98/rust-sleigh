@@ -134,7 +134,7 @@ fn build_space<'a>(
     ctx: &BuildContext,
 ) -> (AddressSpace, Option<FixupType>) {
     match build_value(const_tpl, objs, ctx) {
-        (VarnodeValue::String(s), ft) => (AddressSpace::from_str(s.as_str()), ft),
+        (VarnodeValue::String(s), ft) => (s.as_str().parse::<AddressSpace>().unwrap(), ft),
         (VarnodeValue::Space(spc), ft) => (spc, ft),
         (VarnodeValue::Op(op), ft) => (op.space, ft),
         (VarnodeValue::Int(0), ft) => (AddressSpace::Dummy, ft),
@@ -280,7 +280,7 @@ fn build_varnode<'a>(
     }
 }
 
-fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option<Varnode>, ctx: &BuildContext) {
+fn fix_sizes(opcode: &mut OpCode, inputs: &mut [Varnode], output: &mut Option<Varnode>, ctx: &BuildContext) {
     // TODO: Add more cases.
     // println!("{} {:?}", opcode, inputs);
     if *opcode == OpCode::IntAdd {
@@ -336,9 +336,7 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
             }
         }
 
-        for i in 0..inputs.len() {
-            let input = &mut inputs[i];
-
+        for (i, input) in inputs.iter_mut().enumerate() {
             if input.space != AddressSpace::Register && !(i == 1 && *opcode == OpCode::SubPiece) && 
                !(i == 0 && *opcode == OpCode::CBranch) && 
                 !(i == 1 && matches!(*opcode, OpCode::IntLeft | OpCode::IntRight | OpCode::IntSRight)) {
@@ -382,7 +380,7 @@ fn build_pcodeop<'a>(
     ops: &mut Vec<PcodeOp>,
     ctx: &BuildContext,
 ) {
-    let mut opcode = OpCode::from_str(op_tpl.code.as_str());
+    let mut opcode = op_tpl.code.as_str().parse::<OpCode>().unwrap();
 
     let mut input_iter = op_tpl.inputs.iter();
 
@@ -681,7 +679,7 @@ pub fn build_sym<'a>(
     ops
 }
 
-fn _build_cmd_text(cmd: &PrintCommand, operands: &Vec<(MatchedSymbol, Option<FixupType>)>, text: &mut String, ops: &[PcodeOp]) {
+fn _build_cmd_text(cmd: &PrintCommand, operands: &[(MatchedSymbol, Option<FixupType>)], text: &mut String, ops: &[PcodeOp]) {
     match cmd {
         PrintCommand::Op(op_idx) => _build_text(&operands[*op_idx as usize].0, text, ops),
         PrintCommand::Piece(piece) => text.push_str(piece),
@@ -718,16 +716,21 @@ pub fn _build_text(matched_sym: &MatchedSymbol, text: &mut String, ops: &[PcodeO
             let sext_v = (((v << shift) as i64) >> shift) as u64;
 
             for op in ops {
-                if matches!(op.opcode, OpCode::IntSub) && op.inputs[1].space == AddressSpace::Const && op.inputs[1].offset > 0 && op.inputs[1].offset == neg_v && is_neg {
+                if (
+                        matches!(op.opcode, OpCode::IntSub) &&
+                        op.inputs[1].space == AddressSpace::Const &&
+                        op.inputs[1].offset > 0 && op.inputs[1].offset == neg_v && is_neg
+                    ) ||
+                    (
+                        matches!(op.opcode, OpCode::IntSBorrow) &&
+                        op.inputs[1].space == AddressSpace::Const &&
+                        op.inputs[1].offset > 0 && is_neg && op.inputs[1].offset == (sext_v >> (64 - op.inputs[1].size * 8))
+                    )
+                {
                     v = neg_v;
                     sign_str = "-";
                     break;
-                } else if matches!(op.opcode, OpCode::IntSBorrow) && op.inputs[1].space == AddressSpace::Const && op.inputs[1].offset > 0 && is_neg
-                    && op.inputs[1].offset == (sext_v >> (64 - op.inputs[1].size * 8)) {
-                        v = neg_v;
-                        sign_str = "-";
-                        break;
-                    }
+                }
             }
 
             if *sz == 8 && is_neg {

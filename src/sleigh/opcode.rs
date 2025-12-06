@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use std::fmt;
 
 #[repr(u32)]
@@ -93,7 +94,7 @@ impl OpCode {
         )
     }
 
-    fn to_string(&self) -> String {
+    fn _to_string(&self) -> String {
         match *self {
             OpCode::Copy => "Copy",
             OpCode::Load => "Load",
@@ -173,19 +174,24 @@ impl OpCode {
 
 impl fmt::Debug for OpCode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "{}", self)
     }
 }
 
 impl fmt::Display for OpCode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "{}", self._to_string())
     }
 }
 
-impl OpCode {
-    pub fn from_str(s: &str) -> Self {
-        match s {
+#[derive(Debug, PartialEq, Eq)]
+pub struct ParseOpCodeError;
+
+impl FromStr for OpCode {
+    type Err = ParseOpCodeError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let opcode = match s {
             "COPY" => OpCode::Copy,
             "LOAD" => OpCode::Load,
             "STORE" => OpCode::Store,
@@ -258,7 +264,10 @@ impl OpCode {
             "EXTRACT" => OpCode::Extract,
             "POPCOUNT" => OpCode::PopCount,
             "LABEL" => OpCode::Label,
-            _ => panic!("{}", s)
-        }
+            _ => {
+                return Err(ParseOpCodeError);
+            },
+        };
+        Ok(opcode)
     }
 }

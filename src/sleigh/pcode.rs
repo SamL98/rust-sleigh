@@ -113,10 +113,6 @@ impl<T: VarnodeIface> Op<OpCode, T> {
 }
 
 impl<T: VarnodeIface> Op<OpCode, T> {
-    pub fn to_string(&self) -> String {
-        format!("{}{}", self.fmt_output(), self.fmt_inputs())
-    }
-
     pub fn new(seq: SeqNum, opcode: OpCode, inputs: Vec<T>, output: Option<T>) -> Self {
         Self {
             seq,
@@ -127,14 +123,8 @@ impl<T: VarnodeIface> Op<OpCode, T> {
     }
 }
 
-impl<T: VarnodeIface> fmt::Debug for Op<OpCode, T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.to_string())
-    }
-}
-
 impl<T: VarnodeIface> fmt::Display for Op<OpCode, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "{}{}", self.fmt_output(), self.fmt_inputs())
     }
 }

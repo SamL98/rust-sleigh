@@ -10,20 +10,29 @@ use flexstr::LocalStr;
 // use std::hash::{Hash, Hasher};
 use std::fmt::{self, Debug, Display};
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::clone::Clone;
 use std::hash::Hash;
 
-impl AddressSpace {
-    pub fn from_str(s: &str) -> Self {
+#[derive(Debug, PartialEq, Eq)]
+pub struct ParseAddressSpaceError;
+
+impl FromStr for AddressSpace {
+    type Err = ParseAddressSpaceError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         use AddressSpace::*;
-        match s {
+        let space = match s {
             "ram" => Ram,
             "register" => Register,
             "const" => Const,
             "unique" => Unique,
             "dummy" => Dummy,
-            _ => panic!("unknown space {}", s),
-        }
+            _ => {
+                return Err(ParseAddressSpaceError);
+            },
+        };
+        Ok(space)
     }
 }
 
@@ -66,7 +75,7 @@ impl Varnode{
         }
     }
 
-    fn to_string(&self) -> String {
+    fn _to_string(&self) -> String {
         match &self.name {
             Some(name) if name != "fixup_start" && name != "fixup_end" => name.to_string(),
             _ => match self.space {
@@ -162,14 +171,8 @@ impl VarnodeIface for Varnode {
     }
 }
 
-impl fmt::Debug for Varnode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.to_string())
-    }
-}
-
 impl fmt::Display for Varnode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "{}", self._to_string())
     }
 }

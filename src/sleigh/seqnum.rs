@@ -10,20 +10,10 @@ impl SeqNum {
             order: self.order,
         }
     }
-
-    fn to_string(&self) -> String {
-        format!("{}:{}", self.pc, self.uniq)
-    }
-}
-
-impl fmt::Debug for SeqNum {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.to_string())
-    }
 }
 
 impl fmt::Display for SeqNum {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "{}:{}", self.pc, self.uniq)
     }
 }

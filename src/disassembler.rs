@@ -17,7 +17,6 @@ pub struct Disassembler<'a> {
     num: Option<u64>,
     log_modules: HashSet<String>,
     pub lang: &'a SleighLanguage,
-    reg_space: BitVec<u8, Msb0>,
     depth: usize,
 }
 
@@ -100,7 +99,7 @@ impl<'a> Disassembler<'a> {
         language_id: String,
         compiler_id: String,
         num: Option<u64>,
-        log_modules: &Vec<String>,
+        log_modules: &[String],
         lang: &'a SleighLanguage,
     ) -> Self {
         let mut reg_space: BitVec<u8, Msb0> = BitVec::with_capacity(lang.reg_space_size * 8);
@@ -117,7 +116,7 @@ impl<'a> Disassembler<'a> {
             }
         }
 
-        let log_modules = HashSet::from_iter(log_modules.clone());
+        let log_modules = HashSet::from_iter(log_modules.to_owned());
         let ctx = read_reg(&lang.context_reg, &reg_space);
 
         Self {
@@ -126,7 +125,6 @@ impl<'a> Disassembler<'a> {
             ctx,
             num,
             lang,
-            reg_space,
             log_modules,
             depth: 0,
         }
@@ -139,7 +137,6 @@ impl<'a> Disassembler<'a> {
             &self.lang.symbols[&self.lang.insn_table_id],
             self.lang,
             ctx,
-            &self.reg_space,
             &self.log_modules,
         ).map(|(matched_symbol, mut num_bits)|{
             if num_bits % self.lang.bit_align != 0 {
