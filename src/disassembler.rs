@@ -137,7 +137,7 @@ impl<'a> Disassembler<'a> {
             data,
             pc.offset,
             &self.lang.symbols[&self.lang.insn_table_id],
-            &self.lang,
+            self.lang,
             ctx,
             &self.reg_space,
             &self.log_modules,
@@ -151,7 +151,7 @@ impl<'a> Disassembler<'a> {
                 &matched_symbol,
                 &pc,
                 num_bits,
-                &self.lang,
+                self.lang,
             );
 
             for (i, op) in pcodeops.iter_mut().enumerate() {
@@ -163,7 +163,7 @@ impl<'a> Disassembler<'a> {
             Instruction {
                 address: pc,
                 bit_len: num_bits,
-                asm: asm,
+                asm,
                 ops: pcodeops,
             }
         })

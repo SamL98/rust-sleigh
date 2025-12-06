@@ -70,7 +70,7 @@ fn main() {
 
     let start = Instant::now();
     let print_time = args.time;
-    let num = args.num.clone();
+    let num = args.num;
 
     let mut disasm = Disassembler::new(lang_id, comp_id, num, &args.log_modules, &lang);
 
@@ -78,9 +78,9 @@ fn main() {
     let mut num_bytes = 0;
     let mut num_insns = 0;
 
-    let mut start_addr = args.start_addr.clone().unwrap_or(u64::MAX);
-    let end_addr = args.end_addr.clone().unwrap_or(u64::MAX);
-    let max_insns = args.num.clone().unwrap_or(u64::MAX);
+    let mut start_addr = args.start_addr.unwrap_or(u64::MAX);
+    let end_addr = args.end_addr.unwrap_or(u64::MAX);
+    let max_insns = args.num.unwrap_or(u64::MAX);
 
     let print_progress = !(args.print_asm || args.print_pcode) && args.log_modules.is_empty();
 
@@ -109,7 +109,7 @@ fn main() {
 
                 if print_progress {
                     print!("[{}]", ".".repeat(NUM_TICKS));
-                    let _ = std::io::stdout().flush().unwrap();
+                    std::io::stdout().flush().unwrap();
                 }
 
                 for insn in disasm.disassemble(&bytes[start..end], addr) {
@@ -120,7 +120,7 @@ fn main() {
                         let num_ticks = (((insn.address.offset - addr) as f64 / (end - start) as f64) * (NUM_TICKS as f64)) as usize;
                         if num_ticks != prev_num_ticks {
                             print!("\x1b[2K\r[{}{}]", "+".repeat(num_ticks), ".".repeat(NUM_TICKS - num_ticks));
-                            let _ = std::io::stdout().flush().unwrap();
+                            std::io::stdout().flush().unwrap();
                             prev_num_ticks = num_ticks;
                         }
                     }
@@ -141,7 +141,7 @@ fn main() {
                 }
 
                 if print_progress {
-                    print!("\n");
+                    println!();
                 }
             }
         }

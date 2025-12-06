@@ -112,7 +112,7 @@ impl CompilerSpec {
         let cspec_elem = Element::from_reader(cspec_contents.as_bytes()).unwrap();
 
         let sp_name = cspec_elem.find("stackpointer").unwrap().get_attr("register").unwrap().to_string();
-        let (sp_off, sp_size) = registers[&sp_name].clone();
+        let (sp_off, sp_size) = registers[&sp_name];
 
         let stack_pointer = Varnode {
             name: Some(sp_name.into_local_str()),
@@ -132,11 +132,11 @@ impl CompilerSpec {
             prototypes.insert(proto.name.clone(), proto.clone());
         }
 
-        return CompilerSpec {
+        CompilerSpec {
             stack_pointer,
             default_proto_name: default_proto.name.clone(),
             prototypes,
-        };
+        }
     }
 
     pub fn default_proto(&self) -> &Prototype {
@@ -166,9 +166,9 @@ impl ProcessorSpec {
             }
         }
 
-        return ProcessorSpec {
+        ProcessorSpec {
             defaults,
-        };
+        }
     }
 }
 
@@ -200,12 +200,12 @@ impl Language {
             if compiler_elem.get_attr("name").unwrap() == compiler_id {
                 let cspec_filename = compiler_elem.get_attr("spec").unwrap();
                 let cspec_path = arch_path.join(cspec_filename);
-                cspec = Some(CompilerSpec::new(&cspec_path, &registers));
+                cspec = Some(CompilerSpec::new(&cspec_path, registers));
                 break;
             }
         }
 
-        return Language {
+        Language {
             _name: name,
             _sla_path: sla_path,
             pspec,

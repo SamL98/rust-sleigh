@@ -84,10 +84,7 @@ fn build_value<'a>(
                 _ => panic!("{}", objs[ix])
             });
 
-            match expr {
-                Some(HandleExpr::OffsetPlus(addend)) => vn = Cow::Owned(vn.subpiece(*addend as u64, vn.size, &ctx.lang.varnode_map)),
-                _ => ()
-            };
+            if let Some(HandleExpr::OffsetPlus(addend)) = expr { vn = Cow::Owned(vn.subpiece(*addend as u64, vn.size, &ctx.lang.varnode_map)) };
 
             (VarnodeValue::Op(vn), None)
         },
@@ -252,7 +249,7 @@ fn build_varnode<'a>(
             fixup_type = fixup_type.or(ft);
 
             let name = match space {
-                AddressSpace::Register => ctx.lang.varnode_map.get(&(offset, size)).map(|x| x.clone()),
+                AddressSpace::Register => ctx.lang.varnode_map.get(&(offset, size)).cloned(),
                 _ => match fixup_type {
                     Some(FixupType::Start) => Some(local_str!("fixup_start")),
                     Some(FixupType::End) => Some(local_str!("fixup_end")),
@@ -296,12 +293,11 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut Vec<Varnode>, output: &mut Option
             inputs[0] = inputs[1].clone();
             inputs[1] = c.negate();
         }
-    } else if *opcode == OpCode::IntSub {
-        if inputs[1].is_negative() {
+    } else if *opcode == OpCode::IntSub
+        && inputs[1].is_negative() {
             *opcode = OpCode::IntAdd;
             inputs[1] = inputs[1].negate();
-        } 
-    }
+        }
 
     // println!("{} {:?}", opcode, inputs);
 
@@ -463,8 +459,8 @@ fn build_pcodeop<'a>(
     ops.push(op);
 }
 
-pub fn _build_sym<'a>(
-    matched_sym: &'a MatchedSymbol,
+pub fn _build_sym(
+    matched_sym: &MatchedSymbol,
     built_pcodeops: &mut Vec<PcodeOp>,
     built_objects: &mut Vec<PcodeObject>,
     order: &mut Vec<usize>,
@@ -481,7 +477,7 @@ pub fn _build_sym<'a>(
     let mut num_ops = 0;
 
     if let MatchedSymbol::Constructor((ct, operands)) = &matched_sym {
-        for (_i, (op, fixup_type)) in operands.iter().enumerate() {
+        for (op, fixup_type) in operands.iter() {
             let mut op_handle = None;
             let mut sub_op_start = 0;
             let mut sub_op_size = 0;
@@ -494,7 +490,7 @@ pub fn _build_sym<'a>(
                     };
 
                     let varnode = PcodeObject::Varnode(Varnode {
-                        name: name.map(|x| x.clone()),
+                        name: name.cloned(),
                         space: vnode.space.to_owned(),
                         offset: vnode.offset,
                         size: vnode.size,
@@ -566,7 +562,7 @@ pub fn _build_sym<'a>(
 
                     build_pcodeop(
                         seq,
-                        &op_template,
+                        op_template,
                         &built_objects[start_obj_idx..],
                         built_pcodeops,
                         ctx,
@@ -587,7 +583,7 @@ pub fn _build_sym<'a>(
         for stmt in &template.statements {
             if let ConsTemplate::Handle(handle_template) = stmt {
                 let objs = &built_objects[start_obj_idx..];
-                let my_handle = build_handle(&handle_template, objs, ctx);
+                let my_handle = build_handle(handle_template, objs, ctx);
                 handle = Some(my_handle);
             }
         }
@@ -697,7 +693,7 @@ pub fn _build_text(matched_sym: &MatchedSymbol, text: &mut String, ops: &[PcodeO
         MatchedSymbol::Constructor((ct, operands)) => {
             if let Some(cmds) = &ct.print_commands {
                 for cmd in cmds {
-                    _build_cmd_text(cmd, &operands, text, ops);
+                    _build_cmd_text(cmd, operands, text, ops);
                 }
             }
         },
@@ -718,7 +714,7 @@ pub fn _build_text(matched_sym: &MatchedSymbol, text: &mut String, ops: &[PcodeO
                 _ => (*val as u64, false),
             };
 
-            let shift = 64 - (*sz as usize) * 8;
+            let shift = 64 - *sz * 8;
             let sext_v = (((v << shift) as i64) >> shift) as u64;
 
             for op in ops {
@@ -726,13 +722,12 @@ pub fn _build_text(matched_sym: &MatchedSymbol, text: &mut String, ops: &[PcodeO
                     v = neg_v;
                     sign_str = "-";
                     break;
-                } else if matches!(op.opcode, OpCode::IntSBorrow) && op.inputs[1].space == AddressSpace::Const && op.inputs[1].offset > 0 && is_neg {
-                    if op.inputs[1].offset == (sext_v >> (64 - op.inputs[1].size * 8)) {
+                } else if matches!(op.opcode, OpCode::IntSBorrow) && op.inputs[1].space == AddressSpace::Const && op.inputs[1].offset > 0 && is_neg
+                    && op.inputs[1].offset == (sext_v >> (64 - op.inputs[1].size * 8)) {
                         v = neg_v;
                         sign_str = "-";
                         break;
                     }
-                }
             }
 
             if *sz == 8 && is_neg {
@@ -743,7 +738,7 @@ pub fn _build_text(matched_sym: &MatchedSymbol, text: &mut String, ops: &[PcodeO
             text.push_str(format!("{}0x{:x}", sign_str, v).as_str());
         },
         MatchedSymbol::String(s) => {
-            text.push_str(&s);
+            text.push_str(s);
         }
     }
 }

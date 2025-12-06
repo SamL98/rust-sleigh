@@ -3,7 +3,7 @@ use std::fmt;
 
 impl AddressSpace {
     pub fn is_dummy(&self) -> bool {
-        return self == &AddressSpace::Dummy
+        self == &AddressSpace::Dummy
     }
 }
 

@@ -520,19 +520,19 @@ pub fn u64hex(s: &str) -> u64 {
 }
 
 pub fn u64dec(s: &str) -> u64 {
-    u64::from_str_radix(&s, 10).unwrap()
+    u64::from_str_radix(s, 10).unwrap()
 }
 
 pub fn u32dec(s: &str) -> u32 {
-    u32::from_str_radix(&s, 10).unwrap()
+    u32::from_str_radix(s, 10).unwrap()
 }
 
 fn i32dec(s: &str) -> i32 {
-    i32::from_str_radix(&s, 10).unwrap()
+    i32::from_str_radix(s, 10).unwrap()
 }
 
 fn i64dec(s: &str) -> i64 {
-    i64::from_str_radix(&s, 10).unwrap()
+    i64::from_str_radix(s, 10).unwrap()
 }
 
 fn scope(input: &str) -> Res<&str, Symbol> {
@@ -541,7 +541,7 @@ fn scope(input: &str) -> Res<&str, Symbol> {
         //println!("{} {:?}", res, attrs);
         let id = u32hex(attrs[1].1);
         let scope = Scope {
-            parent: u32hex(&attrs[1].1),
+            parent: u32hex(attrs[1].1),
         };
         (
             next,
@@ -757,7 +757,13 @@ fn binary_expr(input: &str) -> Res<&str, Expr> {
 
 fn expr(input: &str) -> Res<&str, Expr> {
     //println!("* context expr {}", &input[0..20]);
-    let res = alt((
+    
+
+    // if res.is_err() {
+    //     panic!("Could not parse expr at {}", input);
+    // }
+
+    alt((
         start_expr,
         end_expr,
         next2_expr,
@@ -766,13 +772,7 @@ fn expr(input: &str) -> Res<&str, Expr> {
         field_expr,
         unary_expr,
         binary_expr,
-    ))(input);
-
-    // if res.is_err() {
-    //     panic!("Could not parse expr at {}", input);
-    // }
-
-    res
+    ))(input)
 }
 
 fn context_op(input: &str) -> Res<&str, ContextOp> {
@@ -885,7 +885,7 @@ fn op_template(input: &str) -> Res<&str, ConsTemplate> {
         let op_template = OpTemplate {
             code: attrs[0].1.to_string(),
             output: res.1,
-            inputs: res.2.into_iter().filter_map(|x| x).collect(),
+            inputs: res.2.into_iter().flatten().collect(),
         };
         // println!("{} {}", op_template.code, op_template.inputs.len());
         (next, ConsTemplate::Op(op_template))
@@ -1001,7 +1001,7 @@ fn constructor(input: &str) -> Res<&str, Constructor> {
             print_commands: res.1.1,
             context_ops: res.1.2.unwrap_or_default(),
             template: res.1.3,
-            line: (u64dec(iter.nth(0).unwrap()) as usize, u64dec(iter.nth(0).unwrap()) as usize),
+            line: (u64dec(iter.next().unwrap()) as usize, u64dec(iter.next().unwrap()) as usize),
         };
 
         // if constructor.line.0 == 0 && constructor.line.1 == 8255 {
@@ -1399,7 +1399,7 @@ fn name(input: &str) -> Res<&str, Option<String>> {
     delimited(tag("<nametab"), take_until("/>"), tag("/>"))(input).map(|(next, res)| {
         let (_, attrs) = attrs(res).finish().unwrap();
 
-        if attrs.len() == 0 {
+        if attrs.is_empty() {
             (next, None)
         } else {
             let name = attrs[0].1.to_string();
@@ -1621,10 +1621,6 @@ fn attrs(input: &str) -> Res<&str, Vec<(&str, &str)>> {
         space0,
         separated_list0(char(' '), separated_pair(identifier, char('='), string)),
     )(input)
-    .map(|(next, res)| {
-        //println!("{:?}", res);
-        (next, res)
-    })
 }
 
 pub fn program(input: &str) -> Res<&str, Program> {
@@ -1672,7 +1668,7 @@ pub fn read_reg(
 
     while size_left > 0 {
         let start = (reg.offset * 8 + (words.len() as u64) * 32) as usize;
-        let end = (start + 32) as usize;
+        let end = start + 32;
         words.push(reg_space[start..end].load_be::<u32>());
         size_left -= size_left.min(32);
     }
@@ -1789,7 +1785,7 @@ impl SleighLanguage {
             };
 
             registers.insert((*start, *sz), register.clone());
-            max_off = max_off.max(*start + *sz as u64);
+            max_off = max_off.max(*start + *sz);
         }
 
         let mut reg_sizes: Vec<Vec<Varnode>> = Vec::with_capacity(max_off as usize);
