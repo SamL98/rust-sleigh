@@ -86,7 +86,7 @@ impl Varnode{
 
         Varnode {
             name: self.name.clone(),
-            space: self.space.clone(),
+            space: self.space,
             offset: signed_off,
             size: self.size,
         }
@@ -103,7 +103,7 @@ impl Varnode{
 
         Varnode {
             name: new_name,
-            space: self.space.clone(),
+            space: self.space,
             offset: new_offset,
             size: new_size,
         }
