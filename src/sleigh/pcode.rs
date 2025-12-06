@@ -127,48 +127,6 @@ impl<T: VarnodeIface> Op<OpCode, T> {
     }
 }
 
-impl<T: VarnodeIface> Op<OpCode, T> {
-    pub fn returns(&self) -> bool {
-        return self.opcode == OpCode::Return;
-    }
-
-    pub fn branches(&self) -> bool {
-        return match self.opcode {
-            OpCode::Branch | OpCode::CBranch | OpCode::BranchInd => true,
-            _ => false,
-        };
-    }
-
-    pub fn terminates(&self) -> bool {
-        return self.branches() || self.returns();
-    }
-
-    pub fn is_conditional(&self) -> bool {
-        return self.opcode == OpCode::CBranch;
-    }
-
-    pub fn target(&self) -> Option<Address> {
-        // TODO: Actually make BRANCHIND read from memory.
-        if self.branches()
-            && self.inputs.len() > 0
-            && self.inputs[0].is_ram()
-            && self.opcode != OpCode::BranchInd
-        {
-            let address = Address {
-                space: self.inputs[0].space().to_owned(),
-                offset: self.inputs[0].offset(),
-            };
-            return Some(address);
-        } else {
-            return None;
-        }
-    }
-
-    pub fn has_fallthrough(&self) -> bool {
-        !(self.returns() || (self.branches() && !self.is_conditional()))
-    }
-}
-
 impl<T: VarnodeIface> fmt::Debug for Op<OpCode, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.to_string())

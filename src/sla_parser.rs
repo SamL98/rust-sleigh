@@ -1240,7 +1240,7 @@ fn next2_sym(input: &str) -> Res<&str, Symbol> {
         (
             next,
             Symbol {
-                id: id,
+                id,
                 body: SymbolBody::Next2(sym_head),
             },
         )
@@ -1502,7 +1502,7 @@ fn context_sym(input: &str) -> Res<&str, Symbol> {
         (
             next,
             Symbol {
-                id: id,
+                id,
                 body: SymbolBody::Context(context),
             },
         )
@@ -1548,7 +1548,7 @@ fn operand_sym(input: &str) -> Res<&str, Symbol> {
         (
             next,
             Symbol {
-                id: id,
+                id,
                 body: SymbolBody::Operand(operand),
             },
         )

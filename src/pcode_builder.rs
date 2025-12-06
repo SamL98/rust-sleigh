@@ -512,7 +512,7 @@ pub fn _build_sym<'a>(
                 };
 
                 let varnode = PcodeObject::Varnode(Varnode {
-                    name: name,
+                    name,
                     space: AddressSpace::Const.to_owned(),
                     offset: *val as u64,
                     size: *size as u64,
