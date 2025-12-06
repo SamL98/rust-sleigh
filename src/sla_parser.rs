@@ -546,7 +546,7 @@ fn scope(input: &str) -> Res<&str, Symbol> {
         (
             next,
             Symbol {
-                id: id,
+                id,
                 body: SymbolBody::Scope(scope),
             },
         )
@@ -591,7 +591,7 @@ fn sym_head(input: &str) -> Res<&str, Symbol> {
         (
             next,
             Symbol {
-                id: id,
+                id,
                 body: SymbolBody::SymHead(sym_head),
             },
         )
@@ -919,7 +919,7 @@ fn handle_template(input: &str) -> Res<&str, ConsTemplate> {
         let handle_template = HandleTemplate {
             space_template: res.0,
             size_template: res.1,
-            pointer_template: pointer_template,
+            pointer_template,
             temp_space_template: res.5,
             temp_offset_template: res.6,
         };
@@ -960,7 +960,7 @@ fn constructor_template(input: &str) -> Res<&str, ConstructorTemplate> {
         };
 
         let constructor_template = ConstructorTemplate {
-            num_labels: num_labels,
+            num_labels,
             statements: res.1,
         };
 
@@ -1186,7 +1186,7 @@ fn subtable_sym(input: &str) -> Res<&str, Symbol> {
         (
             next,
             Symbol {
-                id: id,
+                id,
                 body: SymbolBody::Subtable(subtable),
             },
         )
@@ -1204,7 +1204,7 @@ fn start_sym(input: &str) -> Res<&str, Symbol> {
         (
             next,
             Symbol {
-                id: id,
+                id,
                 body: SymbolBody::Start(sym_head),
             },
         )
@@ -1222,7 +1222,7 @@ fn end_sym(input: &str) -> Res<&str, Symbol> {
         (
             next,
             Symbol {
-                id: id,
+                id,
                 body: SymbolBody::End(sym_head),
             },
         )
@@ -1270,7 +1270,7 @@ fn varnode_sym(input: &str) -> Res<&str, Symbol> {
         (
             next,
             Symbol {
-                id: id,
+                id,
                 body: SymbolBody::Varnode(varnode),
             },
         )
@@ -1334,7 +1334,7 @@ fn valuemap_sym(input: &str) -> Res<&str, Symbol> {
         (
             next,
             Symbol {
-                id: id,
+                id,
                 body: SymbolBody::Valuemap(valuemap),
             },
         )
@@ -1387,7 +1387,7 @@ fn varlist_sym(input: &str) -> Res<&str, Symbol> {
         (
             next,
             Symbol {
-                id: id,
+                id,
                 body: SymbolBody::Varlist(varlist),
             },
         )
@@ -1437,7 +1437,7 @@ fn name_sym(input: &str) -> Res<&str, Symbol> {
         (
             next,
             Symbol {
-                id: id,
+                id,
                 body: SymbolBody::Nametab(nametab),
             },
         )
@@ -1464,7 +1464,7 @@ fn value_sym(input: &str) -> Res<&str, Symbol> {
         (
             next,
             Symbol {
-                id: id,
+                id,
                 body: SymbolBody::Value(value),
             },
         )
@@ -1497,7 +1497,7 @@ fn context_sym(input: &str) -> Res<&str, Symbol> {
             low: u32dec(attrs[4].1),
             high: u32dec(attrs[5].1),
             flow: to_bool(attrs[6].1),
-            context_field: context_field,
+            context_field,
         };
         (
             next,
@@ -1542,7 +1542,7 @@ fn operand_sym(input: &str) -> Res<&str, Symbol> {
             min_len: kvs.get("minlen").map(|s| u64dec(s)).unwrap_or(0),
             idx: kvs.get("idx").map(|s| u64dec(s)).unwrap_or(0),
             is_code: kvs.get("code").map(|s| to_bool(s)).unwrap_or(false),
-            operand_expr: operand_expr,
+            operand_expr,
             expr: res.1 .1,
         };
         (
@@ -1569,7 +1569,7 @@ fn userop(input: &str) -> Res<&str, Symbol> {
         (
             next,
             Symbol {
-                id: id,
+                id,
                 body: SymbolBody::UserOp(userop),
             },
         )
@@ -1809,14 +1809,14 @@ impl SleighLanguage {
         SleighLanguage {
             language: lang,
             bit_align: (sla.align * 8) as usize,
-            symbols: symbols,
-            spaces: spaces,
+            symbols,
+            spaces,
             _varnodes: varnodes,
-            varnode_map: varnode_map,
-            context_syms: context_syms,
-            reg_sizes: reg_sizes,
-            reg_space_size: reg_space_size,
-            insn_table_id: insn_table_id,
+            varnode_map,
+            context_syms,
+            reg_sizes,
+            reg_space_size,
+            insn_table_id,
             context_reg: ctx_reg,
             func_info: HashMap::new(),
         }

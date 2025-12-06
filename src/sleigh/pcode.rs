@@ -119,15 +119,15 @@ impl<T: VarnodeIface> Op<OpCode, T> {
 
     pub fn new(seq: SeqNum, opcode: OpCode, inputs: Vec<T>, output: Option<T>) -> Self {
         Self {
-            seq: seq,
-            opcode: opcode,
-            inputs: inputs,
-            output: output,
+            seq,
+            opcode,
+            inputs,
+            output,
         }
     }
 }
 
-impl<T: VarnodeIface> BlockElement for Op<OpCode, T> {
+impl<T: VarnodeIface> Op<OpCode, T> {
     fn returns(&self) -> bool {
         return self.opcode == OpCode::Return;
     }

@@ -2,7 +2,7 @@ use super::types::*;
 
 use std::fmt;
 
-impl BlockElement for Instruction {
+impl Instruction {
     fn returns(&self) -> bool {
         self.ops.last().map(|o| o.returns()).unwrap_or(false)
     }

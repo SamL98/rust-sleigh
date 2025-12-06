@@ -146,10 +146,10 @@ impl VarnodeIface for Varnode {
 
     fn with_size(&self, size: u64, name: Option<LocalStr>) -> Self {
         Self {
-            name: name,
+            name,
             space: self.space,
             offset: self.offset,
-            size: size,
+            size,
         }
     }
 

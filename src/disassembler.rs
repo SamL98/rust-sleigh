@@ -172,7 +172,7 @@ impl<'a> Disassembler<'a> {
     pub fn disassemble<'b>(&'b mut self, buf: &'a [u8], orig_pc: u64) -> DisassemblyIter<'a, 'b> {
         DisassemblyIter {
             disasm: self,
-            orig_pc: orig_pc,
+            orig_pc,
             data: buf,
             bits_consumed: 0,
             num_insns: 0,

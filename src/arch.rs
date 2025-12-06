@@ -54,7 +54,7 @@ impl Prototype {
             "register" => {
                 let name = varnode_tag.get_attr("name").unwrap().to_string();
                 let (offset, size) = registers[&name];
-                Varnode { name: Some(name.into_local_str()), space: AddressSpace::Register, offset: offset, size: size }
+                Varnode { name: Some(name.into_local_str()), space: AddressSpace::Register, offset, size, }
             },
             "varnode" => Varnode {
                 name: None,
@@ -167,7 +167,7 @@ impl ProcessorSpec {
         }
 
         return ProcessorSpec {
-            defaults: defaults
+            defaults,
         };
     }
 }
@@ -208,7 +208,7 @@ impl Language {
         return Language {
             _name: name,
             _sla_path: sla_path,
-            pspec: pspec,
+            pspec,
             cspec: cspec.unwrap(),
         }
     }

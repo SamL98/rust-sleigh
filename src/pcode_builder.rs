@@ -187,8 +187,8 @@ fn build_handle<'a>(
     } else if !temp.space.is_dummy() && deref_space != AddressSpace::Const {
         PcodeObject::Handle(Handle {
             space: deref_space,
-            pointer: pointer,
-            temp: temp,
+            pointer,
+            temp,
         })
     } else if deref_space == AddressSpace::Const {
         let mut offset = pointer.offset;
@@ -200,14 +200,14 @@ fn build_handle<'a>(
         PcodeObject::Varnode(Varnode {
             name: None,
             space: deref_space,
-            offset: offset,
+            offset,
             size: deref_size.max(pointer.size),
         })
     } else if deref_space != AddressSpace::Dummy {
         let name = ctx.lang.varnode_map.get(&(pointer.offset, deref_size)).cloned();
 
         PcodeObject::Varnode(Varnode {
-            name: name,
+            name,
             space: deref_space,
             offset: pointer.offset,
             size: deref_size,
@@ -274,10 +274,10 @@ fn build_varnode<'a>(
             // println!("{}\n  {:?}\n  ({}, {:x}, {})\n", vnode_tpl, objs, space, offset, size);
 
             Varnode {
-                name: name,
+                name,
                 space: space.to_owned(),
-                offset: offset,
-                size: size,
+                offset,
+                size,
             }
         }
     }
@@ -454,10 +454,10 @@ fn build_pcodeop<'a>(
     fix_sizes(&mut opcode, &mut inputs, &mut output, ctx);
 
     let op = PcodeOp {
-        seq: seq,
-        opcode: opcode,
-        inputs: inputs,
-        output: output,
+        seq,
+        opcode,
+        inputs,
+        output,
     };
 
     ops.push(op);
@@ -620,9 +620,9 @@ pub fn build_sym<'a>(
     lang: &'a SleighLanguage,
 ) -> Vec<PcodeOp> {
     let ctx = BuildContext {
-        lang: lang,
-        pc: pc,
-        bit_len: bit_len,
+        lang,
+        pc,
+        bit_len,
     };
 
     let mut ops = vec![];
