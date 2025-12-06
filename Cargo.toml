@@ -4,6 +4,8 @@ workspace = { members = [ "ghidra_sleigh"] }
 name = "pcode"
 version = "0.1.0"
 edition = "2021"
+description = "Pure Rust implementation of a p-code disassembler and lifter".
+license = "MIT OR Apache-2.0"
 
 [[bin]]
 name = "pcode"
