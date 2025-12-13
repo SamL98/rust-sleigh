@@ -10,6 +10,7 @@ license = "MIT OR Apache-2.0"
 [[bin]]
 name = "pcode"
 path = "src/main.rs"
+required-features = ["bin"]
 
 [features]
 bin = ["clap", "object"]
