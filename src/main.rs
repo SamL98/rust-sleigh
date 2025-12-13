@@ -17,13 +17,17 @@ use std::io::{Read, Write};
 use std::time::Instant;
 use std::fs::File;
 
+#[cfg(feature = "bin")]
 use object::{Object, ObjectSection, SectionKind};
+
+#[cfg(feature = "bin")]
 use clap::Parser;
 
 fn parse_hex(s: &str) -> Result<u64, String> {
     Ok(u64hex(s))
 }
 
+#[cfg(feature = "bin")]
 #[derive(Parser, Debug, Default)]
 struct Args {
     #[arg(short, long, value_parser = parse_hex)]
@@ -57,6 +61,7 @@ struct Args {
     print_pcode: bool,
 }
 
+#[cfg(feature = "bin")]
 fn main() {
     let args = Args::parse();
 
