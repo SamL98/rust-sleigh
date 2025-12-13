@@ -246,11 +246,12 @@ fn build_varnode<'a>(
 
             let name = match space {
                 AddressSpace::Register => ctx.lang.varnode_map.get(&(offset, size)).cloned(),
-                _ => match fixup_type {
-                    Some(FixupType::Start) => Some("fixup_start".to_string()),
-                    Some(FixupType::End) => Some("fixup_end".to_string()),
-                    _ => None,
-                },
+                _ => None,
+                // _ => match fixup_type {
+                //     Some(FixupType::Start) => Some("fixup_start".to_string()),
+                //     Some(FixupType::End) => Some("fixup_end".to_string()),
+                //     _ => None,
+                // },
             };
 
             // Need to sign-extend.
@@ -360,12 +361,12 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut [Varnode], output: &mut Option<Va
             *output = Some(output.as_ref().unwrap().truncate(0, inputs[1].size, &ctx.lang.varnode_map));
         }
     } else if *opcode == OpCode::Store {
-        inputs[1].size = 8; // FIXME
+        inputs[0].size = 8; // FIXME
     }
 
     // HACK, FIXME
     if *opcode == OpCode::Load {
-        inputs[1].size = 8;
+        inputs[0].size = 8;
     }
 }
 
@@ -394,7 +395,7 @@ fn build_pcodeop<'a>(
                 PcodeObject::Varnode(vn) => inputs.push(vn.clone()),
                 PcodeObject::Handle(h) => {
                     if !h.temp.space.is_dummy() {
-                        let load_inputs = vec![Varnode::dummy(), h.pointer.clone()];
+                        let load_inputs = vec![h.pointer.clone()];
                         ops.push(PcodeOp {
                             seq,
                             opcode: OpCode::Load,
@@ -437,7 +438,7 @@ fn build_pcodeop<'a>(
 
                         seq = seq.next();
                         opcode = OpCode::Store;
-                        inputs = vec![Varnode::dummy(), h.pointer.clone(), h.temp.clone()];
+                        inputs = vec![h.pointer.clone(), h.temp.clone()];
                     } else {
                         output = Some(h.pointer.clone());
                     }
@@ -448,6 +449,10 @@ fn build_pcodeop<'a>(
             let vn = build_varnode(tpl, objs, ctx);
             output = Some(vn);
         }
+    }
+
+    if (opcode == OpCode::Store && inputs.len() == 3) || (opcode == OpCode::Load && inputs.len() == 2) {
+        let _ = inputs.remove(0);
     }
 
     // println!("{} {:?} {:?}", opcode, inputs, output);
@@ -505,14 +510,14 @@ pub fn _build_sym(
             }
             else if let MatchedSymbol::Literal((val, size)) = op {
                 // NOTE: We're using the name as out-of-band data so that the build cache can re-fixup varnodes. Very hacky.
-                let name = match fixup_type {
-                    Some(FixupType::Start) => Some("fixup_start".to_string()),
-                    Some(FixupType::End) => Some("fixup_end".to_string()),
-                    _ => None,
-                };
+                // let name = match fixup_type {
+                //     Some(FixupType::Start) => Some("fixup_start".to_string()),
+                //     Some(FixupType::End) => Some("fixup_end".to_string()),
+                //     _ => None,
+                // };
 
                 let varnode = PcodeObject::Varnode(Varnode {
-                    name,
+                    name: None,
                     space: AddressSpace::Const.to_owned(),
                     offset: *val as u64,
                     size: *size as u64,
