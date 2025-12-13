@@ -67,7 +67,6 @@ fn main() {
 
     let lang_id = args.language_id.clone();
     let comp_id = args.compiler_id.clone();
-    let lang = SleighLanguage::create(&lang_id, &comp_id);
 
     let mut file = File::open(&args.file_name).unwrap();
     let mut bytes = vec![];
@@ -77,7 +76,7 @@ fn main() {
     let print_time = args.time;
     let num = args.num;
 
-    let mut disasm = Disassembler::new(lang_id, comp_id, num, &args.log_modules, &lang);
+    let mut disasm = Disassembler::new(lang_id, comp_id, num, &args.log_modules);
 
     let obj = object::File::parse(&*bytes).unwrap();
     let mut num_bytes = 0;

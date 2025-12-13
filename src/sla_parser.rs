@@ -1723,7 +1723,6 @@ pub struct SleighLanguage {
     pub reg_space_size: usize,
     pub insn_table_id: u32,
     pub context_reg: VarnodeSym,
-    pub func_info: HashMap<u64, FuncInfo>,
 }
 
 impl SleighLanguage {
@@ -1814,7 +1813,6 @@ impl SleighLanguage {
             reg_space_size,
             insn_table_id,
             context_reg: ctx_reg,
-            func_info: HashMap::new(),
         }
     }
 }

@@ -10,17 +10,17 @@ use std::collections::HashSet;
 use bitvec::prelude::*;
 
 #[allow(dead_code)]
-pub struct Disassembler<'a> {
+pub struct Disassembler {
     language_id: String,
     compiler_id: String,
-    pub ctx: Vec<u32>,
+    lang: SleighLanguage,
+    pub default_ctx_reg: Vec<u32>,
     num: Option<u64>,
     log_modules: HashSet<String>,
-    pub lang: &'a SleighLanguage,
     depth: usize,
 }
 
-impl Logger for Disassembler<'_> {
+impl Logger for Disassembler {
     fn should_log(&self) -> bool {
         self.log_modules.contains("disassembler")
     }
@@ -39,9 +39,9 @@ impl Logger for Disassembler<'_> {
 }
 
 pub struct DisassemblyIter<'a, 'b> {
-    disasm: &'b mut Disassembler<'a>,
+    disasm: &'a mut Disassembler,
     orig_pc: u64,
-    data: &'a [u8],
+    data: &'b [u8],
     bits_consumed: usize,
     num_insns: usize,
 }
@@ -60,7 +60,7 @@ impl<'a, 'b> Iterator for DisassemblyIter<'a, 'b> {
             }
         }
 
-        let mut ctx = self.disasm.ctx.clone();
+        let mut ctx = self.disasm.default_ctx_reg.clone();
 
         while self.bits_consumed / 8 < self.data.len() {
             let pc = Address {
@@ -69,7 +69,7 @@ impl<'a, 'b> Iterator for DisassemblyIter<'a, 'b> {
             };
             // println!("{}: {:x?} {:x?}", pc, &self.data[self.bits_consumed / 8..self.bits_consumed / 8 + 8], ctx);
 
-            match self.disasm.disassemble_one(&self.data[self.bits_consumed / 8..], pc, &mut ctx) {
+            match self.disasm._disassemble_one(&self.data[self.bits_consumed / 8..], pc, &mut ctx) {
                 Some(insn) => {
                     log!(&self.disasm, "0x{:x} {}: {}", insn.address.offset, insn.asm, insn.bit_len);
                     for op in &insn.ops {
@@ -85,7 +85,7 @@ impl<'a, 'b> Iterator for DisassemblyIter<'a, 'b> {
                     self.bits_consumed += self.disasm.lang.bit_align;
 
                     // Don't re-use the tainted context from the failed translation.
-                    ctx = self.disasm.ctx.clone();
+                    ctx = self.disasm.default_ctx_reg.clone();
                 }
             };
         }
@@ -94,14 +94,14 @@ impl<'a, 'b> Iterator for DisassemblyIter<'a, 'b> {
     }
 }
 
-impl<'a> Disassembler<'a> {
+impl Disassembler {
     pub fn new(
         language_id: String,
         compiler_id: String,
         num: Option<u64>,
         log_modules: &[String],
-        lang: &'a SleighLanguage,
     ) -> Self {
+        let lang = SleighLanguage::create(&language_id, &compiler_id);
         let mut reg_space: BitVec<u8, Msb0> = BitVec::with_capacity(lang.reg_space_size * 8);
         for _ in 0..(lang.reg_space_size * 8) {
             reg_space.push(false);
@@ -117,12 +117,12 @@ impl<'a> Disassembler<'a> {
         }
 
         let log_modules = HashSet::from_iter(log_modules.to_owned());
-        let ctx = read_reg(&lang.context_reg, &reg_space);
+        let default_ctx_reg = read_reg(&lang.context_reg, &reg_space);
 
         Self {
             language_id,
             compiler_id,
-            ctx,
+            default_ctx_reg,
             num,
             lang,
             log_modules,
@@ -130,12 +130,12 @@ impl<'a> Disassembler<'a> {
         }
     }
 
-    pub fn disassemble_one(&mut self, data: &[u8], pc: Address, ctx: &mut Vec<u32>) -> Option<Instruction> {
+    pub fn _disassemble_one(&mut self, data: &[u8], pc: Address, ctx: &mut Vec<u32>) -> Option<Instruction> {
         resolve_symbol(
             data,
             pc.offset,
             &self.lang.symbols[&self.lang.insn_table_id],
-            self.lang,
+            &self.lang,
             ctx,
             &self.log_modules,
         ).map(|(matched_symbol, mut num_bits)|{
@@ -148,7 +148,7 @@ impl<'a> Disassembler<'a> {
                 &matched_symbol,
                 &pc,
                 num_bits,
-                self.lang,
+                &self.lang,
             );
 
             for (i, op) in pcodeops.iter_mut().enumerate() {
@@ -166,7 +166,12 @@ impl<'a> Disassembler<'a> {
         })
     }
 
-    pub fn disassemble<'b>(&'b mut self, buf: &'a [u8], orig_pc: u64) -> DisassemblyIter<'a, 'b> {
+    pub fn disassemble_one(&mut self, data: &[u8], pc: Address) -> Option<Instruction> {
+        let mut ctx = self.default_ctx_reg.clone();
+        self._disassemble_one(data, pc, &mut ctx)
+    }
+
+    pub fn disassemble<'a, 'b>(&'a mut self, buf: &'b [u8], orig_pc: u64) -> DisassemblyIter<'a, 'b> {
         DisassemblyIter {
             disasm: self,
             orig_pc,
