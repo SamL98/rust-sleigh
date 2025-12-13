@@ -2,7 +2,7 @@ workspace = { members = [ "ghidra_sleigh"] }
 
 [package]
 name = "libpcode"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 description = "Pure Rust implementation of a p-code disassembler and lifter."
 license = "MIT OR Apache-2.0"
