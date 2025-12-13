@@ -130,7 +130,7 @@ impl Disassembler {
         }
     }
 
-    pub fn _disassemble_one(&mut self, data: &[u8], pc: Address, ctx: &mut Vec<u32>) -> Option<Instruction> {
+    pub fn _disassemble_one(&self, data: &[u8], pc: Address, ctx: &mut Vec<u32>) -> Option<Instruction> {
         resolve_symbol(
             data,
             pc.offset,
