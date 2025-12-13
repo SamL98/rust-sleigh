@@ -13,7 +13,7 @@ use bitvec::prelude::*;
 pub struct Disassembler {
     language_id: String,
     compiler_id: String,
-    lang: SleighLanguage,
+    pub lang: SleighLanguage,
     pub default_ctx_reg: Vec<u32>,
     num: Option<u64>,
     log_modules: HashSet<String>,
