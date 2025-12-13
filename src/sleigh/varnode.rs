@@ -117,6 +117,40 @@ impl Varnode {
         }
     }
 
+    pub fn ram(off: u64, size: u64) -> Self {
+        Self {
+            name: None,
+            space: AddressSpace::Ram,
+            offset: off,
+            size,
+        }
+    }
+
+    pub fn reg(off: u64, size: u64) -> Self {
+        Self {
+            name: None,
+            space: AddressSpace::Register,
+            offset: off,
+            size,
+        }
+    }
+
+    pub fn unique(off: u64, size: u64) -> Self {
+        Self {
+            name: None,
+            space: AddressSpace::Unique,
+            offset: off,
+            size,
+        }
+    }
+
+    pub fn intersects(&self, other: &Self) -> bool {
+        let my_end = self.offset + self.size;
+        let other_end = other.offset + other.size;
+        self.space == other.space &&
+            my_end.min(other_end).saturating_sub(self.offset.max(other.offset)) > 0
+    }
+
     pub fn is_negative(&self) -> bool {
         self.space.is_const() && self.offset >> ((self.size * 8) - 1) != 0
     }
