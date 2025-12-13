@@ -1712,6 +1712,7 @@ pub struct SleighLanguage {
     pub varnode_map: HashMap<(u64, u64), String>,
     pub context_syms: HashMap<String, Context>,
     pub reg_sizes: Vec<Vec<Varnode>>,
+    pub registers: HashMap<(u64, u64), Varnode>,
     pub reg_space_size: usize,
     pub insn_table_id: u32,
     pub context_reg: VarnodeSym,
@@ -1728,6 +1729,7 @@ impl SleighLanguage {
         let mut varnodes: HashMap<String, VarnodeSym> = HashMap::new();
         let mut varnode_map: HashMap<(u64, u64), String> = HashMap::new();
         let mut rev_varnode_map: HashMap<String, Varnode> = HashMap::new();
+        let mut registers: HashMap<(u64, u64), Varnode> = HashMap::new();
         let mut context_syms: HashMap<String, Context> = HashMap::new();
         let mut reg_space_size: usize = 0;
         let mut insn_table_id = 0;
@@ -1750,6 +1752,12 @@ impl SleighLanguage {
                         reg_space_size = reg_space_size.max((varnode.offset + varnode.size) as usize);
                         varnode_map.insert((varnode.offset, varnode.size), varnode.name.clone());
                         rev_varnode_map.insert(varnode.name.clone(), Varnode {
+                            name: Some(varnode.name.clone()),
+                            space: varnode.space,
+                            offset: varnode.offset,
+                            size: varnode.size,
+                        });
+                        registers.insert((varnode.offset, varnode.size), Varnode {
                             name: Some(varnode.name.clone()),
                             space: varnode.space,
                             offset: varnode.offset,
@@ -1806,6 +1814,7 @@ impl SleighLanguage {
             _varnodes: varnodes,
             varnode_map,
             context_syms,
+            registers,
             reg_sizes,
             reg_space_size,
             insn_table_id,

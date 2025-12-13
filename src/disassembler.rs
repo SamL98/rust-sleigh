@@ -166,7 +166,7 @@ impl Disassembler {
         })
     }
 
-    pub fn disassemble_one(&mut self, data: &[u8], pc: Address) -> Option<Instruction> {
+    pub fn disassemble_one(&self, data: &[u8], pc: Address) -> Option<Instruction> {
         let mut ctx = self.default_ctx_reg.clone();
         self._disassemble_one(data, pc, &mut ctx)
     }
