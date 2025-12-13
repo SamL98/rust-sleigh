@@ -1,5 +1,5 @@
 use crate::arch::{get_sla, get_language};
-use crate::sleigh::types::*;
+use crate::sleigh::*;
 
 extern crate bitvec;
 extern crate nom;
@@ -14,8 +14,6 @@ use nom::error::*;
 use nom::multi::*;
 use nom::sequence::*;
 use nom::*;
-
-use flexstr::{LocalStr, ToLocalStr};
 
 use bitvec::prelude::*;
 
@@ -1704,12 +1702,6 @@ pub fn get_word_le(words: &[u8], start: usize, size: usize) -> u64 {
     word
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct FuncInfo {
-    pub name: Option<String>,
-    pub num_params: Option<usize>,
-}
-
 #[allow(dead_code)]
 pub struct SleighLanguage {
     pub language: Language,
@@ -1717,7 +1709,7 @@ pub struct SleighLanguage {
     pub symbols: HashMap<u32, Symbol>,
     pub spaces: HashMap<String, u64>,
     pub _varnodes: HashMap<String, VarnodeSym>,
-    pub varnode_map: HashMap<(u64, u64), LocalStr>,
+    pub varnode_map: HashMap<(u64, u64), String>,
     pub context_syms: HashMap<String, Context>,
     pub reg_sizes: Vec<Vec<Varnode>>,
     pub reg_space_size: usize,
@@ -1734,8 +1726,8 @@ impl SleighLanguage {
         let mut symbols: HashMap<u32, Symbol> = HashMap::new();
         let mut spaces: HashMap<String, u64> = HashMap::new();
         let mut varnodes: HashMap<String, VarnodeSym> = HashMap::new();
-        let mut varnode_map: HashMap<(u64, u64), LocalStr> = HashMap::new();
-        let mut rev_varnode_map: HashMap<String, (u64, u64)> = HashMap::new();
+        let mut varnode_map: HashMap<(u64, u64), String> = HashMap::new();
+        let mut rev_varnode_map: HashMap<String, Varnode> = HashMap::new();
         let mut context_syms: HashMap<String, Context> = HashMap::new();
         let mut reg_space_size: usize = 0;
         let mut insn_table_id = 0;
@@ -1756,8 +1748,13 @@ impl SleighLanguage {
 
                     if varnode.space == AddressSpace::Register {
                         reg_space_size = reg_space_size.max((varnode.offset + varnode.size) as usize);
-                        varnode_map.insert((varnode.offset, varnode.size), varnode.name.to_local_str());
-                        rev_varnode_map.insert(varnode.name.clone(), (varnode.offset, varnode.size));
+                        varnode_map.insert((varnode.offset, varnode.size), varnode.name.clone());
+                        rev_varnode_map.insert(varnode.name.clone(), Varnode {
+                            name: Some(varnode.name.clone()),
+                            space: varnode.space,
+                            offset: varnode.offset,
+                            size: varnode.size,
+                        });
                     }
                 }
                 SymbolBody::Context(ctx) => {

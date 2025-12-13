@@ -3,7 +3,7 @@ workspace = { members = [ "ghidra_sleigh"] }
 [package]
 name = "pcode"
 version = "0.1.2"
-edition = "2021"
+edition = "2024"
 description = "Pure Rust implementation of a p-code disassembler and lifter."
 license = "MIT OR Apache-2.0"
 
@@ -18,9 +18,7 @@ bin = ["clap", "object"]
 [dependencies]
 nom = "6.0"
 bitvec = "1"
-glob = "0.3.1"
-elementtree = "1.2.3"
-flexstr = "0.9.2"
+roxmltree = "0.21.1"
 
 clap = { version = "4.5.26", features = ["derive"], optional = true }
 object = { version = "0.35.0", optional = true }

@@ -1,6 +1,4 @@
-use crate::sleigh::varnode::VarnodeIface;
-use crate::sleigh::opcode::OpCode;
-use crate::sleigh::types::*;
+use crate::sleigh::*;
 
 use crate::sla_parser::*;
 use crate::symbol_resolver::*;
@@ -8,8 +6,6 @@ use crate::symbol_resolver::*;
 use std::collections::HashMap;
 use std::borrow::Cow;
 use std::fmt;
-
-use flexstr::local_str;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum VarnodeValue<'a> {
@@ -84,7 +80,7 @@ fn build_value<'a>(
                 _ => panic!("{}", objs[ix])
             });
 
-            if let Some(HandleExpr::OffsetPlus(addend)) = expr { vn = Cow::Owned(vn.subpiece(*addend as u64, vn.size, &ctx.lang.varnode_map)) };
+            if let Some(HandleExpr::OffsetPlus(addend)) = expr { vn = Cow::Owned(vn.truncate(*addend as u64, vn.size, &ctx.lang.varnode_map)) };
 
             (VarnodeValue::Op(vn), None)
         },
@@ -251,8 +247,8 @@ fn build_varnode<'a>(
             let name = match space {
                 AddressSpace::Register => ctx.lang.varnode_map.get(&(offset, size)).cloned(),
                 _ => match fixup_type {
-                    Some(FixupType::Start) => Some(local_str!("fixup_start")),
-                    Some(FixupType::End) => Some(local_str!("fixup_end")),
+                    Some(FixupType::Start) => Some("fixup_start".to_string()),
+                    Some(FixupType::End) => Some("fixup_end".to_string()),
                     _ => None,
                 },
             };
@@ -361,7 +357,7 @@ fn fix_sizes(opcode: &mut OpCode, inputs: &mut [Varnode], output: &mut Option<Va
         }
 
         if *opcode == OpCode::SubPiece && output_size > inputs[1].size {
-            *output = Some(output.as_ref().unwrap().subpiece(0, inputs[1].size, &ctx.lang.varnode_map));
+            *output = Some(output.as_ref().unwrap().truncate(0, inputs[1].size, &ctx.lang.varnode_map));
         }
     } else if *opcode == OpCode::Store {
         inputs[1].size = 8; // FIXME
@@ -399,7 +395,12 @@ fn build_pcodeop<'a>(
                 PcodeObject::Handle(h) => {
                     if !h.temp.space.is_dummy() {
                         let load_inputs = vec![Varnode::dummy(), h.pointer.clone()];
-                        ops.push(PcodeOp::new(seq.clone(), OpCode::Load, load_inputs, Some(h.temp.clone())));
+                        ops.push(PcodeOp {
+                            seq,
+                            opcode: OpCode::Load,
+                            inputs: load_inputs,
+                            output: Some(h.temp.clone()),
+                        });
 
                         seq = seq.next();
                         inputs.push(h.temp.clone());
@@ -427,7 +428,12 @@ fn build_pcodeop<'a>(
                     if !h.temp.space.is_dummy() {
                         let mut output = Some(h.temp.clone());
                         fix_sizes(&mut opcode, &mut inputs, &mut output, ctx);
-                        ops.push(PcodeOp::new(seq.clone(), opcode, inputs.clone(), output));
+                        ops.push(PcodeOp {
+                            seq,
+                            opcode,
+                            inputs: inputs.clone(),
+                            output,
+                        });
 
                         seq = seq.next();
                         opcode = OpCode::Store;
@@ -500,8 +506,8 @@ pub fn _build_sym(
             else if let MatchedSymbol::Literal((val, size)) = op {
                 // NOTE: We're using the name as out-of-band data so that the build cache can re-fixup varnodes. Very hacky.
                 let name = match fixup_type {
-                    Some(FixupType::Start) => Some(local_str!("fixup_start")),
-                    Some(FixupType::End) => Some(local_str!("fixup_end")),
+                    Some(FixupType::Start) => Some("fixup_start".to_string()),
+                    Some(FixupType::End) => Some("fixup_end".to_string()),
                     _ => None,
                 };
 
@@ -555,7 +561,6 @@ pub fn _build_sym(
                     let seq = SeqNum {
                         pc: ctx.pc.clone(),
                         uniq: (start_op_idx + num_ops) as i32,
-                        order: 0,
                     };
 
                     build_pcodeop(

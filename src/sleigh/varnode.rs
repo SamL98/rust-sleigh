@@ -1,71 +1,104 @@
-use super::types::{
-    AddressSpace,
-    Varnode,
-    // Context
-};
+use super::address::*;
+use super::op::*;
 
-use flexstr::LocalStr;
-
-// use std::cmp::{PartialEq, Eq};
-// use std::hash::{Hash, Hasher};
 use std::fmt::{self, Debug, Display};
 use std::collections::HashMap;
-use std::str::FromStr;
+use std::hash::{Hash, Hasher};
+use std::cmp::Ordering;
 use std::clone::Clone;
-use std::hash::Hash;
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct ParseAddressSpaceError;
+#[derive(Clone)]
+pub struct Varnode {
+    pub name: Option<String>,
+    pub space: AddressSpace,
+    pub offset: u64,
+    pub size: u64
+}
 
-impl FromStr for AddressSpace {
-    type Err = ParseAddressSpaceError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        use AddressSpace::*;
-        let space = match s {
-            "ram" => Ram,
-            "register" => Register,
-            "const" => Const,
-            "unique" => Unique,
-            "dummy" => Dummy,
-            _ => {
-                return Err(ParseAddressSpaceError);
-            },
-        };
-        Ok(space)
+impl Hash for Varnode {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.space.hash(state);
+        self.offset.hash(state);
+        self.size.hash(state);
     }
 }
 
-impl fmt::Display for AddressSpace {
+impl PartialEq for Varnode {
+    fn eq(&self, other: &Self) -> bool {
+        self.space == other.space &&
+            self.offset == other.offset &&
+            self.size == other.size
+    }
+}
+
+impl Eq for Varnode {}
+
+impl PartialOrd for Varnode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Varnode {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.offset.cmp(&other.offset)
+    }
+}
+
+impl Debug for Varnode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use AddressSpace::*;
-        let s = match self {
-            Ram => "ram",
-            Unique => "unique",
-            Const => "const",
-            Register => "register",
-            Dummy => "DUMMY",
-        };
-        write!(f, "{}", s)
+        write!(f, "{}", self)
     }
 }
 
-#[allow(dead_code)]
-pub trait VarnodeIface: Debug + Display + Clone + Eq + PartialEq + Hash {
-    fn is_negative(&self) -> bool;
-    fn is_ram(&self) -> bool;
-    fn is_const(&self) -> bool;
-    fn is_reg(&self) -> bool;
-    fn space(&self) -> AddressSpace;
-    fn offset(&self) -> u64;
-    fn size(&self) -> u64;
-    fn succeeds(&self, other: &Self) -> bool;
-    fn with_size(&self, size: u64, name: Option<LocalStr>) -> Self;
-    fn fmt_call_target(&self) -> String;
-    fn fmt_output(&self) -> String;
+impl Display for Varnode {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self.name {
+            Some(name) => {
+                if name.starts_with('"') && name.ends_with('"') {
+                    write!(f, "\x1b[1;35m{}\x1b[0m", name)
+                } else {
+                    write!(f, "\x1b[1;33m{}\x1b[0m", name)
+                }
+            },
+            _ => match self.space {
+                AddressSpace::Unique => write!(f, "U{:x}:{}", self.offset, self.size),
+                AddressSpace::Const => write!(f, "\x1b[1;32m0x{:x}\x1b[0m", self.offset),
+                // AddressSpace::Const => write!(f, "0x{:x}", self.offset),
+                AddressSpace::Register => write!(f, "R{:x}:{}", self.offset, self.size), // FIXME
+                AddressSpace::Ram => write!(f, "[ram]0x{:x}:{}", self.offset, self.size),
+                AddressSpace::Stack => write!(f, "[stack]0x{:x}:{}", self.offset, self.size),
+                AddressSpace::Deref => write!(f, "[deref]0x{:x}:{}", self.offset, self.size),
+                AddressSpace::Dummy => write!(f, "DUMMY"),
+            }
+        }
+    }
 }
 
-impl Varnode{
+impl FmtIface for Varnode {
+    fn fmt_call_target(&self) -> String {
+        match &self.name {
+            Some(name) => name.clone(),
+            _ => {
+                if self.space.is_ram() || self.space.is_const() {
+                    format!("\x1b[1m\x1b[38;5;208mFUN_{:x}\x1b[0m", self.offset)
+                } else {
+                    self.to_string()
+                }
+            },
+        }
+    }
+
+    fn fmt_output(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl Varnode {
+    pub fn atom(&self, off: u64) -> Varnode {
+        Varnode { name: None, space: self.space, offset: off, size: 1 }
+    }
+
     pub fn dummy() -> Self {
         Self {
             name: None,
@@ -75,17 +108,17 @@ impl Varnode{
         }
     }
 
-    fn _to_string(&self) -> String {
-        match &self.name {
-            Some(name) if name != "fixup_start" && name != "fixup_end" => name.to_string(),
-            _ => match self.space {
-                AddressSpace::Unique => format!("U{:x}:{}", self.offset, self.size),
-                AddressSpace::Const => format!("0x{:x}:{}", self.offset, self.size),
-                AddressSpace::Register => format!("R{:x}:{}", self.offset, self.size), // FIXME
-                AddressSpace::Ram => format!("[ram]0x{:x}:{}", self.offset, self.size),
-                AddressSpace::Dummy => "DUMMY".to_string(),
-            }
+    pub fn constant(off: u64, size: u64) -> Self {
+        Self {
+            name: None,
+            space: AddressSpace::Const,
+            offset: off,
+            size,
         }
+    }
+
+    pub fn is_negative(&self) -> bool {
+        self.space.is_const() && self.offset >> ((self.size * 8) - 1) != 0
     }
 
     pub fn negate(&self) -> Varnode {
@@ -101,7 +134,7 @@ impl Varnode{
         }
     }
 
-    pub fn subpiece(&self, addend: u64, new_size: u64, varnode_map: &HashMap<(u64, u64), LocalStr>) -> Self {
+    pub fn truncate(&self, addend: u64, new_size: u64, varnode_map: &HashMap<(u64, u64), String>) -> Self {
         let new_offset = self.offset + addend;
 
         let new_name = if self.space == AddressSpace::Register {
@@ -116,63 +149,5 @@ impl Varnode{
             offset: new_offset,
             size: new_size,
         }
-    }
-}
-
-impl VarnodeIface for Varnode {
-    fn is_negative(&self) -> bool {
-        self.is_const() && self.offset >> ((self.size * 8) - 1) != 0
-    }
-
-    fn is_ram(&self) -> bool {
-        self.space == AddressSpace::Ram
-    }
-
-    fn is_reg(&self) -> bool {
-        self.space == AddressSpace::Register
-    }
-
-    fn is_const(&self) -> bool {
-        self.space == AddressSpace::Const
-    }
-
-    fn space(&self) -> AddressSpace {
-        self.space
-    }
-
-    fn offset(&self) -> u64 {
-        self.offset
-    }
-
-    fn size(&self) -> u64 {
-        self.size
-    }
-
-    fn succeeds(&self, other: &Self) -> bool {
-        self.space == other.space &&
-            self.offset == other.offset + 1
-    }
-
-    fn with_size(&self, size: u64, name: Option<LocalStr>) -> Self {
-        Self {
-            name,
-            space: self.space,
-            offset: self.offset,
-            size,
-        }
-    }
-
-    fn fmt_call_target(&self) -> String {
-        format!("FUN_{:x}", self.offset())
-    }
-
-    fn fmt_output(&self) -> String {
-        self.to_string()
-    }
-}
-
-impl fmt::Display for Varnode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self._to_string())
     }
 }

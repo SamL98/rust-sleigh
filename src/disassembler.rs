@@ -1,4 +1,4 @@
-use crate::sleigh::types::*;
+use crate::sleigh::*;
 
 use crate::sla_parser::*;
 use crate::symbol_resolver::*;
@@ -71,12 +71,12 @@ impl<'a, 'b> Iterator for DisassemblyIter<'a, 'b> {
 
             match self.disasm._disassemble_one(&self.data[self.bits_consumed / 8..], pc, &mut ctx) {
                 Some(insn) => {
-                    log!(&self.disasm, "0x{:x} {}: {}", insn.address.offset, insn.asm, insn.bit_len);
+                    log!(&self.disasm, "0x{:x} {}: {}", insn.address.offset, insn.asm, insn.length * 8);
                     for op in &insn.ops {
                         log!(&self.disasm, "    {}: {}", op.seq, op);
                     }
 
-                    self.bits_consumed += insn.bit_len;
+                    self.bits_consumed += insn.length as usize * 8;
                     self.num_insns += 1;
 
                     return Some(insn);
@@ -159,7 +159,7 @@ impl Disassembler {
 
             Instruction {
                 address: pc,
-                bit_len: num_bits,
+                length: num_bits as u64 / 8,
                 asm,
                 ops: pcodeops,
             }

@@ -1,4 +1,3 @@
-mod utils;
 mod logger;
 mod sleigh;
 mod arch;
@@ -118,7 +117,7 @@ fn main() {
 
                 for insn in disasm.disassemble(&bytes[start..end], addr) {
                     num_insns += 1;
-                    num_bytes += insn.bit_len / 8;
+                    num_bytes += insn.length as usize;
 
                     if print_progress {
                         let num_ticks = (((insn.address.offset - addr) as f64 / (end - start) as f64) * (NUM_TICKS as f64)) as usize;

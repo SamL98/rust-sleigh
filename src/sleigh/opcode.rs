@@ -2,7 +2,8 @@ use std::str::FromStr;
 use std::fmt;
 
 #[repr(u32)]
-#[derive(PartialEq, Eq, Hash, Copy, Clone)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Clone, Debug)]
+#[allow(dead_code)]
 pub enum OpCode {
     Copy = 1,
     Load,
@@ -48,7 +49,7 @@ pub enum OpCode {
     FloatNotEqual,
     FloatLess,
     FloatLessEqual,
-    FloatNan,
+    FloatNan = 46,
     FloatAdd,
     FloatDiv,
     FloatMult,
@@ -76,111 +77,24 @@ pub enum OpCode {
     Extract,
     PopCount,
     Label,
-}
-
-impl OpCode {
-    pub fn is_conditional(&self) -> bool {
-        use OpCode::*;
-        matches!(self, 
-            IntEqual |
-            IntNotEqual |
-            IntSLess |
-            IntSLessEqual |
-            IntLess |
-            IntLessEqual |
-            IntCarry |
-            IntSCarry |
-            IntSBorrow
-        )
-    }
-
-    fn _to_string(&self) -> String {
-        match *self {
-            OpCode::Copy => "Copy",
-            OpCode::Load => "Load",
-            OpCode::Store => "Store",
-            OpCode::Branch => "Branch",
-            OpCode::CBranch => "CBranch",
-            OpCode::BranchInd => "BranchInd",
-            OpCode::Call => "Call",
-            OpCode::CallInd => "CallInd",
-            OpCode::CallOther => "CallOther",
-            OpCode::Return => "Return",
-            OpCode::IntEqual => "IntEqual",
-            OpCode::IntNotEqual => "IntNotEqual",
-            OpCode::IntSLess => "IntSLess",
-            OpCode::IntSLessEqual => "IntSLessEqual",
-            OpCode::IntLess => "IntLess",
-            OpCode::IntLessEqual => "IntLessEqual",
-            OpCode::IntZext => "IntZext",
-            OpCode::IntSext => "IntSext",
-            OpCode::IntAdd => "IntAdd",
-            OpCode::IntSub => "IntSub",
-            OpCode::IntCarry => "IntCarry",
-            OpCode::IntSCarry => "IntSCarry",
-            OpCode::IntSBorrow => "IntSBorrow",
-            OpCode::Int2Comp => "Int2Comp",
-            OpCode::IntNegate => "IntNegate",
-            OpCode::IntXor => "IntXor",
-            OpCode::IntAnd => "IntAnd",
-            OpCode::IntOr => "IntOr",
-            OpCode::IntLeft => "IntLeft",
-            OpCode::IntRight => "IntRight",
-            OpCode::IntSRight => "IntSRight",
-            OpCode::IntMult => "IntMult",
-            OpCode::IntDiv => "IntDiv",
-            OpCode::IntSDiv => "IntSDiv",
-            OpCode::IntRem => "IntRem",
-            OpCode::IntSRem => "IntSRem",
-            OpCode::BoolNegate => "BoolNegate",
-            OpCode::BoolXor => "BoolXor",
-            OpCode::BoolAnd => "BoolAnd",
-            OpCode::BoolOr => "BoolOr",
-            OpCode::FloatEqual => "FloatEqual",
-            OpCode::FloatNotEqual => "FloatNotEqual",
-            OpCode::FloatLess => "FloatLess",
-            OpCode::FloatLessEqual => "FloatLessEqual",
-            OpCode::FloatNan => "FloatNan",
-            OpCode::FloatAdd => "FloatAdd",
-            OpCode::FloatDiv => "FloatDiv",
-            OpCode::FloatMult => "FloatMult",
-            OpCode::FloatSub => "FloatSub",
-            OpCode::FloatNeg => "FloatNeg",
-            OpCode::FloatAbs => "FloatAbs",
-            OpCode::FloatSqrt => "FloatSqrt",
-            OpCode::FloatInt2Float => "FloatInt2Float",
-            OpCode::FloatFloat2Float => "FloatFloat2Float",
-            OpCode::FloatTrunc => "FloatTrunc",
-            OpCode::FloatCeil => "FloatCeil",
-            OpCode::FloatFloor => "FloatFloor",
-            OpCode::FloatRound => "FloatRound",
-            OpCode::MultiEqual => "MultiEqual",
-            OpCode::Indidrect => "Indidrect",
-            OpCode::Piece => "Piece",
-            OpCode::SubPiece => "SubPiece",
-            OpCode::Cast => "Cast",
-            OpCode::PtrAdd => "PtrAdd",
-            OpCode::PtrSub => "PtrSub",
-            OpCode::SegmentOp => "SegmentOp",
-            OpCode::CPoolRef => "CPoolRef",
-            OpCode::New => "New",
-            OpCode::Insert => "Insert",
-            OpCode::Extract => "Extract",
-            OpCode::PopCount => "PopCount",
-            OpCode::Label => "Label",
-        }.to_string()
-    }
-}
-
-impl fmt::Debug for OpCode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self)
-    }
+    IntSGreater,
+    IntSGreaterEqual,
+    IntGreater,
+    IntGreaterEqual,
+    AddrOf,
+    Deref,
+    Truncate,
+    Decl,
+    DeclCopy,
+    ArrayIndex,
+    FieldAccess,
+    FieldDeref,
+    Switch,
 }
 
 impl fmt::Display for OpCode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self._to_string())
+        write!(f, "{:?}", self)
     }
 }
 
@@ -269,5 +183,90 @@ impl FromStr for OpCode {
             },
         };
         Ok(opcode)
+    }
+}
+
+impl OpCode {
+    pub fn inverse(self) -> Self {
+        use OpCode::*;
+
+        match self {
+            IntAdd => IntSub,
+            IntSub => IntAdd,
+            IntEqual => IntNotEqual,
+            IntNotEqual => IntEqual,
+            IntSLess => IntSGreaterEqual,
+            IntSLessEqual => IntSGreater,
+            IntLess => IntGreaterEqual,
+            IntLessEqual => IntGreater,
+            IntSGreaterEqual => IntSLess,
+            IntSGreater => IntSLessEqual,
+            IntGreaterEqual => IntLess,
+            IntGreater => IntLessEqual,
+            _ => panic!("OpCode {} does not have an inverse", self),
+        }
+    }
+
+    pub fn has_inverse(&self) -> bool {
+        self.is_conditional()
+    }
+
+    pub fn is_conditional(&self) -> bool {
+        use OpCode::*;
+
+        matches!(self,
+            BoolNegate |
+            IntEqual |
+            IntNotEqual |
+            IntLess |
+            IntSLess |
+            IntLessEqual |
+            IntSLessEqual |
+            IntGreater |
+            IntSGreater |
+            IntGreaterEqual |
+            IntSGreaterEqual
+        )
+    }
+
+    pub fn is_commutative(&self) -> bool {
+        use OpCode::*;
+
+        matches!(self,
+            IntAdd |
+            IntAnd |
+            IntOr |
+            IntSub |
+            IntMult |
+            IntDiv |
+            IntEqual |
+            IntNotEqual
+        )
+    }
+
+    pub fn is_associative(&self) -> bool {
+        use OpCode::*;
+
+        matches!(self,
+            IntAdd
+        )
+    }
+
+    pub fn increases(&self) -> bool {
+        use OpCode::*;
+
+        matches!(self,
+            IntAdd |
+            IntMult
+        )
+    }
+
+    pub fn decreases(&self) -> bool {
+        use OpCode::*;
+
+        matches!(self,
+            IntSub |
+            IntDiv
+        )
     }
 }
